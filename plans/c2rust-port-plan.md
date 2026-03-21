@@ -1,20 +1,31 @@
-# C2Rust-Assisted Porting Plan
+# Porting Plan and Methodology
 
-## How the C2Rust Pipeline Works
+See `plans/process-log.md` for transferable lessons about C-to-Rust porting methodology.
+This document focuses on the practical workflow and remaining work for this specific port.
 
-### The Problem
-Agent-written Rust code doesn't always match C behavior exactly. Manual review can't reliably catch subtle differences in a 14K-line C codebase. We need a systematic way to verify correctness.
+## The Correctness Verification Method
 
-### The Solution: Three Components
+### The core tool: expat-sys + comparison tests
 
-1. **C2Rust output** (`c2rust-output/src/`) — Mechanically generated unsafe Rust that is logically identical to the C source. Used as a **readable reference**, not directly. It compiles on nightly but is not tested.
+The most important infrastructure is the `expat-sys` crate, which builds the real C
+library from source and provides a safe Rust wrapper (`CParser`). Comparison tests in
+`c_comparison_tests.rs` run the same XML through both our Rust port and the C library,
+comparing status codes, error codes, and handler callback output.
 
-2. **expat-sys crate** (`expat-sys/`) — Builds the real C library from source and provides a safe `CParser` wrapper. Used to run the actual C parser in tests.
-
-3. **Comparison tests** (`expat-rust/tests/c_comparison_tests.rs`) — Run the same XML through both the **idiomatic Rust port** (`expat-rust/`) and the **C library** (via `expat-sys/`), then compare status codes, error codes, and handler output.
+**This is what actually finds bugs.** It found 3 behavioral divergences immediately that
+had survived agent-written code and manual review. See process-log.md for the detailed
+bug-finding walkthrough.
 
 ### All test results are from the clean idiomatic Rust port
-The 108 passing tests and 56/59 comparison tests all run against `expat-rust/` — the safe, idiomatic Rust code. The C2Rust output is never tested; it's only a reference for understanding what the C does.
+The 108 passing tests and 56/59 comparison tests all run against `expat-rust/` — the
+safe, idiomatic Rust code. The C2Rust output is never tested; it exists only as an
+optional reference.
+
+### C2Rust output: available but not essential
+The C2Rust transpilation output exists in `c2rust-output/src/` and compiles on nightly.
+It's occasionally useful for grepping function names or estimating porting effort, but
+reading the C source directly works just as well. The real value came from building the
+FFI test harness, not from the transpilation.
 
 ## The Effective Workflow
 
