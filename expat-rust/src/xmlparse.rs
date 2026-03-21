@@ -205,10 +205,19 @@ pub struct Parser {
     parsing_state: ParsingState,
     /// Current processor — similar to m_processor in C
     processor: Processor,
-    /// Current line number
+    /// Accumulated position from previous parse calls (line count)
     line_number: u64,
-    /// Current column number
+    /// Accumulated position from previous parse calls (column count)
     column_number: u64,
+    /// Raw data for current parse call — used for lazy position calculation
+    /// Corresponds to C's m_positionPtr / m_eventPtr pattern
+    parse_data: Vec<u8>,
+    /// Position in parse_data up to which we've calculated line/column
+    /// Corresponds to C's m_positionPtr
+    position_pos: usize,
+    /// Position in parse_data of the current event (for error reporting)
+    /// Corresponds to C's m_eventPtr
+    event_pos: usize,
     /// Is this the final buffer?
     is_final: bool,
     /// Declared encoding name
@@ -280,6 +289,9 @@ impl Parser {
             processor: Processor::PrologInit,
             line_number: 1,
             column_number: 0,
+            parse_data: Vec::new(),
+            position_pos: 0,
+            event_pos: 0,
             is_final: false,
             encoding_name: encoding.map(|s| s.to_string()),
             ns_enabled: false,
@@ -332,6 +344,9 @@ impl Parser {
             processor: Processor::PrologInit,
             line_number: 1,
             column_number: 0,
+            parse_data: Vec::new(),
+            position_pos: 0,
+            event_pos: 0,
             is_final: false,
             encoding_name: encoding.map(|s| s.to_string()),
             ns_enabled: true,
@@ -383,6 +398,9 @@ impl Parser {
         self.processor = Processor::PrologInit;
         self.line_number = 1;
         self.column_number = 0;
+        self.parse_data.clear();
+        self.position_pos = 0;
+        self.event_pos = 0;
         self.is_final = false;
         self.encoding_name = encoding.map(|s| s.to_string());
         self.tag_level = 0;
@@ -435,6 +453,11 @@ impl Parser {
         let enc = xmltok::Utf8Encoding;
 
         let (error, next_pos) = self.do_content(0, &enc, &data, 0, data.len(), have_more);
+
+        // Set event_pos for successful completion too (for position query after parse)
+        if error == XmlError::None {
+            self.event_pos = next_pos;
+        }
 
         if error != XmlError::None {
             self.error_code = error;
@@ -671,13 +694,16 @@ impl Parser {
                     let tag_name = std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len])
                         .unwrap_or("");
 
-                    // Check tag mismatch
+                    // Check tag mismatch — set event position to rawName
+                    // (matches C: *eventPP = rawName)
                     if let Some(expected) = self.tag_stack.last() {
                         if expected != tag_name {
-                            return (XmlError::TagMismatch, pos);
+                            self.event_pos = raw_name_start;
+                            return (XmlError::TagMismatch, raw_name_start);
                         }
                     } else {
-                        return (XmlError::TagMismatch, pos);
+                        self.event_pos = raw_name_start;
+                        return (XmlError::TagMismatch, raw_name_start);
                     }
 
                     self.tag_stack.pop();
@@ -954,10 +980,20 @@ impl Parser {
             if let Some(ref enc) = self.encoding_name {
                 let enc_upper = enc.to_uppercase();
                 if enc_upper == "UTF-16LE" || enc_upper == "UTF-16BE" {
-                    // Explicit UTF-16 encoding — transcode
+                    // Explicit UTF-16 encoding — strip BOM if present, then transcode
                     let is_be = enc_upper == "UTF-16BE";
                     self.detected_encoding = Some(enc_upper);
-                    match self.transcode_utf16(data, is_be) {
+                    let input = if data.len() >= 2 {
+                        let has_bom = if is_be {
+                            data[0] == 0xFE && data[1] == 0xFF
+                        } else {
+                            data[0] == 0xFF && data[1] == 0xFE
+                        };
+                        if has_bom { &data[2..] } else { data }
+                    } else {
+                        data
+                    };
+                    match self.transcode_utf16(input, is_be) {
                         Ok(transcoded) => {
                             self.buffer = transcoded;
                         }
@@ -1008,8 +1044,36 @@ impl Parser {
             self.buffer.extend_from_slice(data);
         }
 
+        // Store parse data and base position for lazy error position calculation
+        // (corresponds to C's m_positionPtr / m_eventPtr pattern)
+        self.parse_data = self.buffer.clone();
+        self.position_pos = 0;
+        self.event_pos = self.buffer.len(); // default: end of buffer
+        // Save base position before processor modifies it via advance_pos
+        let base_line = self.line_number;
+        let base_column = self.column_number;
+
         // Run the current processor
         self.run_processor();
+
+        // If error with event_pos set, override the incremental position
+        // with lazy calculation from base position
+        if self.error_code != XmlError::None && self.event_pos < self.parse_data.len() {
+            let enc = xmltok::Utf8Encoding;
+            let pos = xmltok_impl::update_position(
+                &enc,
+                &self.parse_data,
+                self.position_pos,
+                self.event_pos,
+            );
+            if pos.line_number > 0 {
+                self.line_number = base_line + pos.line_number as u64;
+                self.column_number = pos.column_number as u64;
+            } else {
+                self.line_number = base_line;
+                self.column_number = base_column + pos.column_number as u64;
+            }
+        }
 
         // If an error occurred during processing, return error
         if self.error_code != XmlError::None {
@@ -1287,10 +1351,13 @@ impl Parser {
 
                         if let Some(expected) = self.tag_stack.last() {
                             if expected != &tag_name {
+                                // Set event_pos to raw name position (matches C: *eventPP = rawName)
+                                self.event_pos = pos;
                                 self.error_code = XmlError::TagMismatch;
                                 return false;
                             }
                         } else {
+                            self.event_pos = pos;
                             self.error_code = XmlError::TagMismatch;
                             return false;
                         }
