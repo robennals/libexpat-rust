@@ -227,7 +227,7 @@ fn test_utf8_auto_align() {
     // This test validates UTF-8 auto-alignment logic
     // Testing basic UTF-8 sequences parsing
     let test_cases = vec![
-        ("", true),
+        ("", false), // Empty document is NoElements error per C behavior
         ("<e/>", true),
         ("<e>Test</e>", true),
         ("<e>\u{00E9}</e>", true), // 2-byte UTF-8
