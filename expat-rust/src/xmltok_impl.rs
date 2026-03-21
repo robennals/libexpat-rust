@@ -2039,6 +2039,14 @@ fn check_char_ref_number(num: i32) -> i32 {
     if !((0..=0x10FFFF).contains(&num)) {
         return -1;
     }
+    // Check for NONXML characters (from ASCII_BYTE_TYPES)
+    // These are control characters that are invalid in XML: 0x00-0x08, 0x0B-0x0C, 0x0E-0x1F, 0x7F
+    if num < 0x20 && num != 0x09 && num != 0x0A && num != 0x0D {
+        return -1;
+    }
+    if num == 0x7F {
+        return -1;
+    }
     if (num & 0xFFFE) == 0xFFFE {
         return -1;
     }
@@ -2183,17 +2191,159 @@ pub struct Position {
 }
 
 /// Get attributes from a tag
-/// NOTE: This is a stub - full attribute parsing requires state management
+/// Parses attribute name=value pairs from a start tag, tracking normalized state
+/// Returns (number_of_attributes, attribute_vector)
 pub fn get_atts<E: Encoding>(
-    _enc: &E,
-    _data: &[u8],
-    _pos: usize,
-    _atts_max: usize,
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    atts_max: usize,
 ) -> (usize, Vec<Attribute>) {
-    // This function requires more complex state tracking and is primarily
-    // used internally by the C parser. A full implementation would parse
-    // attribute names and values while tracking normalized state.
-    (0, Vec::new())
+    enum State {
+        Other,
+        InName,
+        InValue,
+    }
+
+    let minbpc = enc.min_bytes_per_char();
+    let mut state = State::InName;
+    let mut nAtts = 0;
+    let mut atts = Vec::with_capacity(atts_max);
+    let mut open = ByteType::QUOT; // delimiter type (QUOT or APOS)
+
+    pos += minbpc; // skip opening < or space after tag name
+
+    while pos < data.len() {
+        let byte_type = enc.byte_type(data, pos);
+
+        match byte_type {
+            // Start of name: multi-byte lead characters
+            ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4 => {
+                if matches!(state, State::Other) {
+                    if nAtts < atts_max {
+                        atts.push(Attribute {
+                            name: pos,
+                            name_end: 0,
+                            value_ptr: 0,
+                            value_end: 0,
+                            normalized: true,
+                        });
+                    }
+                    state = State::InName;
+                }
+                let n = match byte_type {
+                    ByteType::LEAD2 => 2,
+                    ByteType::LEAD3 => 3,
+                    ByteType::LEAD4 => 4,
+                    _ => unreachable!(),
+                };
+                pos += n - minbpc;
+            }
+            // Start of name: single-byte name start characters (letters, etc.)
+            ByteType::NMSTRT | ByteType::HEX => {
+                if matches!(state, State::Other) {
+                    if nAtts < atts_max {
+                        atts.push(Attribute {
+                            name: pos,
+                            name_end: 0,
+                            value_ptr: 0,
+                            value_end: 0,
+                            normalized: true,
+                        });
+                    }
+                    state = State::InName;
+                }
+            }
+            // Quote delimiter
+            ByteType::QUOT => {
+                if !matches!(state, State::InValue) {
+                    if nAtts < atts_max {
+                        if let Some(att) = atts.last_mut() {
+                            att.value_ptr = pos + minbpc;
+                        }
+                    }
+                    state = State::InValue;
+                    open = ByteType::QUOT;
+                } else if open == ByteType::QUOT {
+                    state = State::Other;
+                    if nAtts < atts_max {
+                        if let Some(att) = atts.last_mut() {
+                            att.value_end = pos;
+                        }
+                    }
+                    nAtts += 1;
+                }
+            }
+            // Apostrophe delimiter
+            ByteType::APOS => {
+                if !matches!(state, State::InValue) {
+                    if nAtts < atts_max {
+                        if let Some(att) = atts.last_mut() {
+                            att.value_ptr = pos + minbpc;
+                        }
+                    }
+                    state = State::InValue;
+                    open = ByteType::APOS;
+                } else if open == ByteType::APOS {
+                    state = State::Other;
+                    if nAtts < atts_max {
+                        if let Some(att) = atts.last_mut() {
+                            att.value_end = pos;
+                        }
+                    }
+                    nAtts += 1;
+                }
+            }
+            // Entity reference (means value is not normalized)
+            ByteType::AMP => {
+                if nAtts < atts_max {
+                    if let Some(att) = atts.last_mut() {
+                        att.normalized = false;
+                    }
+                }
+            }
+            // Whitespace
+            ByteType::S => {
+                if matches!(state, State::InName) {
+                    state = State::Other;
+                } else if matches!(state, State::InValue) && nAtts < atts_max {
+                    if let Some(att) = atts.last_mut() {
+                        // Check if this whitespace makes the value non-normalized
+                        if att.normalized
+                            && (pos == att.value_ptr
+                                || (pos + minbpc < data.len()
+                                    && enc.byte_type(data, pos + minbpc) == ByteType::S)
+                                || (pos + minbpc < data.len()
+                                    && enc.byte_type(data, pos + minbpc) == open))
+                        {
+                            att.normalized = false;
+                        }
+                    }
+                }
+            }
+            // Carriage return or line feed
+            ByteType::CR | ByteType::LF => {
+                if matches!(state, State::InName) {
+                    state = State::Other;
+                } else if matches!(state, State::InValue) && nAtts < atts_max {
+                    if let Some(att) = atts.last_mut() {
+                        att.normalized = false;
+                    }
+                }
+            }
+            // End of tag
+            ByteType::GT | ByteType::SOL => {
+                if !matches!(state, State::InValue) {
+                    return (nAtts, atts);
+                }
+            }
+            _ => {}
+        }
+
+        pos += minbpc;
+    }
+
+    (nAtts, atts)
 }
 
 /// Update position tracking based on character data
@@ -2248,3 +2398,351 @@ pub fn update_position<E: Encoding>(
 // ASCII constants (additional ones used in functions)
 const ASCII_LT: u8 = 0x3C;
 const ASCII_AMP: u8 = 0x26;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::xmltok::Utf8Encoding;
+
+    // ============ content_tok tests ============
+
+    #[test]
+    fn test_content_tok_start_tag_no_atts() {
+        let enc = Utf8Encoding;
+        let data = b"<doc>";
+        let result = content_tok(&enc, data, 0, data.len()).unwrap();
+        assert_eq!(result.token, XmlTok::StartTagNoAtts);
+        assert_eq!(result.next_pos, 5);
+    }
+
+    #[test]
+    fn test_content_tok_data_chars() {
+        let enc = Utf8Encoding;
+        let data = b"hello";
+        let result = content_tok(&enc, data, 0, data.len()).unwrap();
+        assert_eq!(result.token, XmlTok::DataChars);
+        assert_eq!(result.next_pos, 5);
+    }
+
+    #[test]
+    fn test_content_tok_end_tag() {
+        let enc = Utf8Encoding;
+        let data = b"</doc>";
+        let result = content_tok(&enc, data, 0, data.len()).unwrap();
+        assert_eq!(result.token, XmlTok::EndTag);
+    }
+
+    #[test]
+    fn test_content_tok_empty_element_no_atts() {
+        let enc = Utf8Encoding;
+        let data = b"<e/>";
+        let result = content_tok(&enc, data, 0, data.len()).unwrap();
+        assert_eq!(result.token, XmlTok::EmptyElementNoAtts);
+    }
+
+    #[test]
+    fn test_content_tok_entity_ref() {
+        let enc = Utf8Encoding;
+        let data = b"&amp;";
+        let result = content_tok(&enc, data, 0, data.len()).unwrap();
+        assert_eq!(result.token, XmlTok::EntityRef);
+    }
+
+    #[test]
+    fn test_content_tok_char_ref() {
+        let enc = Utf8Encoding;
+        let data = b"&#233;";
+        let result = content_tok(&enc, data, 0, data.len()).unwrap();
+        assert_eq!(result.token, XmlTok::CharRef);
+    }
+
+    #[test]
+    fn test_content_tok_comment() {
+        let enc = Utf8Encoding;
+        let data = b"<!-- comment -->";
+        let result = content_tok(&enc, data, 0, data.len()).unwrap();
+        assert_eq!(result.token, XmlTok::Comment);
+    }
+
+    #[test]
+    fn test_content_tok_data_newline_lf() {
+        let enc = Utf8Encoding;
+        let data = b"\ntext";
+        let result = content_tok(&enc, data, 0, data.len()).unwrap();
+        assert_eq!(result.token, XmlTok::DataNewline);
+        assert_eq!(result.next_pos, 1);
+    }
+
+    #[test]
+    fn test_content_tok_data_newline_crlf() {
+        let enc = Utf8Encoding;
+        let data = b"\r\ntext";
+        let result = content_tok(&enc, data, 0, data.len()).unwrap();
+        assert_eq!(result.token, XmlTok::DataNewline);
+        assert_eq!(result.next_pos, 2);
+    }
+
+    #[test]
+    fn test_content_tok_no_data() {
+        let enc = Utf8Encoding;
+        let data = b"";
+        let result = content_tok(&enc, data, 0, 0).unwrap();
+        assert_eq!(result.token, XmlTok::None);
+    }
+
+    // ============ char_ref_number tests ============
+
+    #[test]
+    fn test_char_ref_number_decimal() {
+        let enc = Utf8Encoding;
+        let data = b"&#233;";
+        let result = char_ref_number(&enc, data, 0);
+        assert_eq!(result, 233);
+    }
+
+    #[test]
+    fn test_char_ref_number_hex_lowercase() {
+        let enc = Utf8Encoding;
+        let data = b"&#xe9;";
+        let result = char_ref_number(&enc, data, 0);
+        assert_eq!(result, 233);
+    }
+
+    #[test]
+    fn test_char_ref_number_hex_uppercase() {
+        let enc = Utf8Encoding;
+        let data = b"&#xE9;";
+        let result = char_ref_number(&enc, data, 0);
+        assert_eq!(result, 233);
+    }
+
+    #[test]
+    fn test_char_ref_number_hex_mixed() {
+        let enc = Utf8Encoding;
+        let data = b"&#xEa;";
+        let result = char_ref_number(&enc, data, 0);
+        assert_eq!(result, 234);
+    }
+
+    #[test]
+    fn test_char_ref_number_zero() {
+        let enc = Utf8Encoding;
+        let data = b"&#0;";
+        let result = char_ref_number(&enc, data, 0);
+        // NUL character (0) is invalid in XML
+        assert_eq!(result, -1);
+    }
+
+    #[test]
+    fn test_char_ref_number_valid_low() {
+        let enc = Utf8Encoding;
+        let data = b"&#32;";
+        let result = char_ref_number(&enc, data, 0);
+        // Space (32) is valid
+        assert_eq!(result, 32);
+    }
+
+    #[test]
+    fn test_char_ref_number_surrogate() {
+        let enc = Utf8Encoding;
+        let data = b"&#55296;"; // 0xD800 (surrogate)
+        let result = char_ref_number(&enc, data, 0);
+        assert_eq!(result, -1); // invalid
+    }
+
+    #[test]
+    fn test_char_ref_number_valid_max() {
+        let enc = Utf8Encoding;
+        let data = b"&#65;"; // 'A' = 65
+        let result = char_ref_number(&enc, data, 0);
+        assert_eq!(result, 65);
+    }
+
+    // ============ predefined_entity_name tests ============
+
+    #[test]
+    fn test_predefined_entity_lt() {
+        let enc = Utf8Encoding;
+        let data = b"lt";
+        let result = predefined_entity_name(&enc, data, 0, 2);
+        assert_eq!(result, 0x3C); // '<'
+    }
+
+    #[test]
+    fn test_predefined_entity_gt() {
+        let enc = Utf8Encoding;
+        let data = b"gt";
+        let result = predefined_entity_name(&enc, data, 0, 2);
+        assert_eq!(result, 0x3E); // '>'
+    }
+
+    #[test]
+    fn test_predefined_entity_amp() {
+        let enc = Utf8Encoding;
+        let data = b"amp";
+        let result = predefined_entity_name(&enc, data, 0, 3);
+        assert_eq!(result, 0x26); // '&'
+    }
+
+    #[test]
+    fn test_predefined_entity_quot() {
+        let enc = Utf8Encoding;
+        let data = b"quot";
+        let result = predefined_entity_name(&enc, data, 0, 4);
+        assert_eq!(result, 0x22); // '"'
+    }
+
+    #[test]
+    fn test_predefined_entity_apos() {
+        let enc = Utf8Encoding;
+        let data = b"apos";
+        let result = predefined_entity_name(&enc, data, 0, 4);
+        assert_eq!(result, 0x27); // '\''
+    }
+
+    #[test]
+    fn test_predefined_entity_unknown() {
+        let enc = Utf8Encoding;
+        let data = b"foo";
+        let result = predefined_entity_name(&enc, data, 0, 3);
+        assert_eq!(result, 0); // unknown
+    }
+
+    #[test]
+    fn test_predefined_entity_wrong_length() {
+        let enc = Utf8Encoding;
+        let data = b"am";
+        let result = predefined_entity_name(&enc, data, 0, 2);
+        assert_eq!(result, 0); // not "lt" or "gt"
+    }
+
+    // ============ update_position tests ============
+
+    #[test]
+    fn test_update_position_simple_text() {
+        let enc = Utf8Encoding;
+        let data = b"hello";
+        let pos = update_position(&enc, data, 0, data.len());
+        assert_eq!(pos.line_number, 0);
+        assert_eq!(pos.column_number, 5);
+    }
+
+    #[test]
+    fn test_update_position_with_lf() {
+        let enc = Utf8Encoding;
+        let data = b"hello\nworld";
+        let pos = update_position(&enc, data, 0, data.len());
+        assert_eq!(pos.line_number, 1);
+        assert_eq!(pos.column_number, 5); // "world"
+    }
+
+    #[test]
+    fn test_update_position_with_crlf() {
+        let enc = Utf8Encoding;
+        let data = b"hello\r\nworld";
+        let pos = update_position(&enc, data, 0, data.len());
+        assert_eq!(pos.line_number, 1);
+        assert_eq!(pos.column_number, 5); // "world"
+    }
+
+    #[test]
+    fn test_update_position_with_cr() {
+        let enc = Utf8Encoding;
+        let data = b"hello\rworld";
+        let pos = update_position(&enc, data, 0, data.len());
+        assert_eq!(pos.line_number, 1);
+        assert_eq!(pos.column_number, 5); // "world"
+    }
+
+    #[test]
+    fn test_update_position_multiple_lines() {
+        let enc = Utf8Encoding;
+        let data = b"line1\nline2\nline3";
+        let pos = update_position(&enc, data, 0, data.len());
+        assert_eq!(pos.line_number, 2);
+        assert_eq!(pos.column_number, 5); // "line3"
+    }
+
+    #[test]
+    fn test_update_position_empty() {
+        let enc = Utf8Encoding;
+        let data = b"";
+        let pos = update_position(&enc, data, 0, 0);
+        assert_eq!(pos.line_number, 0);
+        assert_eq!(pos.column_number, 0);
+    }
+
+    // ============ name_length tests ============
+
+    #[test]
+    fn test_name_length_simple() {
+        let enc = Utf8Encoding;
+        let data = b"doc>";
+        let len = name_length(&enc, data, 0);
+        assert_eq!(len, 3); // "doc"
+    }
+
+    #[test]
+    fn test_name_length_with_namespace() {
+        let enc = Utf8Encoding;
+        let data = b"ns:tag>";
+        let len = name_length(&enc, data, 0);
+        // Colon stops the name, so just "ns"
+        assert_eq!(len, 2);
+    }
+
+    #[test]
+    fn test_name_length_with_hyphen() {
+        let enc = Utf8Encoding;
+        let data = b"my-elem>";
+        let len = name_length(&enc, data, 0);
+        // Hyphen is part of NAME, so "my-elem"
+        assert_eq!(len, 7);
+    }
+
+    #[test]
+    fn test_name_length_with_digit() {
+        let enc = Utf8Encoding;
+        let data = b"elem1>";
+        let len = name_length(&enc, data, 0);
+        assert_eq!(len, 5); // "elem1"
+    }
+
+    #[test]
+    fn test_name_length_single_char() {
+        let enc = Utf8Encoding;
+        let data = b"a>";
+        let len = name_length(&enc, data, 0);
+        assert_eq!(len, 1); // "a"
+    }
+
+    // ============ get_atts tests ============
+
+    #[test]
+    fn test_get_atts_no_attributes() {
+        let enc = Utf8Encoding;
+        let data = b"tag>";
+        let (count, atts) = get_atts(&enc, data, 0, 10);
+        assert_eq!(count, 0);
+        assert_eq!(atts.len(), 0);
+    }
+
+    #[test]
+    fn test_get_atts_single_attribute() {
+        let enc = Utf8Encoding;
+        let data = b"tag a=\"value\">";
+        let (count, atts) = get_atts(&enc, data, 0, 10);
+        assert_eq!(count, 1);
+        assert_eq!(atts.len(), 1);
+        assert_eq!(atts[0].normalized, true); // no entities in value
+    }
+
+    #[test]
+    fn test_get_atts_multiple_attributes() {
+        let enc = Utf8Encoding;
+        let data = b"tag a=\"1\" b=\"2\">";
+        let (count, atts) = get_atts(&enc, data, 0, 10);
+        assert_eq!(count, 2);
+        assert_eq!(atts.len(), 2);
+    }
+}
