@@ -631,13 +631,14 @@ pub fn parse_xml_decl(
                     return Err(name_start3);
                 }
 
-                // Check standalone value
-                let val_matches_yes = val_start3 < next_pos3
-                    && next_pos3 - val_start3 == 3
-                    && &data[val_start3..next_pos3] == b"yes";
-                let val_matches_no = val_start3 < next_pos3
-                    && next_pos3 - val_start3 == 2
-                    && &data[val_start3..next_pos3] == b"no";
+                // Check standalone value (next_pos3 is past closing quote, so subtract minbpc)
+                let val_end3 = next_pos3 - minbpc;
+                let val_matches_yes = val_start3 < val_end3
+                    && val_end3 - val_start3 == 3
+                    && &data[val_start3..val_end3] == b"yes";
+                let val_matches_no = val_start3 < val_end3
+                    && val_end3 - val_start3 == 2
+                    && &data[val_start3..val_end3] == b"no";
 
                 if val_matches_yes {
                     standalone = Some(true);
