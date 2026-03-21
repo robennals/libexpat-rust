@@ -309,6 +309,7 @@ fn is_name_char(bt: ByteType) -> bool {
             | ByteType::DIGIT
             | ByteType::NAME
             | ByteType::MINUS
+            | ByteType::COLON
     )
 }
 

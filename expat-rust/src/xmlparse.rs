@@ -256,6 +256,8 @@ pub struct Parser {
     utf16_pending_byte: Option<u8>,
     /// Internal entity definitions — maps entity name to replacement text
     internal_entities: HashMap<String, String>,
+    /// Current entity name being declared in DTD (for GeneralEntityName → EntityValue flow)
+    current_entity_name: Option<String>,
     /// XML role state machine for prolog parsing
     prolog_state: XmlRoleState,
 
@@ -317,6 +319,7 @@ impl Parser {
             byte_offset: 0,
             utf16_pending_byte: None,
             internal_entities: HashMap::new(),
+            current_entity_name: None,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
@@ -375,6 +378,7 @@ impl Parser {
             byte_offset: 0,
             utf16_pending_byte: None,
             internal_entities: HashMap::new(),
+            current_entity_name: None,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
@@ -603,7 +607,7 @@ impl Parser {
                     let role = xmlrole::xml_token_role(&mut self.prolog_state, role_tok, &tok_text, &[]);
 
                     // Dispatch on role
-                    let error = self.handle_prolog_role(role, tok, data, pos, next);
+                    let error = self.handle_prolog_role(role, tok, data, pos, next, &tok_text);
                     if error != XmlError::None {
                         return (error, pos);
                     }
@@ -670,6 +674,7 @@ impl Parser {
         data: &[u8],
         pos: usize,
         next: usize,
+        tok_text: &[u8],
     ) -> XmlError {
         match role {
             Role::XmlDecl => {
@@ -772,16 +777,29 @@ impl Parser {
                 self.processor = Processor::Content;
                 XmlError::None
             }
-            Role::GeneralEntityName | Role::ParamEntityName => {
-                // Entity declaration — track for subsequent entity roles
+            Role::GeneralEntityName => {
+                // General entity declaration — store name for EntityValue
+                let name = std::str::from_utf8(&data[pos..next]).unwrap_or("").to_string();
+                self.current_entity_name = Some(name);
+                XmlError::None
+            }
+            Role::ParamEntityName => {
+                // Parameter entity — track name
+                self.current_entity_name = None; // We don't expand param entities
                 XmlError::None
             }
             Role::EntityValue => {
-                // Entity value
+                // Entity value — store in internal_entities map
+                if let Some(ref name) = self.current_entity_name {
+                    // extract_token_text already stripped quotes for Literal tokens
+                    let value = std::str::from_utf8(&tok_text).unwrap_or("").to_string();
+                    self.internal_entities.insert(name.clone(), value);
+                }
                 XmlError::None
             }
             Role::EntityComplete => {
-                // End of entity declaration — call entity_decl_handler
+                // End of entity declaration
+                self.current_entity_name = None;
                 XmlError::None
             }
             Role::NotationName => {
@@ -1138,9 +1156,12 @@ impl Parser {
                     self.tag_level += 1;
                     self.seen_root = true;
 
-                    // Extract attributes
+                    // Extract attributes (with duplicate detection)
                     let attrs = if tok == XmlTok::StartTagWithAtts {
-                        self.extract_attrs(enc, data, pos, next)
+                        match self.extract_attrs(enc, data, pos, next) {
+                            Ok(a) => a,
+                            Err(e) => return (e, pos),
+                        }
                     } else {
                         Vec::new()
                     };
@@ -1165,7 +1186,10 @@ impl Parser {
                     self.seen_root = true;
 
                     let attrs = if tok == XmlTok::EmptyElementWithAtts {
-                        self.extract_attrs(enc, data, pos, next)
+                        match self.extract_attrs(enc, data, pos, next) {
+                            Ok(a) => a,
+                            Err(e) => return (e, pos),
+                        }
                     } else {
                         Vec::new()
                     };
@@ -1406,26 +1430,31 @@ impl Parser {
 
     /// Extract attributes from a start tag token span.
     /// Uses get_atts from xmltok_impl.
+    /// Returns Err(XmlError::DuplicateAttribute) if any attribute name appears twice.
     fn extract_attrs<E: Encoding>(
         &self,
         enc: &E,
         data: &[u8],
         start: usize,
-        end: usize,
-    ) -> Vec<(String, String)> {
+        _end: usize,
+    ) -> Result<Vec<(String, String)>, XmlError> {
         let max_atts = 64; // reasonable upper bound
         let (_, atts) = xmltok_impl::get_atts(enc, data, start, max_atts);
-        atts.iter()
-            .map(|attr| {
-                let name = std::str::from_utf8(&data[attr.name..attr.name_end])
-                    .unwrap_or("")
-                    .to_string();
-                let value = std::str::from_utf8(&data[attr.value_ptr..attr.value_end])
-                    .unwrap_or("")
-                    .to_string();
-                (name, value)
-            })
-            .collect()
+        let mut result = Vec::with_capacity(atts.len());
+        let mut seen = std::collections::HashSet::new();
+        for attr in &atts {
+            let name = std::str::from_utf8(&data[attr.name..attr.name_end])
+                .unwrap_or("")
+                .to_string();
+            let value = std::str::from_utf8(&data[attr.value_ptr..attr.value_end])
+                .unwrap_or("")
+                .to_string();
+            if !seen.insert(name.clone()) {
+                return Err(XmlError::DuplicateAttribute);
+            }
+            result.push((name, value));
+        }
+        Ok(result)
     }
 
     /// Report a processing instruction — corresponds to C reportProcessingInstruction()
