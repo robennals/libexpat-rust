@@ -37,3 +37,8 @@ expat/**/*.sdf
 expat/**/*.VC.db
 expat/tests/**/Debug/
 expat/tests/**/Release/
+
+# Rust build artifacts
+expat-rust/target/
+*.pyc
+__pycache__/
