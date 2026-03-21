@@ -252,6 +252,8 @@ pub struct Parser {
     detected_encoding: Option<String>,
     /// Total byte offset in input (for tracking position across parse calls)
     byte_offset: u64,
+    /// Pending byte from incomplete UTF-16 code unit across chunk boundaries
+    utf16_pending_byte: Option<u8>,
     /// Internal entity definitions — maps entity name to replacement text
     internal_entities: HashMap<String, String>,
     /// XML role state machine for prolog parsing
@@ -313,6 +315,7 @@ impl Parser {
             seen_xml_decl: false,
             detected_encoding: None,
             byte_offset: 0,
+            utf16_pending_byte: None,
             internal_entities: HashMap::new(),
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
@@ -370,6 +373,7 @@ impl Parser {
             seen_xml_decl: false,
             detected_encoding: None,
             byte_offset: 0,
+            utf16_pending_byte: None,
             internal_entities: HashMap::new(),
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
@@ -696,7 +700,7 @@ impl Parser {
                             );
                         }
 
-                        // Check encoding matches what we detected
+                        // Check encoding — matches C processXmlDecl logic
                         if let Some(ref enc_name) = encoding_str {
                             let upper = enc_name.to_uppercase();
                             if upper == "UTF-16" || upper == "UTF-16LE" || upper == "UTF-16BE" {
@@ -704,6 +708,16 @@ impl Parser {
                                 if self.detected_encoding.is_none() {
                                     self.event_pos = pos;
                                     return XmlError::IncorrectEncoding;
+                                }
+                            } else if !is_known_encoding(&upper) {
+                                // Unknown encoding — try handler
+                                let mut handled = false;
+                                if let Some(handler) = &mut self.unknown_encoding_handler {
+                                    handled = handler(enc_name);
+                                }
+                                if !handled {
+                                    self.event_pos = pos;
+                                    return XmlError::UnknownEncoding;
                                 }
                             }
                         }
@@ -790,7 +804,12 @@ impl Parser {
             }
             Role::Error => {
                 // Syntax error from role state machine
-                XmlError::Syntax
+                // Check token type for more specific error codes (matches C doProlog)
+                match tok {
+                    XmlTok::XmlDecl => XmlError::MisplacedXmlPi,
+                    XmlTok::ParamEntityRef => XmlError::ParamEntityRef,
+                    _ => XmlError::Syntax,
+                }
             }
             _ => {
                 // Other roles — ignore for now
@@ -1459,7 +1478,14 @@ impl Parser {
                     } else {
                         data
                     };
-                    match self.transcode_utf16(input, is_be) {
+                    // Handle odd trailing byte
+                    let (to_transcode, leftover) = if input.len() % 2 != 0 {
+                        (&input[..input.len() - 1], Some(input[input.len() - 1]))
+                    } else {
+                        (input, None)
+                    };
+                    self.utf16_pending_byte = leftover;
+                    match self.transcode_utf16(to_transcode, is_be) {
                         Ok(transcoded) => {
                             self.buffer = transcoded;
                         }
@@ -1497,8 +1523,23 @@ impl Parser {
             }
         } else if self.detected_encoding.is_some() {
             // Subsequent chunk with UTF-16 encoding — transcode
+            // Prepend any pending byte from previous chunk
             let is_be = self.detected_encoding.as_deref() == Some("UTF-16BE");
-            match self.transcode_utf16(data, is_be) {
+            let input = if let Some(pending) = self.utf16_pending_byte.take() {
+                let mut combined = vec![pending];
+                combined.extend_from_slice(data);
+                combined
+            } else {
+                data.to_vec()
+            };
+            // Save odd trailing byte for next chunk
+            let (to_transcode, leftover) = if input.len() % 2 != 0 {
+                (&input[..input.len() - 1], Some(input[input.len() - 1]))
+            } else {
+                (&input[..], None)
+            };
+            self.utf16_pending_byte = leftover;
+            match self.transcode_utf16(to_transcode, is_be) {
                 Ok(transcoded) => self.buffer.extend_from_slice(&transcoded),
                 Err(err) => {
                     self.error_code = err;
@@ -1522,15 +1563,21 @@ impl Parser {
         // Run the current processor
         self.run_processor();
 
-        // If error with event_pos set, override the incremental position
-        // with lazy calculation from base position
-        if self.error_code != XmlError::None && self.event_pos < self.parse_data.len() {
+        // Update position tracking from processed data
+        // On error: calculate position up to event_pos (error location)
+        // On success: calculate position up to end of all processed data
+        {
+            let calc_end = if self.error_code != XmlError::None && self.event_pos < self.parse_data.len() {
+                self.event_pos
+            } else {
+                self.parse_data.len()
+            };
             let enc = xmltok::Utf8Encoding;
             let pos = xmltok_impl::update_position(
                 &enc,
                 &self.parse_data,
                 self.position_pos,
-                self.event_pos,
+                calc_end,
             );
             if pos.line_number > 0 {
                 self.line_number = base_line + pos.line_number as u64;

@@ -8,6 +8,8 @@ Uses tree-sitter to parse both C and Rust to ASTs, then compares:
 - Control flow structure (early returns, loops)
 - Function calls
 
+Loads deliberate-divergences.json to suppress known intentional differences.
+
 Usage:
     python3 scripts/ast-compare.py <c_func> <rust_func>
     python3 scripts/ast-compare.py doContent do_content
@@ -26,10 +28,44 @@ import tree_sitter_rust
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 C_FILE = os.path.join(ROOT, "expat", "lib", "xmlparse.c")
 RUST_FILE = os.path.join(ROOT, "expat-rust", "src", "xmlparse.rs")
+DIVERGENCES_FILE = os.path.join(ROOT, "scripts", "deliberate-divergences.json")
 
 # Initialize parsers
 C_LANG = tree_sitter.Language(tree_sitter_c.language())
 RUST_LANG = tree_sitter.Language(tree_sitter_rust.language())
+
+# Load deliberate divergences
+_divergences_config = None
+
+def load_divergences():
+    global _divergences_config
+    if _divergences_config is not None:
+        return _divergences_config
+    try:
+        with open(DIVERGENCES_FILE) as f:
+            _divergences_config = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        _divergences_config = {"global_suppressions": {"errors": {}, "handlers": {}},
+                               "function_pairs": [], "per_function_suppressions": {}}
+    return _divergences_config
+
+
+def get_suppressed_errors(rust_func_name):
+    """Get error codes that should be suppressed for this function."""
+    config = load_divergences()
+    suppressed = set(config.get("global_suppressions", {}).get("errors", {}).keys())
+    per_func = config.get("per_function_suppressions", {}).get(rust_func_name, {})
+    suppressed |= set(per_func.get("suppressed_errors", []))
+    return suppressed
+
+
+def get_suppressed_handlers(rust_func_name):
+    """Get handler names that should be suppressed for this function."""
+    config = load_divergences()
+    suppressed = set(config.get("global_suppressions", {}).get("handlers", {}).keys())
+    per_func = config.get("per_function_suppressions", {}).get(rust_func_name, {})
+    suppressed |= set(per_func.get("suppressed_handlers", []))
+    return suppressed
 
 
 def parse_c(src_bytes):
@@ -174,6 +210,9 @@ ERROR_MAP = {
     "INCORRECT_ENCODING": "IncorrectEncoding",
     "UNKNOWN_ENCODING": "UnknownEncoding",
     "FINISHED": "Finished", "SUSPENDED": "Suspended",
+    "ENTITY_DECLARED_IN_PE": "EntityDeclaredInPe",
+    "PARAM_ENTITY_REF": "ParamEntityRef",
+    "SUSPEND_PE": "SuspendPe",
 }
 
 HANDLER_MAP = {
@@ -190,6 +229,15 @@ HANDLER_MAP = {
     "externalEntityRefHandler": "external_entity_ref_handler",
     "skippedEntityHandler": "skipped_entity_handler",
     "xmlDeclHandler": "xml_decl_handler",
+    "startDoctypeDeclHandler": "start_doctype_decl_handler",
+    "endDoctypeDeclHandler": "end_doctype_decl_handler",
+    "notStandaloneHandler": "not_standalone_handler",
+    "unknownEncodingHandler": "unknown_encoding_handler",
+    "entityDeclHandler": "entity_decl_handler",
+    "notationDeclHandler": "notation_decl_handler",
+    "attlistDeclHandler": "attlist_decl_handler",
+    "elementDeclHandler": "element_decl_handler",
+    "unparsedEntityDeclHandler": "unparsed_entity_decl_handler",
 }
 
 TOKEN_MAP = {
@@ -206,13 +254,39 @@ TOKEN_MAP = {
     "XML_TOK_TRAILING_RSQB": "XmlTok::TrailingRsqb",
     "XML_TOK_DATA_CHARS": "XmlTok::DataChars", "XML_TOK_PI": "XmlTok::Pi",
     "XML_TOK_COMMENT": "XmlTok::Comment",
+    "XML_TOK_PROLOG_S": "XmlTok::PrologS",
+    "XML_TOK_BOM": "XmlTok::Bom",
 }
 
-SKIP_ERRORS = {"NoMemory", "AmplificationLimitBreach"}
+# C roles map to Rust Role:: variants
+ROLE_MAP = {
+    "XML_ROLE_XML_DECL": "Role::XmlDecl",
+    "XML_ROLE_INSTANCE_START": "Role::InstanceStart",
+    "XML_ROLE_DOCTYPE_NAME": "Role::DoctypeName",
+    "XML_ROLE_DOCTYPE_SYSTEM_ID": "Role::DoctypeSystemId",
+    "XML_ROLE_DOCTYPE_PUBLIC_ID": "Role::DoctypePublicId",
+    "XML_ROLE_DOCTYPE_INTERNAL_SUBSET": "Role::DoctypeInternalSubset",
+    "XML_ROLE_DOCTYPE_CLOSE": "Role::DoctypeClose",
+    "XML_ROLE_GENERAL_ENTITY_NAME": "Role::GeneralEntityName",
+    "XML_ROLE_PARAM_ENTITY_NAME": "Role::ParamEntityName",
+    "XML_ROLE_ENTITY_VALUE": "Role::EntityValue",
+    "XML_ROLE_ENTITY_COMPLETE": "Role::EntityComplete",
+    "XML_ROLE_PI": "Role::Pi",
+    "XML_ROLE_COMMENT": "Role::Comment",
+    "XML_ROLE_ERROR": "Role::Error",
+    "XML_ROLE_NOTATION_NAME": "Role::NotationName",
+    "XML_ROLE_ATTLIST_ELEMENT_NAME": "Role::AttlistElementName",
+    "XML_ROLE_ATTRIBUTE_NAME": "Role::AttributeName",
+    "XML_ROLE_ELEMENT_NAME": "Role::ElementName",
+}
 
 
-def compare(c_func_name, r_func_name):
-    """Main comparison function."""
+def compare(c_func_name, r_func_name, extra_rust_funcs=None):
+    """Main comparison function.
+
+    extra_rust_funcs: list of additional Rust function names whose errors/handlers/cases
+    should be merged into the Rust side (for split functions like handle_prolog_role).
+    """
     c_src = open(C_FILE, 'rb').read()
     r_src = open(RUST_FILE, 'rb').read()
 
@@ -232,29 +306,45 @@ def compare(c_func_name, r_func_name):
     c_text = c_node.text.decode()
     r_text = r_node.text.decode()
 
+    # Collect errors/handlers/cases from the Rust function and any extra split functions
+    r_errors = extract_all_errors(r_node, "rust")
+    r_handlers = extract_all_handlers(r_node, "rust")
+    r_cases = extract_switch_cases_ast(r_node, "rust")
+    extra_lines = 0
+
+    if extra_rust_funcs:
+        for efn in extra_rust_funcs:
+            enode = find_function_node(r_tree, efn, "rust")
+            if enode:
+                r_errors |= extract_all_errors(enode, "rust")
+                r_handlers |= extract_all_handlers(enode, "rust")
+                r_cases.extend(extract_switch_cases_ast(enode, "rust"))
+                extra_lines += enode.text.decode().count('\n') + 1
+
+    # Load suppressions
+    suppressed_errors = get_suppressed_errors(r_func_name)
+    suppressed_handlers = get_suppressed_handlers(r_func_name)
+
     divergences = []
 
     # 1. Overall errors
     c_errors = extract_all_errors(c_node, "c")
-    r_errors = extract_all_errors(r_node, "rust")
     c_mapped = {ERROR_MAP.get(e, f"?{e}") for e in c_errors}
     unmapped = {f"?{e}" for e in c_errors if e not in ERROR_MAP}
-    missing_errs = sorted(c_mapped - r_errors - SKIP_ERRORS - unmapped)
+    missing_errs = sorted(c_mapped - r_errors - suppressed_errors - unmapped)
     if missing_errs:
         divergences.append(("MEDIUM", "missing_errors", missing_errs))
 
     # 2. Overall handlers
     c_handlers = extract_all_handlers(c_node, "c")
-    r_handlers = extract_all_handlers(r_node, "rust")
     c_mapped_h = {HANDLER_MAP.get(h, f"?{h}") for h in c_handlers}
     unmapped_h = {f"?{h}" for h in c_handlers if h not in HANDLER_MAP}
-    missing_h = sorted(c_mapped_h - r_handlers - unmapped_h)
+    missing_h = sorted(c_mapped_h - r_handlers - suppressed_handlers - unmapped_h)
     if missing_h:
         divergences.append(("MEDIUM", "missing_handlers", missing_h))
 
     # 3. Case-by-case comparison
     c_cases = extract_switch_cases_ast(c_node, "c")
-    r_cases = extract_switch_cases_ast(r_node, "rust")
 
     # Map C case labels to Rust
     c_case_map = {}
@@ -262,6 +352,10 @@ def compare(c_func_name, r_func_name):
         rust_label = TOKEN_MAP.get(case["label"])
         if rust_label:
             c_case_map[rust_label] = case
+        # Also check role labels for doProlog
+        rust_role = ROLE_MAP.get(case["label"])
+        if rust_role:
+            c_case_map[rust_role] = case
 
     r_case_map = {}
     for case in r_cases:
@@ -283,22 +377,24 @@ def compare(c_func_name, r_func_name):
         # Compare errors in this case
         c_case_errs = {ERROR_MAP.get(e, f"?{e}") for e in c_case["errors"]}
         r_case_errs = set(r_case["errors"])
-        case_missing_errs = c_case_errs - r_case_errs - SKIP_ERRORS - {f"?{e}" for e in c_case["errors"] if e not in ERROR_MAP}
+        case_missing_errs = c_case_errs - r_case_errs - suppressed_errors - {f"?{e}" for e in c_case["errors"] if e not in ERROR_MAP}
         if case_missing_errs:
             divergences.append(("LOW", f"case {rust_label}: missing errors", sorted(case_missing_errs)))
 
         # Compare handlers in this case
         c_case_h = {HANDLER_MAP.get(h, f"?{h}") for h in c_case["handlers"]}
         r_case_h = set(r_case["handlers"])
-        case_missing_h = c_case_h - r_case_h - {f"?{h}" for h in c_case["handlers"] if h not in HANDLER_MAP}
+        case_missing_h = c_case_h - r_case_h - suppressed_handlers - {f"?{h}" for h in c_case["handlers"] if h not in HANDLER_MAP}
         if case_missing_h:
             divergences.append(("LOW", f"case {rust_label}: missing handlers", sorted(case_missing_h)))
 
+    rust_total_lines = r_text.count('\n') + 1 + extra_lines
     return {
         "c_function": c_func_name,
         "rust_function": r_func_name,
+        "extra_rust_funcs": extra_rust_funcs or [],
         "c_lines": c_text.count('\n') + 1,
-        "rust_lines": r_text.count('\n') + 1,
+        "rust_lines": rust_total_lines,
         "c_cases": len(c_cases),
         "rust_cases": len(r_cases),
         "divergences": divergences,
@@ -311,7 +407,10 @@ def format_report(results):
         return "Comparison failed."
 
     lines = []
-    lines.append(f"=== {results['c_function']} ({results['c_lines']}L, {results['c_cases']} cases) vs {results['rust_function']} ({results['rust_lines']}L, {results['rust_cases']} cases) ===")
+    func_desc = results['rust_function']
+    if results.get('extra_rust_funcs'):
+        func_desc += " + " + ", ".join(results['extra_rust_funcs'])
+    lines.append(f"=== {results['c_function']} ({results['c_lines']}L, {results['c_cases']} cases) vs {func_desc} ({results['rust_lines']}L, {results['rust_cases']} cases) ===")
 
     if not results["divergences"]:
         lines.append("  No divergences found!")
@@ -323,19 +422,31 @@ def format_report(results):
     return "\n".join(lines)
 
 
-# Known function pairs
-PAIRS = [
-    ("doContent", "do_content"),
-    ("epilogProcessor", "epilog_processor"),
-    ("doCdataSection", "do_cdata_section"),
-    ("doProlog", "do_prolog"),
-    ("contentProcessor", "content_processor"),
-    ("prologProcessor", "prolog_processor"),
-    ("processXmlDecl", "process_xml_decl"),
-    ("reportComment", "report_comment"),
-    ("reportProcessingInstruction", "report_processing_instruction"),
-    ("reportDefault", "report_default"),
-]
+# Load function pairs from config, falling back to defaults
+def get_pairs():
+    """Get function pairs from deliberate-divergences.json or use defaults."""
+    config = load_divergences()
+    pairs = []
+    for fp in config.get("function_pairs", []):
+        c_func = fp["c_function"]
+        r_func = fp["rust_function"]
+        extra = fp.get("split_functions", [])
+        pairs.append((c_func, r_func, extra))
+    if not pairs:
+        # Fallback to hardcoded pairs
+        pairs = [
+            ("doContent", "do_content", []),
+            ("epilogProcessor", "epilog_processor", []),
+            ("doCdataSection", "do_cdata_section", []),
+            ("doProlog", "do_prolog", ["handle_prolog_role"]),
+            ("contentProcessor", "content_processor", []),
+            ("prologProcessor", "prolog_processor", []),
+            ("processXmlDecl", "handle_prolog_role", []),
+            ("reportComment", "report_comment", []),
+            ("reportProcessingInstruction", "report_processing_instruction", []),
+            ("reportDefault", "report_default", []),
+        ]
+    return pairs
 
 
 def main():
@@ -344,8 +455,11 @@ def main():
         sys.exit(1)
 
     if sys.argv[1] == "--all":
-        for c_name, r_name in PAIRS:
-            results = compare(c_name, r_name)
+        pairs = get_pairs()
+        for item in pairs:
+            c_name, r_name = item[0], item[1]
+            extra = item[2] if len(item) > 2 else []
+            results = compare(c_name, r_name, extra)
             if results:
                 print(format_report(results))
                 print()
@@ -368,12 +482,14 @@ def main():
 
     c_name = sys.argv[1]
     r_name = sys.argv[2]
+    extra = sys.argv[3:] if len(sys.argv) > 3 and sys.argv[3] != "--json" else []
+    extra = [e for e in extra if e != "--json"]
 
     if "--json" in sys.argv:
-        results = compare(c_name, r_name)
+        results = compare(c_name, r_name, extra if extra else None)
         print(json.dumps(results, indent=2, default=list))
     else:
-        results = compare(c_name, r_name)
+        results = compare(c_name, r_name, extra if extra else None)
         print(format_report(results))
 
 

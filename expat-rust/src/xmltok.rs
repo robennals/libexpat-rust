@@ -570,7 +570,7 @@ pub fn parse_xml_decl(
             }
         } else {
             version_start = val_start;
-            version_end = next_pos;
+            version_end = next_pos - minbpc; // exclude closing quote
 
             // Try to parse second attribute
             let (name_start2, name_end2, val_start2, next_pos2, success2) =
@@ -602,7 +602,7 @@ pub fn parse_xml_decl(
 
             if name_matches_encoding {
                 encoding_start = val_start2;
-                encoding_end = next_pos2;
+                encoding_end = next_pos2 - minbpc; // exclude closing quote
 
                 // Try to parse third attribute
                 let (name_start3, name_end3, val_start3, next_pos3, success3) =

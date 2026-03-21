@@ -349,6 +349,18 @@ pub fn scan_pi<E: Encoding>(
 
                 while enc.has_char(data, pos, end) {
                     match enc.byte_type(data, pos) {
+                        ByteType::LEAD2 => {
+                            if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                            pos += 2;
+                        }
+                        ByteType::LEAD3 => {
+                            if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                            pos += 3;
+                        }
+                        ByteType::LEAD4 => {
+                            if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                            pos += 4;
+                        }
                         ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
                             return Err(pos);
                         }
@@ -900,6 +912,18 @@ fn scan_attr_value<E: Encoding>(
             break; // Found closing quote
         }
         match t {
+            ByteType::LEAD2 => {
+                if end - pos < 2 { return Ok(pos); } // Partial
+                pos += 2;
+            }
+            ByteType::LEAD3 => {
+                if end - pos < 3 { return Ok(pos); } // Partial
+                pos += 3;
+            }
+            ByteType::LEAD4 => {
+                if end - pos < 4 { return Ok(pos); } // Partial
+                pos += 4;
+            }
             ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => return Err(pos),
             ByteType::AMP => {
                 let result = scan_ref(enc, data, pos + minbpc, end)?;
@@ -1157,6 +1181,24 @@ pub fn content_tok<E: Encoding>(
                     });
                 }
             }
+        }
+        ByteType::LEAD2 => {
+            if end - pos < 2 {
+                return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos });
+            }
+            pos += 2;
+        }
+        ByteType::LEAD3 => {
+            if end - pos < 3 {
+                return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos });
+            }
+            pos += 3;
+        }
+        ByteType::LEAD4 => {
+            if end - pos < 4 {
+                return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos });
+            }
+            pos += 4;
         }
         ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
             return Err(pos);
@@ -1447,14 +1489,71 @@ pub fn prolog_tok<E: Encoding>(
         ByteType::CR => {
             if pos + minbpc == end {
                 return Ok(TokenResult {
-                    token: XmlTok::PrologS,
+                    token: XmlTok::TrailingCr,
                     next_pos: end,
                 });
             }
+            // Fall through to whitespace scanning loop
             pos += minbpc;
+            // Scan remaining whitespace
+            loop {
+                if !enc.has_char(data, pos, end) {
+                    break;
+                }
+                match enc.byte_type(data, pos) {
+                    ByteType::S | ByteType::LF => {
+                        pos += minbpc;
+                    }
+                    ByteType::CR => {
+                        // Don't split CR/LF pair
+                        if pos + minbpc == end {
+                            break;
+                        }
+                        pos += minbpc;
+                    }
+                    _ => {
+                        return Ok(TokenResult {
+                            token: XmlTok::PrologS,
+                            next_pos: pos,
+                        });
+                    }
+                }
+            }
+            return Ok(TokenResult {
+                token: XmlTok::PrologS,
+                next_pos: pos,
+            });
         }
         ByteType::S | ByteType::LF => {
             pos += minbpc;
+            // Scan remaining whitespace
+            loop {
+                if !enc.has_char(data, pos, end) {
+                    break;
+                }
+                match enc.byte_type(data, pos) {
+                    ByteType::S | ByteType::LF => {
+                        pos += minbpc;
+                    }
+                    ByteType::CR => {
+                        // Don't split CR/LF pair
+                        if pos + minbpc == end {
+                            break;
+                        }
+                        pos += minbpc;
+                    }
+                    _ => {
+                        return Ok(TokenResult {
+                            token: XmlTok::PrologS,
+                            next_pos: pos,
+                        });
+                    }
+                }
+            }
+            return Ok(TokenResult {
+                token: XmlTok::PrologS,
+                next_pos: pos,
+            });
         }
         ByteType::PERCNT => {
             return scan_percent(enc, data, pos + minbpc, end);
