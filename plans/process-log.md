@@ -127,8 +127,73 @@ For each C module:
 5. **Test** (`cargo test`) → verify behavior
 6. **Verify coverage** (`verify-test-coverage.py`) → ensure 1:1 test mapping
 
+### Phase 3: C2Rust Pipeline for Correctness Verification
+**Method: Opus orchestration + tooling**
+
+The agent-written port had correctness issues that were hard to catch by review. We
+needed a systematic way to verify behavior matches C exactly.
+
+#### What was done:
+1. **Installed C2Rust 0.22.1** with LLVM 17 (brew install llvm@17)
+   - C2Rust requires LLVM 14-17, not the latest — LLVM 22 fails with `ElaboratedType` errors
+   - cmake generates `compile_commands.json`; must strip `-arch arm64` and `-target` flags
+   - macOS ARM `long double` (f128) needed a manual fix → replaced with `f64`
+2. **Transpiled all 3 C source files** → 39K lines of mechanically correct unsafe Rust
+   - xmlparse.rs (12,621 lines), xmlrole.rs (3,695 lines), xmltok.rs (22,702 lines)
+   - Output compiles on nightly Rust (needs `#![feature(extern_types, raw_ref_op)]`)
+3. **Created expat-sys crate** — builds C library from source via `cc` crate, provides safe `CParser` wrapper
+4. **Created 59 comparison tests** — run same XML through both Rust port and C library
+   - 56/59 passing, 3 failures all DOCTYPE (not yet implemented)
+5. **Found and fixed 3 bugs** via comparison tests:
+   - Empty input with is_final=true: was returning Ok, should be Error(NoElements)
+   - Unclosed tags with is_final=true: was returning Ok, should be Error(NoElements)
+   - Two test expectations were testing old incorrect behavior → corrected
+6. **Created transformation scripts** for future porting work
+
+#### Key insight: The most effective workflow for correctness
+The previous approach (agent writes Rust from reading C) produces code that *looks* right
+but has subtle behavioral differences. The C2Rust approach provides a verification loop:
+
+1. Write a **comparison test** for the behavior
+2. If it fails, look at the **C2Rust output** to see what C actually does
+3. Fix the **idiomatic Rust port** to match
+4. Re-run comparison tests to verify
+
+The C2Rust output is NOT used directly — it's 39K lines of unsafe Rust with raw pointers
+and C naming. It's a searchable, compilable reference for understanding C behavior when
+it's unclear.
+
+#### Key insight: C2Rust output naming vs Rust port naming
+Zero functions overlap by name between C2Rust output and existing port:
+- C2Rust preserves C names: `XML_Parse`, `doContent`, `(*parser).m_errorCode`
+- Rust port uses idiomatic names: `parse`, `do_content`, `self.error_code`
+Use `scripts/extract-c2rust-functions.py --compare` to map between them.
+
+#### Key insight: C data structures → Rust idioms
+C2Rust preserves C's custom hash tables (open-addressing, manual malloc). In the Rust
+port, use `HashMap<String, T>` instead. Same for STRING_POOL → `String`/`Vec<u8>`.
+Don't port the C data structure implementations.
+
+#### Tools created:
+- `scripts/c2rust-pipeline.sh` — orchestrator (compare, extract, analyze, functions, cleanup)
+- `scripts/c2rust-cleanup.py` — mechanical type cleanup (c_int→i32, c_char→i8, etc.)
+- `scripts/extract-c2rust-functions.py` — extract functions, compare with existing port
+- `scripts/c2rust-analyze-patterns.py` — count patterns (2,729 ptr derefs, 120 fn ptr calls, etc.)
+- `scripts/transform-function.py` — prepare transformation prompts with context
+- `agents/c2rust-transform.md` — haiku agent prompt for function transformation
+
+#### Pattern analysis results (xmlparse.rs):
+| Pattern | Count | Rust replacement |
+|---------|-------|-----------------|
+| `(*parser).m_field` | 2,729 | `self.field_name` |
+| `as c_int` casts | 1,508 | Native types |
+| Function pointer calls | 120 | Trait/enum dispatch |
+| `current_block` (goto) | 119 | Loop/match/return |
+| malloc/free | 66 | Vec/Box/String |
+
 ### What to Try Next
 
-- **Implement XML tokenization** in parse() — wire up xmltok/xmltok_impl
-- **Translate basic_tests.c** remaining batches
-- **Port xmlparse.c sub-sections** (DTD, content, entities)
+- **Port DTD support** (~98 tests blocked) — see `plans/c2rust-port-plan.md`
+- **Port external entity support** (~30 tests)
+- **Port stop/resume** (~10 tests)
+- Continue using comparison tests as the verification mechanism

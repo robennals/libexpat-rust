@@ -1,72 +1,135 @@
-# C2Rust Port Plan
+# C2Rust-Assisted Porting Plan
 
-## Approach
-Use C2Rust output (c2rust-output/src/) as the source of truth for correct logic.
-Transform functions into idiomatic Rust matching the existing port's conventions.
-Verify each change with comparison tests (tests/c_comparison_tests.rs).
+## How the C2Rust Pipeline Works
 
-## Priority 1: DOCTYPE/DTD Support (~98 tests)
+### The Problem
+Agent-written Rust code doesn't always match C behavior exactly. Manual review can't reliably catch subtle differences in a 14K-line C codebase. We need a systematic way to verify correctness.
 
-### Key functions needed (from C2Rust xmlparse.rs):
-1. **doProlog** (1612 lines) — The biggest function. Core state machine for:
-   - DOCTYPE declaration
-   - Internal subset (ELEMENT, ENTITY, ATTLIST, NOTATION declarations)
-   - Parameter entity references
-   - Conditional sections
-2. **defineAttribute** (68 lines) — ATTLIST handler
-3. **getAttributeId** (129 lines) — Attribute name/id lookup
-4. **storeEntityValue** (234 lines) — Entity value storage
-5. **storeAttributeValue** (111 lines) — Attribute value storage
+### The Solution: Three Components
+
+1. **C2Rust output** (`c2rust-output/src/`) — Mechanically generated unsafe Rust that is logically identical to the C source. Used as a **readable reference**, not directly. It compiles on nightly but is not tested.
+
+2. **expat-sys crate** (`expat-sys/`) — Builds the real C library from source and provides a safe `CParser` wrapper. Used to run the actual C parser in tests.
+
+3. **Comparison tests** (`expat-rust/tests/c_comparison_tests.rs`) — Run the same XML through both the **idiomatic Rust port** (`expat-rust/`) and the **C library** (via `expat-sys/`), then compare status codes, error codes, and handler output.
+
+### All test results are from the clean idiomatic Rust port
+The 108 passing tests and 56/59 comparison tests all run against `expat-rust/` — the safe, idiomatic Rust code. The C2Rust output is never tested; it's only a reference for understanding what the C does.
+
+## The Effective Workflow
+
+### For finding bugs in existing code:
+1. **Write a comparison test** for the behavior you want to verify
+2. **Run it** — if it passes, the Rust port matches C; if it fails, you have a concrete bug
+3. **Look at C2Rust output** — `./scripts/c2rust-pipeline.sh extract functionName` shows the mechanically correct logic
+4. **Fix the Rust port** to match C behavior
+5. **Re-run** to confirm
+
+### For porting new functions:
+1. **Extract from C2Rust** — `./scripts/c2rust-pipeline.sh extract doProlog --prompt` generates a transformation-ready prompt with the function, C original, and existing port conventions
+2. **Transform to idiomatic Rust** — use a haiku agent with `agents/c2rust-transform.md` or manually rewrite following `scripts/c2rust-to-idiomatic.md` rules
+3. **Integrate** into `expat-rust/src/xmlparse.rs`
+4. **Add comparison test** to verify
+5. **Run all tests** — `cargo test` must not regress
+
+### Key transformation patterns (from C2Rust → idiomatic Rust):
+| C2Rust Pattern | Count in xmlparse.rs | Idiomatic Rust |
+|----------------|---------------------|----------------|
+| `(*parser).m_field` | 2,729 | `self.field_name` (method on Parser) |
+| `as ::core::ffi::c_int` | 1,508 | Native Rust types (i32, u32, etc.) |
+| Function pointer calls (.expect("non-null")) | 120 | Trait dispatch or enum match |
+| `current_block` goto patterns | 119 | Loop/match/early return |
+| `malloc`/`free` | 66 | Vec, Box, String |
+| C string literals | varies | `&str` or `&[u8]` |
+| `XML_Bool` (unsigned char) | varies | `bool` |
+
+### Important: C hash tables → Rust HashMap
+The C code implements custom hash tables (HASH_TABLE) with open addressing. In the Rust port, use `std::collections::HashMap<String, T>` instead. Same for STRING_POOL → use `String`/`Vec<u8>`.
+
+## Tool Reference
+
+```bash
+# Run comparison tests (idiomatic Rust port vs C library)
+./scripts/c2rust-pipeline.sh compare
+
+# Extract a function from C2Rust output with transformation prompt
+./scripts/c2rust-pipeline.sh extract doProlog --prompt
+
+# Compare function lists between C2Rust and existing port
+./scripts/c2rust-pipeline.sh functions
+
+# Analyze patterns in C2Rust output
+./scripts/c2rust-pipeline.sh analyze
+
+# Run mechanical type cleanup on C2Rust output
+./scripts/c2rust-pipeline.sh cleanup
+```
+
+## Current Status
+
+### Test results (all from the idiomatic Rust port):
+- **108 passing** unit/integration tests
+- **56/59 comparison tests** passing (3 DOCTYPE failures — not yet implemented)
+- **1 known failure**: `test_dtd_elements` (DOCTYPE not implemented)
+- **~160 ignored tests** awaiting features below
+
+### What's implemented:
+- Full XML element parsing (start/end tags, attributes, self-closing)
+- Character data and CDATA sections
+- Processing instructions and comments
+- Predefined entity references (&lt; &gt; &amp; &quot; &apos;)
+- Numeric/hex character references (&#65; &#x41;)
+- UTF-8 and UTF-16 (BE/LE) encoding detection and transcoding
+- Position tracking (line/column)
+- All handler callbacks (21 types)
+- Incremental parsing
+- Error reporting
+
+## Porting Priorities
+
+### Priority 1: DOCTYPE/DTD Support (~98 tests blocked)
+
+Key functions needed (sizes from C2Rust analysis):
+1. **doProlog** (1,612 lines) — Giant state machine for DOCTYPE, ELEMENT, ENTITY, ATTLIST, NOTATION
+2. **storeAtts** (580 lines) — Attribute storage with namespace resolution
+3. **storeEntityValue** (234 lines) — Entity value storage
+4. **appendAttributeValue** (239 lines) — Attribute value with entity expansion
+5. **addBinding** (235 lines) — Namespace binding
 6. **dtdCreate/dtdDestroy/dtdReset** — DTD lifecycle
-7. **hashTable*** — Hash table for name lookups
-8. **poolInit/poolGrow/poolAppend/poolStoreString** — String pool management
+7. **getAttributeId** (129 lines) — Attribute name lookup
+8. **defineAttribute** (68 lines) — ATTLIST handler
 
-### Supporting data structures:
-- DTD struct (with hash tables for elements, entities, attributes)
-- HASH_TABLE / HASH_TABLE_ITER
-- STRING_POOL
+Supporting data structures needed:
+- DTD struct (use HashMap instead of C's HASH_TABLE)
 - ENTITY struct
 - ELEMENT_TYPE struct
 - ATTRIBUTE_ID struct
 
-### Strategy:
-Port the DTD infrastructure first (structs + hash table + string pool), then
-port doProlog incrementally (it's a giant match statement with ~70 cases).
+**Strategy**: Port DTD infrastructure (structs + HashMap-based lookups) first, then port doProlog incrementally — it's a giant match statement with ~70 cases, can be done a few cases at a time with comparison tests verifying each batch.
 
-## Priority 2: External Entity Support (~30 tests)
-
-### Key functions:
+### Priority 2: External Entity Support (~30 tests)
 - processEntity (76 lines)
-- externalEntityContentProcessor (24 lines)
 - externalEntityInitProcessor/2/3 (22+61+66 lines)
 - XML_ExternalEntityParserCreate (173 lines)
+- Depends on Priority 1
 
-### Depends on: Priority 1 (DTD struct)
-
-## Priority 3: Stop/Resume (~10 tests)
-
-### Key functions:
-- XML_StopParser (48 lines)
-- XML_ResumeParser (57 lines)
+### Priority 3: Stop/Resume (~10 tests)
+- XML_StopParser (48 lines), XML_ResumeParser (57 lines)
 - callProcessor reenter logic
+- Relatively independent, could be done in parallel with Priority 1
 
-### Relatively independent, could be done in parallel
-
-## Priority 4: Unknown Encoding (~20 tests)
-
-### Key functions:
+### Priority 4: Unknown Encoding (~20 tests)
 - handleUnknownEncoding (80 lines)
 - XmlInitUnknownEncoding (43 lines)
 
-## Priority 5: Custom Allocator (~30 tests)
-
-### Key functions:
-- expat_malloc/expat_realloc/expat_free
+### Priority 5: Custom Allocator (~30 tests)
+- expat_malloc/realloc/free wrappers
 - XML_ParserCreate_MM
-- Accounting functions (accountingDiffTolerated, etc.)
+- Accounting functions (billion laughs protection)
 
-## Notes
-- Each function should maintain 1:1 correspondence with C
-- Use `./scripts/c2rust-pipeline.sh extract FUNC --prompt` to get transformation-ready prompts
-- Run `cargo test --test c_comparison_tests` after each change
-- The C2Rust output in c2rust-output/ compiles on nightly and is the reference for correct logic
+## Conventions
+- Each function must maintain 1:1 correspondence with C call tree
+- Use `self.field_name` (snake_case, no `m_` prefix) for parser fields
+- C `XML_FunctionName` → Rust `parser.function_name()` method
+- Use Rust idioms (HashMap, Vec, String, Option, Result) instead of C patterns (hash tables, malloc, null pointers, error codes)
+- Run `cargo test --test c_comparison_tests` after every change
