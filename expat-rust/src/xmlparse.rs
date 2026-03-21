@@ -1262,6 +1262,10 @@ impl Parser {
                                 let comment_data = &data[comment_start..end_pos];
                                 if let Some(handler) = &mut self.comment_handler {
                                     handler(comment_data);
+                                } else if let Some(handler) = &mut self.default_handler {
+                                    // Include full comment markup: <!-- ... -->
+                                    let full_start = comment_start - 4; // back to '<'
+                                    handler(&data[full_start..end_pos + 3]);
                                 }
                                 // advance past -->
                                 self.advance_pos_slice(&data[pos..end_pos]);
@@ -1278,9 +1282,9 @@ impl Parser {
                         }
                     }
                     // CDATA section <![CDATA[...]]>
-                    b'!' if pos + 7 < len && &data[pos..pos + 7] == b"[CDATA[" => {
-                        self.advance_pos_slice(&data[pos..pos + 7]);
-                        pos += 7;
+                    b'!' if pos + 8 <= len && &data[pos..pos + 8] == b"![CDATA[" => {
+                        self.advance_pos_slice(&data[pos..pos + 8]);
+                        pos += 8;
                         match self.find_cdata_end(&data, pos) {
                             Some(end_pos) => {
                                 if let Some(handler) = &mut self.start_cdata_section_handler {
@@ -1334,6 +1338,10 @@ impl Parser {
                                 }
                                 if let Some(handler) = &mut self.processing_instruction_handler {
                                     handler(&target, &pi_data);
+                                } else if let Some(handler) = &mut self.default_handler {
+                                    // Pass full PI markup including <? and ?>
+                                    let pi_start = pos - 2; // back to '<'
+                                    handler(&data[pi_start..new_pos]);
                                 }
                                 pos = new_pos;
                             }
@@ -1508,6 +1516,9 @@ impl Parser {
                             } else {
                                 if let Some(handler) = &mut self.processing_instruction_handler {
                                     handler(&target, &pi_data);
+                                } else if let Some(handler) = &mut self.default_handler {
+                                    let pi_start = pos - 2; // back to '<'
+                                    handler(&data[pi_start..new_pos]);
                                 }
                             }
                             pos = new_pos;
@@ -1527,6 +1538,9 @@ impl Parser {
                             let comment_data = &data[comment_start..end_pos];
                             if let Some(handler) = &mut self.comment_handler {
                                 handler(comment_data);
+                            } else if let Some(handler) = &mut self.default_handler {
+                                let full_start = comment_start - 4; // back to '<'
+                                handler(&data[full_start..end_pos + 3]);
                             }
                             self.advance_pos_slice(&data[pos..end_pos]);
                             self.column_number += 3;
