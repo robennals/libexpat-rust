@@ -278,77 +278,77 @@ fn gen_doctype_pi() {
 }
 
 #[test]
-fn gen_err_empty_final() {
+fn ext_err_empty_final() {
     compare(b"", "empty input with is_final");
 }
 
 #[test]
-fn gen_err_no_root() {
+fn ext_err_no_root() {
     compare(b"   ", "whitespace only");
 }
 
 #[test]
-fn gen_err_unclosed_tag() {
+fn ext_err_unclosed_tag() {
     compare(b"<r>", "unclosed tag");
 }
 
 #[test]
-fn gen_err_mismatched_tags() {
+fn ext_err_mismatched_tags() {
     compare(b"<a></b>", "mismatched tags");
 }
 
 #[test]
-fn gen_err_double_root() {
+fn ext_err_double_root() {
     compare(b"<r/><r/>", "two root elements");
 }
 
 #[test]
-fn gen_err_text_after_root() {
+fn ext_err_text_after_root() {
     compare(b"<r/>text", "text after root");
 }
 
 #[test]
-fn gen_err_invalid_char() {
+fn ext_err_invalid_char() {
     compare(b"<r>\x00</r>", "null byte in content");
 }
 
 #[test]
-fn gen_err_bad_entity() {
+fn ext_err_bad_entity() {
     compare(b"<r>&nosuch;</r>", "undefined entity");
 }
 
 #[test]
-fn gen_err_bad_charref() {
+fn ext_err_bad_charref() {
     compare(b"<r>&#xFFFFFF;</r>", "invalid char ref");
 }
 
 #[test]
-fn gen_err_unclosed_entity() {
+fn ext_err_unclosed_entity() {
     compare(b"<r>&amp</r>", "unclosed entity ref");
 }
 
 #[test]
-fn gen_err_duplicate_attr() {
+fn ext_err_duplicate_attr() {
     compare(b"<r a=\"1\" a=\"2\"/>", "duplicate attribute");
 }
 
 #[test]
-fn gen_err_junk_in_prolog() {
+fn ext_err_junk_in_prolog() {
     compare(b"xxx<r/>", "junk before root");
 }
 
 #[test]
-fn gen_err_misplaced_xmldecl() {
+fn ext_err_misplaced_xmldecl() {
     compare(b"<r/><?xml version='1.0'?>", "xml decl after root");
 }
 
 #[test]
-fn gen_err_trailing_cr() {
+fn ext_err_trailing_cr() {
     compare(b"<r>\r", "trailing CR in content");
 }
 
 #[test]
-fn gen_err_partial_tag() {
+fn ext_err_partial_tag() {
     compare(b"<r", "partial opening tag");
 }
 
@@ -427,4 +427,3 @@ fn gen_utf8_in_name() {
     compare(b"<r\xc3\xa9/>", "UTF-8 in element name");
 }
 
-// Total: 79 generated comparison tests
