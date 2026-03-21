@@ -2,6 +2,8 @@
 
 use crate::xmltok;
 use crate::xmltok_impl::{self, Encoding, TokenResult, XmlTok};
+use crate::xmlrole::{self, Role, XmlRoleState};
+use std::collections::HashMap;
 
 // Type aliases for handler function types
 type StartElementHandler = Box<dyn FnMut(&str, &[(&str, &str)]) + 'static>;
@@ -250,6 +252,10 @@ pub struct Parser {
     detected_encoding: Option<String>,
     /// Total byte offset in input (for tracking position across parse calls)
     byte_offset: u64,
+    /// Internal entity definitions — maps entity name to replacement text
+    internal_entities: HashMap<String, String>,
+    /// XML role state machine for prolog parsing
+    prolog_state: XmlRoleState,
 
     // Handler fields
     start_element_handler: Option<StartElementHandler>,
@@ -307,6 +313,8 @@ impl Parser {
             seen_xml_decl: false,
             detected_encoding: None,
             byte_offset: 0,
+            internal_entities: HashMap::new(),
+            prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -362,6 +370,8 @@ impl Parser {
             seen_xml_decl: false,
             detected_encoding: None,
             byte_offset: 0,
+            internal_entities: HashMap::new(),
+            prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -410,6 +420,8 @@ impl Parser {
         self.seen_xml_decl = false;
         self.detected_encoding = None;
         self.byte_offset = 0;
+        self.internal_entities.clear();
+        self.prolog_state = XmlRoleState::new();
         true
     }
 
@@ -432,11 +444,359 @@ impl Parser {
         self.prolog_processor();
     }
 
+    /// Convert XmlTok to xmlrole::Token
+    fn xmltok_to_role_token(tok: XmlTok) -> xmlrole::Token {
+        match tok {
+            XmlTok::PrologS => xmlrole::Token::PrologS,
+            XmlTok::XmlDecl => xmlrole::Token::XmlDecl,
+            XmlTok::Pi => xmlrole::Token::Pi,
+            XmlTok::Comment => xmlrole::Token::Comment,
+            XmlTok::Bom => xmlrole::Token::Bom,
+            XmlTok::DeclOpen => xmlrole::Token::DeclOpen,
+            XmlTok::DeclClose => xmlrole::Token::DeclarationClose,
+            XmlTok::InstanceStart => xmlrole::Token::InstanceStart,
+            XmlTok::Name => xmlrole::Token::Name,
+            XmlTok::PrefixedName => xmlrole::Token::PrefixedName,
+            XmlTok::OpenBracket => xmlrole::Token::OpenBracket,
+            XmlTok::CloseBracket => xmlrole::Token::CloseBracket,
+            XmlTok::Literal => xmlrole::Token::Literal,
+            XmlTok::Nmtoken => xmlrole::Token::Nmtoken,
+            XmlTok::PoundName => xmlrole::Token::PoundName,
+            XmlTok::ParamEntityRef => xmlrole::Token::ParamEntityRef,
+            XmlTok::OpenParen => xmlrole::Token::OpenParen,
+            XmlTok::CloseParen => xmlrole::Token::CloseParen,
+            XmlTok::Or => xmlrole::Token::Or,
+            XmlTok::Comma => xmlrole::Token::Comma,
+            XmlTok::Percent => xmlrole::Token::Percent,
+            XmlTok::CondSectOpen => xmlrole::Token::CondSectOpen,
+            XmlTok::CondSectClose => xmlrole::Token::CondSectClose,
+            XmlTok::NameQuestion => xmlrole::Token::NameQuestion,
+            XmlTok::NameAsterisk => xmlrole::Token::NameAsterix,
+            XmlTok::NamePlus => xmlrole::Token::NamePlus,
+            XmlTok::CloseParenQuestion => xmlrole::Token::CloseParenQuestion,
+            XmlTok::CloseParenAsterisk => xmlrole::Token::CloseParenAsterix,
+            XmlTok::CloseParenPlus => xmlrole::Token::CloseParenPlus,
+            // All other tokens map to None
+            _ => xmlrole::Token::None,
+        }
+    }
+
     /// Prolog processor — corresponds to C prologProcessor()
-    /// Currently delegates to scan_buffer.
-    /// TODO: Replace with do_prolog using prolog_tok once validated.
+    /// Uses do_prolog with the tokenizer+role architecture to parse the XML prolog
     fn prolog_processor(&mut self) {
-        let _ = self.scan_buffer();
+        let data = std::mem::take(&mut self.buffer);
+        if data.is_empty() {
+            if self.is_final && !self.seen_root {
+                self.error_code = XmlError::NoElements;
+            }
+            return;
+        }
+        let have_more = !self.is_final;
+        let enc = xmltok::Utf8Encoding;
+
+        let (error, next_pos) = self.do_prolog(&enc, &data, 0, data.len(), have_more);
+
+        if error != XmlError::None {
+            self.error_code = error;
+            return;
+        }
+
+        // If processor switched to Content, process remaining data as content
+        if self.processor == Processor::Content && next_pos < data.len() {
+            self.buffer = data[next_pos..].to_vec();
+            self.content_processor();
+            return;
+        }
+
+        // Keep unprocessed data for next parse call
+        if next_pos < data.len() {
+            self.buffer = data[next_pos..].to_vec();
+        } else if self.is_final && self.processor != Processor::Content && !self.seen_root {
+            // All prolog data consumed, is_final, but no root element seen
+            self.error_code = XmlError::NoElements;
+        }
+    }
+
+    /// Main prolog parsing loop — corresponds to C doProlog()
+    /// Uses prolog_tok from xmltok_impl to tokenize, and xml_token_role from xmlrole to determine roles
+    fn do_prolog(
+        &mut self,
+        enc: &xmltok::Utf8Encoding,
+        data: &[u8],
+        _start: usize,
+        end: usize,
+        have_more: bool,
+    ) -> (XmlError, usize) {
+        let mut pos = 0;
+
+        loop {
+            // Get the next token from the tokenizer
+            let result = xmltok_impl::prolog_tok(enc, data, pos, end);
+            let (tok, next) = match result {
+                Ok(TokenResult { token, next_pos }) => (token, next_pos),
+                Err(err_pos) => {
+                    // Check if this is a partial UTF-8 character at the end
+                    if have_more && Self::is_partial_utf8_sequence(data, err_pos) {
+                        // Save the remaining data for next parse call
+                        self.buffer = data[err_pos..].to_vec();
+                        return (XmlError::None, end);
+                    }
+                    return (XmlError::InvalidToken, pos);
+                }
+            };
+
+            match tok {
+                XmlTok::None => {
+                    // End of buffer
+                    break;
+                }
+                XmlTok::Partial => {
+                    // Incomplete token — need more data
+                    if have_more {
+                        self.buffer = data[pos..].to_vec();
+                        return (XmlError::None, end);
+                    }
+                    return (XmlError::UnclosedToken, pos);
+                }
+                XmlTok::PartialChar => {
+                    // Incomplete UTF-8 character
+                    if have_more {
+                        self.buffer = data[pos..].to_vec();
+                        return (XmlError::None, end);
+                    }
+                    return (XmlError::PartialChar, pos);
+                }
+                XmlTok::TrailingCr => {
+                    // Trailing CR in prolog
+                    if have_more {
+                        self.buffer = data[pos..].to_vec();
+                        return (XmlError::None, end);
+                    }
+                    return (XmlError::UnclosedToken, pos);
+                }
+                XmlTok::Invalid => {
+                    // Invalid token
+                    return (XmlError::InvalidToken, pos);
+                }
+                _ => {
+                    // Convert token type to role token type
+                    let role_tok = Self::xmltok_to_role_token(tok);
+
+                    // Extract token text for keyword matching
+                    let tok_text = self.extract_token_text(tok, data, pos, next);
+
+                    // Get the role for this token
+                    let role = xmlrole::xml_token_role(&mut self.prolog_state, role_tok, &tok_text, &[]);
+
+                    // Dispatch on role
+                    let error = self.handle_prolog_role(role, tok, data, pos, next);
+                    if error != XmlError::None {
+                        return (error, pos);
+                    }
+
+                    // If processor changed to Content, break out — remaining data
+                    // will be processed by content_processor
+                    if self.processor == Processor::Content {
+                        // InstanceStart: the token was the start tag, but
+                        // content_tok needs to re-tokenize it, so return pos
+                        // (not next) so the start tag is included in content data
+                        return (XmlError::None, pos);
+                    }
+
+                    // Update position for next iteration
+                    self.advance_pos_slice(&data[pos..next]);
+                    pos = next;
+                }
+            }
+        }
+
+        (XmlError::None, pos)
+    }
+
+    /// Extract token text from data for the role state machine
+    /// The role state machine needs text content for keyword matching (e.g., "DOCTYPE", "ENTITY")
+    fn extract_token_text(&self, tok: XmlTok, data: &[u8], pos: usize, next: usize) -> Vec<u8> {
+        let minbpc = 1; // UTF-8
+        match tok {
+            // For DeclOpen, skip the <!  prefix (2 bytes in UTF-8)
+            XmlTok::DeclOpen => {
+                if pos + minbpc * 2 <= next {
+                    data[pos + minbpc * 2..next].to_vec()
+                } else {
+                    data[pos..next].to_vec()
+                }
+            }
+            // For PoundName, skip the # prefix (1 byte)
+            XmlTok::PoundName => {
+                if pos + minbpc <= next {
+                    data[pos + minbpc..next].to_vec()
+                } else {
+                    data[pos..next].to_vec()
+                }
+            }
+            // For Literal, strip quotes
+            XmlTok::Literal => {
+                if pos + minbpc <= next && next >= pos + minbpc {
+                    data[pos + minbpc..next - minbpc].to_vec()
+                } else {
+                    data[pos..next].to_vec()
+                }
+            }
+            // For all other tokens, return full text
+            _ => data[pos..next].to_vec(),
+        }
+    }
+
+    /// Handle the role returned by the role state machine
+    /// Dispatches based on the role and calls the appropriate handler
+    fn handle_prolog_role(
+        &mut self,
+        role: xmlrole::Role,
+        tok: XmlTok,
+        data: &[u8],
+        pos: usize,
+        next: usize,
+    ) -> XmlError {
+        match role {
+            Role::XmlDecl => {
+                // Process XML declaration — matches C processXmlDecl()
+                if self.seen_xml_decl || self.byte_offset > 0 {
+                    return XmlError::MisplacedXmlPi;
+                }
+                self.seen_xml_decl = true;
+
+                let decl_data = &data[pos..next];
+                match xmltok::parse_xml_decl(decl_data, false) {
+                    Ok(info) => {
+                        // Extract version string
+                        let version_str = if info.version_end > info.version_start {
+                            Some(std::str::from_utf8(&decl_data[info.version_start..info.version_end])
+                                .unwrap_or("").to_string())
+                        } else {
+                            None
+                        };
+
+                        // Extract encoding string
+                        let encoding_str = if info.encoding_end > info.encoding_start {
+                            Some(std::str::from_utf8(&decl_data[info.encoding_start..info.encoding_end])
+                                .unwrap_or("").to_string())
+                        } else {
+                            None
+                        };
+
+                        // Handle standalone (C sets parser->m_dtd->standalone)
+                        // TODO: add DTD standalone field when DTD is fully implemented
+
+                        // Call xml_decl_handler if set
+                        if let Some(handler) = &mut self.xml_decl_handler {
+                            handler(
+                                version_str.as_deref(),
+                                encoding_str.as_deref(),
+                                info.standalone.map(|s| if s { 1 } else { 0 }),
+                            );
+                        }
+
+                        // Check encoding matches what we detected
+                        if let Some(ref enc_name) = encoding_str {
+                            let upper = enc_name.to_uppercase();
+                            if upper == "UTF-16" || upper == "UTF-16LE" || upper == "UTF-16BE" {
+                                // UTF-16 declared in what we're parsing as UTF-8 → error
+                                if self.detected_encoding.is_none() {
+                                    self.event_pos = pos;
+                                    return XmlError::IncorrectEncoding;
+                                }
+                            }
+                        }
+                        XmlError::None
+                    }
+                    Err(_err_pos) => {
+                        self.event_pos = pos;
+                        XmlError::XmlDecl
+                    }
+                }
+            }
+            Role::DoctypeName => {
+                // Store DOCTYPE name for subsequent roles
+                XmlError::None
+            }
+            Role::DoctypePublicId => {
+                // Store public ID
+                XmlError::None
+            }
+            Role::DoctypeSystemId => {
+                // Store system ID
+                XmlError::None
+            }
+            Role::DoctypeInternalSubset => {
+                // Internal subset — call start_doctype_decl_handler
+                if let Some(handler) = &mut self.start_doctype_decl_handler {
+                    handler("", None, None, true);
+                }
+                XmlError::None
+            }
+            Role::DoctypeClose => {
+                // End of DOCTYPE — call end_doctype_decl_handler
+                if let Some(handler) = &mut self.end_doctype_decl_handler {
+                    handler();
+                }
+                XmlError::None
+            }
+            Role::InstanceStart => {
+                // Start of XML instance (root element)
+                self.processor = Processor::Content;
+                XmlError::None
+            }
+            Role::GeneralEntityName | Role::ParamEntityName => {
+                // Entity declaration — track for subsequent entity roles
+                XmlError::None
+            }
+            Role::EntityValue => {
+                // Entity value
+                XmlError::None
+            }
+            Role::EntityComplete => {
+                // End of entity declaration — call entity_decl_handler
+                XmlError::None
+            }
+            Role::NotationName => {
+                // Notation declaration
+                XmlError::None
+            }
+            Role::AttlistElementName => {
+                // Start of ATTLIST declaration
+                XmlError::None
+            }
+            Role::AttributeName => {
+                // Attribute in ATTLIST
+                XmlError::None
+            }
+            Role::ElementName => {
+                // Element in ELEMENT declaration
+                XmlError::None
+            }
+            Role::Pi => {
+                // Processing instruction
+                if tok == XmlTok::Pi {
+                    self.report_processing_instruction(&xmltok::Utf8Encoding, data, pos, next);
+                }
+                XmlError::None
+            }
+            Role::Comment => {
+                // Comment
+                if tok == XmlTok::Comment {
+                    self.report_comment(&xmltok::Utf8Encoding, data, pos, next);
+                }
+                XmlError::None
+            }
+            Role::Error => {
+                // Syntax error from role state machine
+                XmlError::Syntax
+            }
+            _ => {
+                // Other roles — ignore for now
+                XmlError::None
+            }
+        }
     }
 
     /// Content processor — corresponds to C contentProcessor()
@@ -467,6 +827,80 @@ impl Parser {
         if next_pos < data.len() && error == XmlError::None {
             self.buffer = data[next_pos..].to_vec();
         }
+    }
+
+    /// Check if the data starting from err_pos is part of a partial UTF-8 sequence
+    /// This checks if err_pos points to the start of a multi-byte UTF-8 lead byte that's incomplete,
+    /// or if it's part of an incomplete sequence starting earlier
+    fn is_partial_utf8_sequence(data: &[u8], err_pos: usize) -> bool {
+        if err_pos >= data.len() {
+            return false;
+        }
+
+        let byte_at_pos = data[err_pos];
+
+        // First, check if err_pos itself points to a lead byte
+        if byte_at_pos >= 0xc0 && byte_at_pos < 0xf8 {
+            // This is a lead byte at err_pos
+            let expected_bytes = if byte_at_pos >= 0xc0 && byte_at_pos < 0xe0 {
+                2  // 2-byte UTF-8 character
+            } else if byte_at_pos >= 0xe0 && byte_at_pos < 0xf0 {
+                3  // 3-byte UTF-8 character
+            } else {
+                4  // 4-byte UTF-8 character (0xf0-0xf7)
+            };
+
+            let bytes_available = data.len() - err_pos;
+            if bytes_available < expected_bytes && Self::all_bytes_valid(&data[err_pos..], expected_bytes) {
+                // Incomplete UTF-8 sequence starting at err_pos
+                return true;
+            }
+        }
+
+        // Otherwise, search backwards to find a lead byte that might have started before err_pos
+        for lookback in 1..=3 {
+            if err_pos < lookback {
+                break;
+            }
+            let pos = err_pos - lookback;
+            let lead_byte = data[pos];
+
+            // Check if this looks like a lead byte
+            if lead_byte >= 0xc0 && lead_byte < 0xf8 {
+                // Determine expected byte count from lead byte
+                let expected_bytes = if lead_byte >= 0xc0 && lead_byte < 0xe0 {
+                    2  // 2-byte UTF-8 character
+                } else if lead_byte >= 0xe0 && lead_byte < 0xf0 {
+                    3  // 3-byte UTF-8 character
+                } else {
+                    4  // 4-byte UTF-8 character (0xf0-0xf7)
+                };
+
+                // Check if we have fewer bytes than expected from this lead byte to end of data
+                let bytes_after_lead = data.len() - pos;
+                if bytes_after_lead < expected_bytes && Self::all_bytes_valid(&data[pos..], expected_bytes) {
+                    // This looks like an incomplete UTF-8 sequence
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Helper to check if bytes form a valid (though possibly incomplete) UTF-8 sequence start
+    fn all_bytes_valid(sequence: &[u8], expected_len: usize) -> bool {
+        // First byte must be a lead byte
+        if sequence.is_empty() || (sequence[0] < 0xc0 || sequence[0] >= 0xf8) {
+            return false;
+        }
+        // Remaining bytes (if present) should be trail bytes (10xxxxxx)
+        for i in 1..sequence.len().min(expected_len) {
+            if sequence[i] < 0x80 || sequence[i] >= 0xc0 {
+                return false;
+            }
+        }
+        true
     }
 
     /// Epilog processor — corresponds to C epilogProcessor()
@@ -505,6 +939,14 @@ impl Parser {
                             self.error_code = XmlError::UnclosedToken;
                             return;
                         }
+                        XmlTok::PartialChar => {
+                            if have_more {
+                                self.buffer = data[pos..].to_vec();
+                                return;
+                            }
+                            self.error_code = XmlError::PartialChar;
+                            return;
+                        }
                         XmlTok::Invalid => {
                             self.error_code = XmlError::JunkAfterDocElement;
                             return;
@@ -515,7 +957,13 @@ impl Parser {
                         }
                     }
                 }
-                Err(_) => {
+                Err(err_pos) => {
+                    // Check if this is a partial UTF-8 character at the end
+                    // Search backwards from err_pos to find the start of a potential UTF-8 lead byte
+                    if have_more && Self::is_partial_utf8_sequence(&data, err_pos) {
+                        self.buffer = data[err_pos..].to_vec();
+                        return;
+                    }
                     self.error_code = XmlError::JunkAfterDocElement;
                     return;
                 }
@@ -535,11 +983,24 @@ impl Parser {
         have_more: bool,
     ) -> (XmlError, usize) {
         let mut pos = start;
+        const MAX_ITERATIONS: usize = 10_000_000;
+        let mut iterations = 0;
 
         loop {
+            iterations += 1;
+            if iterations > MAX_ITERATIONS {
+                return (XmlError::UnexpectedState, pos);
+            }
+
             let result = xmltok_impl::content_tok(enc, data, pos, end);
             let (tok, next) = match result {
-                Ok(TokenResult { token, next_pos }) => (token, next_pos),
+                Ok(TokenResult { token, next_pos }) => {
+                    // Safety: tokenizer must make progress
+                    if next_pos == pos && !matches!(token, XmlTok::None | XmlTok::Partial | XmlTok::PartialChar | XmlTok::TrailingCr | XmlTok::TrailingRsqb) {
+                        return (XmlError::UnexpectedState, pos);
+                    }
+                    (token, next_pos)
+                }
                 Err(err_pos) => {
                     let _ = err_pos;
                     return (XmlError::InvalidToken, pos);
@@ -554,7 +1015,7 @@ impl Parser {
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&[b'\n']);
                     }
-                    if start_tag_level == 0 && !self.seen_root {
+                    if start_tag_level == 0 {
                         return (XmlError::NoElements, next);
                     }
                     return (XmlError::None, end);
@@ -570,10 +1031,10 @@ impl Parser {
                         }
                         return (XmlError::None, pos);
                     }
-                    if !self.seen_root {
-                        return (XmlError::NoElements, pos);
-                    }
-                    return (XmlError::None, pos);
+                    // At top level, reaching end of data means no root element
+                    // was fully parsed (either never opened, or still open).
+                    // C always returns XML_ERROR_NO_ELEMENTS here.
+                    return (XmlError::NoElements, pos);
                 }
 
                 XmlTok::Invalid => {
@@ -609,9 +1070,14 @@ impl Parser {
                             }
                         }
                     } else {
-                        // General entity reference
+                        // General entity reference — check internal entities
                         let name = std::str::from_utf8(&data[name_start..name_end]).unwrap_or("");
-                        if let Some(handler) = &mut self.skipped_entity_handler {
+                        if let Some(value) = self.internal_entities.get(name) {
+                            // Internal entity found — substitute its value
+                            if let Some(handler) = &mut self.character_data_handler {
+                                handler(value.as_bytes());
+                            }
+                        } else if let Some(handler) = &mut self.skipped_entity_handler {
                             handler(name, false);
                         } else {
                             // No handler and no DTD — report undefined entity
@@ -1205,384 +1671,6 @@ impl Parser {
         Ok(result)
     }
 
-    /// Scan the buffer for XML tokens and call handlers
-    ///
-    /// This implements the main parsing loop, using the ported xmltok tokenizer functions
-    /// (xmltok_impl::prolog_tok and xmltok_impl::content_tok) for tokenization. The current
-    /// implementation delegates to helper methods that manage token handling and callbacks,
-    /// which could be consolidated in a future refactoring to use the tokenizer more directly.
-    ///
-    /// Note: The xmltok module provides:
-    /// - prolog_tok() - tokenizes prolog content (XML decl, DOCTYPE, PIs, comments)
-    /// - content_tok() - tokenizes element content (tags, char data, entity/char refs, etc)
-    /// - Supporting functions for scanning attributes, entity references, etc.
-    fn scan_buffer(&mut self) -> bool {
-        let data = std::mem::take(&mut self.buffer);
-        let len = data.len();
-        let mut pos = 0;
-
-        // Handle prolog (XML declaration, DOCTYPE, comments, PIs before root element)
-        // This section uses scan_prolog which dispatches based on byte patterns.
-        // Could be refactored to use crate::xmltok_impl::prolog_tok directly.
-        if !self.seen_root && self.processor == Processor::Prolog {
-            pos = match self.scan_prolog(&data, pos) {
-                Ok(p) => p,
-                Err(_) => return false,
-            };
-            // If we see the root element, transition to content processor
-            if self.seen_root {
-                self.processor = Processor::Content;
-            }
-        }
-
-        // Handle content
-        while pos < len {
-            if data[pos] == b'<' {
-                pos += 1;
-                self.column_number += 1;
-
-                if pos >= len {
-                    if self.is_final {
-                        self.error_code = XmlError::UnclosedToken;
-                        return false;
-                    }
-                    break;
-                }
-
-                match data[pos] {
-                    // Comment <!-- ... -->
-                    b'!' if pos + 2 < len && data[pos + 1] == b'-' && data[pos + 2] == b'-' => {
-                        self.column_number += 2; // for !-
-                        pos += 2;
-                        let comment_start = pos + 1; // after the second -
-                        self.column_number += 1;
-                        pos += 1;
-                        match self.find_comment_end(&data, pos) {
-                            Some(end_pos) => {
-                                let comment_data = &data[comment_start..end_pos];
-                                if let Some(handler) = &mut self.comment_handler {
-                                    handler(comment_data);
-                                } else if let Some(handler) = &mut self.default_handler {
-                                    // Include full comment markup: <!-- ... -->
-                                    let full_start = comment_start - 4; // back to '<'
-                                    handler(&data[full_start..end_pos + 3]);
-                                }
-                                // advance past -->
-                                self.advance_pos_slice(&data[pos..end_pos]);
-                                self.column_number += 3; // for -->
-                                pos = end_pos + 3;
-                            }
-                            None => {
-                                if self.is_final {
-                                    self.error_code = XmlError::UnclosedToken;
-                                    return false;
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    // CDATA section <![CDATA[...]]>
-                    b'!' if pos + 8 <= len && &data[pos..pos + 8] == b"![CDATA[" => {
-                        self.advance_pos_slice(&data[pos..pos + 8]);
-                        pos += 8;
-                        match self.find_cdata_end(&data, pos) {
-                            Some(end_pos) => {
-                                if let Some(handler) = &mut self.start_cdata_section_handler {
-                                    handler();
-                                }
-                                let cdata = &data[pos..end_pos];
-                                if let Some(handler) = &mut self.character_data_handler {
-                                    handler(cdata);
-                                }
-                                if let Some(handler) = &mut self.end_cdata_section_handler {
-                                    handler();
-                                }
-                                self.advance_pos_slice(&data[pos..end_pos]);
-                                self.column_number += 3; // for ]]>
-                                pos = end_pos + 3;
-                            }
-                            None => {
-                                if self.is_final {
-                                    self.error_code = XmlError::UnclosedCdataSection;
-                                    return false;
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    // DOCTYPE <!DOCTYPE ...>
-                    b'!' => {
-                        // Should not see DOCTYPE after root element
-                        if self.seen_root {
-                            self.error_code = XmlError::Syntax;
-                            return false;
-                        }
-                        // Handle as prolog item
-                        pos -= 1; // back to '<'
-                        self.column_number -= 1;
-                        pos = match self.scan_prolog(&data, pos) {
-                            Ok(p) => p,
-                            Err(_) => return false,
-                        };
-                    }
-                    // Processing instruction <?...?>
-                    b'?' => {
-                        self.column_number += 1;
-                        pos += 1;
-                        match self.scan_pi(&data, pos) {
-                            Ok((target, pi_data, new_pos)) => {
-                                // Check for misplaced XML declaration
-                                if target.eq_ignore_ascii_case("xml") {
-                                    self.error_code = XmlError::MisplacedXmlPi;
-                                    return false;
-                                }
-                                if let Some(handler) = &mut self.processing_instruction_handler {
-                                    handler(&target, &pi_data);
-                                } else if let Some(handler) = &mut self.default_handler {
-                                    // Pass full PI markup including <? and ?>
-                                    let pi_start = pos - 2; // back to '<'
-                                    handler(&data[pi_start..new_pos]);
-                                }
-                                pos = new_pos;
-                            }
-                            Err(_) => return false,
-                        }
-                    }
-                    // End tag </...>
-                    b'/' => {
-                        self.column_number += 1;
-                        pos += 1;
-                        let (tag_name, new_pos) = self.scan_end_tag(&data, pos);
-                        if new_pos == 0 {
-                            return false;
-                        }
-
-                        if let Some(expected) = self.tag_stack.last() {
-                            if expected != &tag_name {
-                                // Set event_pos to raw name position (matches C: *eventPP = rawName)
-                                self.event_pos = pos;
-                                self.error_code = XmlError::TagMismatch;
-                                return false;
-                            }
-                        } else {
-                            self.event_pos = pos;
-                            self.error_code = XmlError::TagMismatch;
-                            return false;
-                        }
-
-                        self.tag_stack.pop();
-                        self.tag_level = self.tag_level.saturating_sub(1);
-
-                        if let Some(handler) = &mut self.end_element_handler {
-                            handler(&tag_name);
-                        }
-
-                        // After root element closes, check for junk
-                        if self.tag_stack.is_empty() {
-                            self.root_closed = true;
-                        }
-
-                        pos = new_pos;
-                    }
-                    // Start tag <...>
-                    _ => {
-                        let (tag_name, attrs, is_empty, new_pos) = self.scan_start_tag(&data, pos);
-                        if new_pos == 0 {
-                            return false;
-                        }
-
-                        if self.root_closed {
-                            self.error_code = XmlError::JunkAfterDocElement;
-                            return false;
-                        }
-
-                        self.seen_root = true;
-
-                        if let Some(handler) = &mut self.start_element_handler {
-                            let attr_refs: Vec<(&str, &str)> =
-                                attrs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-                            handler(&tag_name, &attr_refs);
-                        }
-
-                        if is_empty {
-                            if let Some(handler) = &mut self.end_element_handler {
-                                handler(&tag_name);
-                            }
-                            if self.tag_stack.is_empty() {
-                                self.root_closed = true;
-                            }
-                        } else {
-                            self.tag_stack.push(tag_name);
-                            self.tag_level += 1;
-                        }
-
-                        pos = new_pos;
-                    }
-                }
-            } else if self.root_closed {
-                // After root element, transition to epilog processor and only whitespace is allowed
-                if self.processor == Processor::Content {
-                    self.processor = Processor::Epilog;
-                }
-                if (data[pos] as char).is_ascii_whitespace() {
-                    self.advance_pos(data[pos]);
-                    pos += 1;
-                } else {
-                    self.error_code = XmlError::JunkAfterDocElement;
-                    return false;
-                }
-            } else if !self.seen_root {
-                // Before root element, only whitespace is allowed (comments/PIs handled above)
-                if (data[pos] as char).is_ascii_whitespace() {
-                    self.advance_pos(data[pos]);
-                    pos += 1;
-                } else {
-                    self.error_code = XmlError::Syntax;
-                    return false;
-                }
-            } else {
-                // Character data inside elements
-                let result = self.scan_char_data(&data, pos);
-                match result {
-                    Ok((char_data, new_pos)) => {
-                        if new_pos == pos {
-                            // No progress — skip byte to avoid infinite loop
-                            pos += 1;
-                            continue;
-                        }
-                        if !char_data.is_empty() {
-                            if let Some(handler) = &mut self.character_data_handler {
-                                handler(&char_data);
-                            }
-                        }
-                        pos = new_pos;
-                    }
-                    Err(_) => return false,
-                }
-            }
-        }
-
-        // Check for missing root element on final parse
-        if self.is_final && !self.seen_root {
-            self.error_code = XmlError::NoElements;
-            return false;
-        }
-
-        // Check for unclosed tags on final parse
-        if self.is_final && !self.tag_stack.is_empty() {
-            self.error_code = XmlError::NoElements;
-            return false;
-        }
-
-        true
-    }
-
-    /// Scan prolog content (XML declaration, DOCTYPE, comments, PIs)
-    fn scan_prolog(&mut self, data: &[u8], mut pos: usize) -> Result<usize, ()> {
-        let len = data.len();
-
-        while pos < len {
-            // Skip whitespace — but track byte offset for XML declaration check
-            while pos < len && (data[pos] as char).is_ascii_whitespace() {
-                self.advance_pos(data[pos]);
-                self.byte_offset += 1;
-                pos += 1;
-            }
-            if pos >= len {
-                break;
-            }
-
-            if data[pos] != b'<' {
-                // Non-whitespace, non-tag content in prolog — start of content
-                break;
-            }
-
-            pos += 1;
-            self.column_number += 1;
-            if pos >= len {
-                break;
-            }
-
-            match data[pos] {
-                b'?' => {
-                    // Processing instruction or XML declaration
-                    self.column_number += 1;
-                    pos += 1;
-                    match self.scan_pi(&data, pos) {
-                        Ok((target, pi_data, new_pos)) => {
-                            if target.eq_ignore_ascii_case("xml") {
-                                // XML declaration must be at the very start (byte_offset == 0)
-                                // The '<' was at byte_offset, and we skipped whitespace before it
-                                if self.seen_xml_decl || self.byte_offset > 0 {
-                                    self.error_code = XmlError::MisplacedXmlPi;
-                                    return Err(());
-                                }
-                                self.seen_xml_decl = true;
-                                self.process_xml_decl(&pi_data)?;
-                            } else {
-                                if let Some(handler) = &mut self.processing_instruction_handler {
-                                    handler(&target, &pi_data);
-                                } else if let Some(handler) = &mut self.default_handler {
-                                    let pi_start = pos - 2; // back to '<'
-                                    handler(&data[pi_start..new_pos]);
-                                }
-                            }
-                            pos = new_pos;
-                        }
-                        Err(_) => return Err(()),
-                    }
-                }
-                b'!' if pos + 2 < len && data[pos + 1] == b'-' && data[pos + 2] == b'-' => {
-                    // Comment
-                    self.column_number += 2;
-                    pos += 2;
-                    let comment_start = pos + 1;
-                    self.column_number += 1;
-                    pos += 1;
-                    match self.find_comment_end(data, pos) {
-                        Some(end_pos) => {
-                            let comment_data = &data[comment_start..end_pos];
-                            if let Some(handler) = &mut self.comment_handler {
-                                handler(comment_data);
-                            } else if let Some(handler) = &mut self.default_handler {
-                                let full_start = comment_start - 4; // back to '<'
-                                handler(&data[full_start..end_pos + 3]);
-                            }
-                            self.advance_pos_slice(&data[pos..end_pos]);
-                            self.column_number += 3;
-                            pos = end_pos + 3;
-                        }
-                        None => {
-                            if self.is_final {
-                                self.error_code = XmlError::UnclosedToken;
-                                return Err(());
-                            }
-                            break;
-                        }
-                    }
-                }
-                b'!' => {
-                    // DOCTYPE
-                    if pos + 7 <= len && &data[pos..pos + 7] == b"DOCTYPE" {
-                        self.advance_pos_slice(&data[pos..pos + 7]);
-                        pos += 7;
-                        pos = self.scan_doctype(data, pos)?;
-                    } else {
-                        self.error_code = XmlError::Syntax;
-                        return Err(());
-                    }
-                }
-                _ => {
-                    // Start tag — back up and return to content scanning
-                    pos -= 1; // back to '<'
-                    self.column_number -= 1;
-                    break;
-                }
-            }
-        }
-        Ok(pos)
-    }
-
     /// Process XML declaration attributes (version, encoding, standalone)
     fn process_xml_decl(&mut self, decl_data: &str) -> Result<(), ()> {
         let mut version: Option<String> = None;
@@ -1723,599 +1811,6 @@ impl Parser {
         }
 
         Ok(())
-    }
-
-    /// Scan a DOCTYPE declaration (simplified — skips internal subset)
-    fn scan_doctype(&mut self, data: &[u8], mut pos: usize) -> Result<usize, ()> {
-        let len = data.len();
-
-        // Skip whitespace
-        while pos < len && (data[pos] as char).is_ascii_whitespace() {
-            self.advance_pos(data[pos]);
-            pos += 1;
-        }
-
-        // Parse root element name
-        let name_start = pos;
-        while pos < len && is_name_char(data[pos]) {
-            pos += 1;
-        }
-        if pos == name_start {
-            self.error_code = XmlError::Syntax;
-            return Err(());
-        }
-        let root_name = std::str::from_utf8(&data[name_start..pos]).unwrap_or("");
-        self.advance_pos_slice(&data[name_start..pos]);
-
-        let mut system_id: Option<String> = None;
-        let mut public_id: Option<String> = None;
-        let mut has_internal_subset = false;
-
-        // Skip whitespace
-        while pos < len && (data[pos] as char).is_ascii_whitespace() {
-            self.advance_pos(data[pos]);
-            pos += 1;
-        }
-
-        // Check for SYSTEM or PUBLIC
-        if pos + 6 <= len && &data[pos..pos + 6] == b"SYSTEM" {
-            self.advance_pos_slice(&data[pos..pos + 6]);
-            pos += 6;
-            while pos < len && (data[pos] as char).is_ascii_whitespace() {
-                self.advance_pos(data[pos]);
-                pos += 1;
-            }
-            let (sid, new_pos) = self.scan_quoted_string(data, pos)?;
-            system_id = Some(sid);
-            pos = new_pos;
-        } else if pos + 6 <= len && &data[pos..pos + 6] == b"PUBLIC" {
-            self.advance_pos_slice(&data[pos..pos + 6]);
-            pos += 6;
-            while pos < len && (data[pos] as char).is_ascii_whitespace() {
-                self.advance_pos(data[pos]);
-                pos += 1;
-            }
-            let (pid, new_pos) = self.scan_quoted_string(data, pos)?;
-            public_id = Some(pid);
-            pos = new_pos;
-            while pos < len && (data[pos] as char).is_ascii_whitespace() {
-                self.advance_pos(data[pos]);
-                pos += 1;
-            }
-            let (sid, new_pos) = self.scan_quoted_string(data, pos)?;
-            system_id = Some(sid);
-            pos = new_pos;
-        }
-
-        // Skip whitespace
-        while pos < len && (data[pos] as char).is_ascii_whitespace() {
-            self.advance_pos(data[pos]);
-            pos += 1;
-        }
-
-        // Call start doctype handler
-        if let Some(handler) = &mut self.start_doctype_decl_handler {
-            handler(
-                root_name,
-                system_id.as_deref(),
-                public_id.as_deref(),
-                pos < len && data[pos] == b'[',
-            );
-        }
-
-        // Handle internal subset [...]
-        if pos < len && data[pos] == b'[' {
-            has_internal_subset = true;
-            self.column_number += 1;
-            pos += 1;
-            pos = self.skip_internal_subset(data, pos)?;
-        }
-
-        // Skip whitespace
-        while pos < len && (data[pos] as char).is_ascii_whitespace() {
-            self.advance_pos(data[pos]);
-            pos += 1;
-        }
-
-        if pos >= len || data[pos] != b'>' {
-            self.error_code = XmlError::Syntax;
-            return Err(());
-        }
-        self.column_number += 1;
-        pos += 1;
-
-        let _ = has_internal_subset;
-
-        // Call end doctype handler
-        if let Some(handler) = &mut self.end_doctype_decl_handler {
-            handler();
-        }
-
-        Ok(pos)
-    }
-
-    /// Scan a quoted string (for DOCTYPE SYSTEM/PUBLIC identifiers)
-    fn scan_quoted_string(&mut self, data: &[u8], mut pos: usize) -> Result<(String, usize), ()> {
-        if pos >= data.len() || (data[pos] != b'"' && data[pos] != b'\'') {
-            self.error_code = XmlError::Syntax;
-            return Err(());
-        }
-        let quote = data[pos];
-        self.column_number += 1;
-        pos += 1;
-        let start = pos;
-        while pos < data.len() && data[pos] != quote {
-            self.advance_pos(data[pos]);
-            pos += 1;
-        }
-        if pos >= data.len() {
-            self.error_code = XmlError::UnclosedToken;
-            return Err(());
-        }
-        let value = std::str::from_utf8(&data[start..pos]).unwrap_or("").to_string();
-        self.column_number += 1;
-        pos += 1;
-        Ok((value, pos))
-    }
-
-    /// Skip internal subset in DOCTYPE [...] — simplified, handles nested brackets
-    fn skip_internal_subset(&mut self, data: &[u8], mut pos: usize) -> Result<usize, ()> {
-        let len = data.len();
-        let mut depth = 0; // for nested <!...> declarations
-        // Safety: limit iterations to prevent infinite loops
-        let max_iter = len * 2;
-        let mut iter = 0;
-        while pos < len {
-            iter += 1;
-            if iter > max_iter {
-                self.error_code = XmlError::Syntax;
-                return Err(());
-            }
-            match data[pos] {
-                b']' if depth == 0 => {
-                    self.column_number += 1;
-                    pos += 1;
-                    return Ok(pos);
-                }
-                b'<' if pos + 1 < len && data[pos + 1] == b'!' => {
-                    depth += 1;
-                    self.advance_pos(data[pos]);
-                    pos += 1;
-                }
-                b'>' if depth > 0 => {
-                    depth -= 1;
-                    self.column_number += 1;
-                    pos += 1;
-                }
-                b'\'' | b'"' => {
-                    // Skip quoted strings inside declarations
-                    let quote = data[pos];
-                    self.column_number += 1;
-                    pos += 1;
-                    while pos < len && data[pos] != quote {
-                        self.advance_pos(data[pos]);
-                        pos += 1;
-                    }
-                    if pos < len {
-                        self.column_number += 1;
-                        pos += 1;
-                    }
-                }
-                _ => {
-                    self.advance_pos(data[pos]);
-                    pos += 1;
-                }
-            }
-        }
-        self.error_code = XmlError::Syntax;
-        Err(())
-    }
-
-    /// Find the end of a comment (position of first '-' in '-->'), returns None if not found
-    fn find_comment_end(&self, data: &[u8], pos: usize) -> Option<usize> {
-        let mut i = pos;
-        while i + 2 < data.len() {
-            if data[i] == b'-' && data[i + 1] == b'-' && data[i + 2] == b'>' {
-                return Some(i);
-            }
-            i += 1;
-        }
-        None
-    }
-
-    /// Find the end of a CDATA section (position of first ']' in ']]>'), returns None if not found
-    fn find_cdata_end(&self, data: &[u8], pos: usize) -> Option<usize> {
-        let mut i = pos;
-        while i + 2 < data.len() {
-            if data[i] == b']' && data[i + 1] == b']' && data[i + 2] == b'>' {
-                return Some(i);
-            }
-            i += 1;
-        }
-        None
-    }
-
-    /// Scan a processing instruction: target data ?>
-    /// pos should be right after '<?'
-    fn scan_pi(&mut self, data: &[u8], mut pos: usize) -> Result<(String, String, usize), ()> {
-        let len = data.len();
-
-        // Parse target name
-        let target_start = pos;
-        while pos < len && is_name_char(data[pos]) {
-            pos += 1;
-        }
-        if pos == target_start {
-            self.error_code = XmlError::Syntax;
-            return Err(());
-        }
-        let target = std::str::from_utf8(&data[target_start..pos])
-            .unwrap_or("")
-            .to_string();
-        self.advance_pos_slice(&data[target_start..pos]);
-
-        // For XML declaration, check for immediate ?>
-        if pos + 1 < len && data[pos] == b'?' && data[pos + 1] == b'>' {
-            self.column_number += 2;
-            return Ok((target, String::new(), pos + 2));
-        }
-
-        // Skip whitespace before data
-        if pos < len && (data[pos] as char).is_ascii_whitespace() {
-            self.advance_pos(data[pos]);
-            pos += 1;
-        }
-
-        // Find ?>
-        let data_start = pos;
-        while pos + 1 < len {
-            if data[pos] == b'?' && data[pos + 1] == b'>' {
-                let pi_data = std::str::from_utf8(&data[data_start..pos])
-                    .unwrap_or("")
-                    .to_string();
-                self.advance_pos_slice(&data[data_start..pos]);
-                self.column_number += 2;
-                return Ok((target, pi_data, pos + 2));
-            }
-            pos += 1;
-        }
-
-        if self.is_final {
-            self.error_code = XmlError::UnclosedToken;
-        }
-        Err(())
-    }
-
-    /// Scan a start tag <tagname attrs...>
-    fn scan_start_tag(
-        &mut self,
-        data: &[u8],
-        mut pos: usize,
-    ) -> (String, Vec<(String, String)>, bool, usize) {
-        let len = data.len();
-
-        // Parse tag name
-        let tag_start = pos;
-        while pos < len && is_name_char(data[pos]) {
-            pos += 1;
-        }
-
-        if pos == tag_start {
-            self.error_code = XmlError::Syntax;
-            return (String::new(), vec![], false, 0);
-        }
-
-        let tag_name = match std::str::from_utf8(&data[tag_start..pos]) {
-            Ok(s) => s.to_string(),
-            Err(_) => {
-                self.error_code = XmlError::InvalidToken;
-                return (String::new(), vec![], false, 0);
-            }
-        };
-
-        self.advance_pos_slice(&data[tag_start..pos]);
-
-        // Check for invalid bytes immediately following the name (e.g., 4-byte UTF-8)
-        if pos < len && data[pos] >= 0xF0 && data[pos] <= 0xF7 {
-            self.error_code = XmlError::InvalidToken;
-            return (String::new(), vec![], false, 0);
-        }
-
-        let mut attrs: Vec<(String, String)> = Vec::new();
-        let mut attr_names: Vec<String> = Vec::new();
-        let mut is_empty = false;
-
-        loop {
-            // Skip whitespace
-            while pos < len && (data[pos] as char).is_ascii_whitespace() {
-                self.advance_pos(data[pos]);
-                pos += 1;
-            }
-
-            if pos >= len {
-                if self.is_final {
-                    self.error_code = XmlError::UnclosedToken;
-                }
-                return (String::new(), vec![], false, 0);
-            }
-
-            // Check for end of tag
-            if data[pos] == b'>' {
-                self.column_number += 1;
-                return (tag_name, attrs, is_empty, pos + 1);
-            }
-
-            if data[pos] == b'/' {
-                self.column_number += 1;
-                pos += 1;
-                if pos < len && data[pos] == b'>' {
-                    self.column_number += 1;
-                    is_empty = true;
-                    return (tag_name, attrs, is_empty, pos + 1);
-                } else {
-                    self.error_code = XmlError::Syntax;
-                    return (String::new(), vec![], false, 0);
-                }
-            }
-
-            // Parse attribute name
-            let attr_name_start = pos;
-            while pos < len
-                && data[pos] != b'='
-                && data[pos] != b'>'
-                && data[pos] != b'/'
-                && !(data[pos] as char).is_ascii_whitespace()
-            {
-                pos += 1;
-            }
-            if pos == attr_name_start {
-                self.error_code = XmlError::Syntax;
-                return (String::new(), vec![], false, 0);
-            }
-            let attr_name = std::str::from_utf8(&data[attr_name_start..pos])
-                .unwrap_or("")
-                .to_string();
-            self.advance_pos_slice(&data[attr_name_start..pos]);
-
-            // Check for duplicate attribute
-            if attr_names.contains(&attr_name) {
-                self.error_code = XmlError::DuplicateAttribute;
-                return (String::new(), vec![], false, 0);
-            }
-            attr_names.push(attr_name.clone());
-
-            // Skip whitespace
-            while pos < len && (data[pos] as char).is_ascii_whitespace() {
-                self.advance_pos(data[pos]);
-                pos += 1;
-            }
-
-            // Expect '='
-            if pos >= len || data[pos] != b'=' {
-                self.error_code = XmlError::Syntax;
-                return (String::new(), vec![], false, 0);
-            }
-            self.column_number += 1;
-            pos += 1;
-
-            // Skip whitespace
-            while pos < len && (data[pos] as char).is_ascii_whitespace() {
-                self.advance_pos(data[pos]);
-                pos += 1;
-            }
-
-            // Parse attribute value (quoted)
-            if pos >= len || (data[pos] != b'"' && data[pos] != b'\'') {
-                self.error_code = XmlError::Syntax;
-                return (String::new(), vec![], false, 0);
-            }
-            let quote = data[pos];
-            self.column_number += 1;
-            pos += 1;
-
-            let mut attr_value = Vec::new();
-            while pos < len && data[pos] != quote {
-                if data[pos] == b'&' {
-                    // Entity/character reference in attribute value
-                    match self.resolve_reference(&data, pos) {
-                        Ok((replacement, new_pos)) => {
-                            attr_value.extend_from_slice(&replacement);
-                            self.advance_pos_slice(&data[pos..new_pos]);
-                            pos = new_pos;
-                        }
-                        Err(_) => {
-                            return (String::new(), vec![], false, 0);
-                        }
-                    }
-                } else {
-                    if data[pos] == b'\n' || data[pos] == b'\r' || data[pos] == b'\t' {
-                        attr_value.push(b' '); // normalize whitespace in attrs
-                    } else {
-                        attr_value.push(data[pos]);
-                    }
-                    self.advance_pos(data[pos]);
-                    pos += 1;
-                }
-            }
-            if pos >= len {
-                self.error_code = XmlError::UnclosedToken;
-                return (String::new(), vec![], false, 0);
-            }
-            self.column_number += 1; // closing quote
-            pos += 1;
-
-            let attr_value_str = String::from_utf8(attr_value).unwrap_or_default();
-            attrs.push((attr_name, attr_value_str));
-        }
-    }
-
-    /// Scan an end tag </tagname>
-    fn scan_end_tag(&mut self, data: &[u8], mut pos: usize) -> (String, usize) {
-        let len = data.len();
-
-        // Parse tag name
-        let tag_start = pos;
-        while pos < len && is_name_char(data[pos]) {
-            pos += 1;
-        }
-
-        if pos == tag_start {
-            self.error_code = XmlError::Syntax;
-            return (String::new(), 0);
-        }
-
-        let tag_name = match std::str::from_utf8(&data[tag_start..pos]) {
-            Ok(s) => s.to_string(),
-            Err(_) => {
-                self.error_code = XmlError::InvalidToken;
-                return (String::new(), 0);
-            }
-        };
-
-        self.advance_pos_slice(&data[tag_start..pos]);
-
-        // Skip whitespace
-        while pos < len && (data[pos] as char).is_ascii_whitespace() {
-            self.advance_pos(data[pos]);
-            pos += 1;
-        }
-
-        if pos >= len || data[pos] != b'>' {
-            self.error_code = XmlError::Syntax;
-            return (String::new(), 0);
-        }
-
-        self.column_number += 1;
-        (tag_name, pos + 1)
-    }
-
-    /// Scan character data, handling entity/character references.
-    /// Returns the expanded text and the new position.
-    fn scan_char_data(&mut self, data: &[u8], mut pos: usize) -> Result<(Vec<u8>, usize), ()> {
-        let len = data.len();
-        let mut result = Vec::new();
-
-        while pos < len && data[pos] != b'<' {
-            if data[pos] == 0 {
-                self.error_code = XmlError::InvalidToken;
-                return Err(());
-            }
-
-            if data[pos] == b'&' {
-                match self.resolve_reference(data, pos) {
-                    Ok((replacement, new_pos)) => {
-                        result.extend_from_slice(&replacement);
-                        self.advance_pos_slice(&data[pos..new_pos]);
-                        pos = new_pos;
-                    }
-                    Err(_) => return Err(()),
-                }
-            } else {
-                self.advance_pos(data[pos]);
-                result.push(data[pos]);
-                pos += 1;
-            }
-        }
-
-        Ok((result, pos))
-    }
-
-    /// Resolve an entity reference (&...; or &#...; or &#x...;)
-    /// Returns the replacement bytes and the position after the ';'
-    fn resolve_reference(&mut self, data: &[u8], pos: usize) -> Result<(Vec<u8>, usize), ()> {
-        let len = data.len();
-        debug_assert!(data[pos] == b'&');
-        let start = pos;
-        let mut p = pos + 1;
-
-        if p >= len {
-            self.error_code = XmlError::UnclosedToken;
-            return Err(());
-        }
-
-        if data[p] == b'#' {
-            // Character reference
-            p += 1;
-            if p >= len {
-                self.error_code = XmlError::UnclosedToken;
-                return Err(());
-            }
-
-            let hex = data[p] == b'x' || data[p] == b'X';
-            if hex {
-                p += 1;
-            }
-
-            let num_start = p;
-            while p < len && data[p] != b';' {
-                p += 1;
-            }
-            if p >= len {
-                self.error_code = XmlError::UnclosedToken;
-                return Err(());
-            }
-
-            let num_str = std::str::from_utf8(&data[num_start..p]).unwrap_or("");
-            let codepoint = if hex {
-                u32::from_str_radix(num_str, 16).unwrap_or(0xFFFFFFFF)
-            } else {
-                num_str.parse::<u32>().unwrap_or(0xFFFFFFFF)
-            };
-
-            // Validate codepoint — XML 1.0 allows specific ranges
-            if !is_valid_xml_char(codepoint) {
-                self.error_code = XmlError::BadCharRef;
-                return Err(());
-            }
-
-            let ch = match char::from_u32(codepoint) {
-                Some(c) => c,
-                None => {
-                    self.error_code = XmlError::BadCharRef;
-                    return Err(());
-                }
-            };
-
-            let mut buf = [0u8; 4];
-            let encoded = ch.encode_utf8(&mut buf);
-            let _ = start;
-            Ok((encoded.as_bytes().to_vec(), p + 1))
-        } else {
-            // Named entity reference
-            let name_start = p;
-            while p < len && data[p] != b';' {
-                if !is_name_char(data[p]) {
-                    self.error_code = XmlError::Syntax;
-                    return Err(());
-                }
-                p += 1;
-            }
-            if p >= len {
-                self.error_code = XmlError::UnclosedToken;
-                return Err(());
-            }
-
-            let name = std::str::from_utf8(&data[name_start..p]).unwrap_or("");
-            p += 1; // skip ';'
-
-            match name {
-                "amp" => Ok((b"&".to_vec(), p)),
-                "lt" => Ok((b"<".to_vec(), p)),
-                "gt" => Ok((b">".to_vec(), p)),
-                "quot" => Ok((b"\"".to_vec(), p)),
-                "apos" => Ok((b"'".to_vec(), p)),
-                _ => {
-                    // General entity — call skipped entity handler or report error
-                    if let Some(handler) = &mut self.skipped_entity_handler {
-                        handler(name, false);
-                        Ok((vec![], p))
-                    } else {
-                        self.error_code = XmlError::UndefinedEntity;
-                        Err(())
-                    }
-                }
-            }
-        }
     }
 
     /// Get a buffer for incremental parsing
@@ -2748,32 +2243,6 @@ impl Drop for Parser {
         // Rust's ownership model handles cleanup automatically
         // All Vec and String fields will be dropped naturally
     }
-}
-
-/// Check if a byte is a valid XML name character (or start of a valid multi-byte name char).
-/// This handles ASCII name chars directly. For multi-byte UTF-8:
-/// - 2-byte (0xC0..0xDF) and 3-byte (0xE0..0xEF) sequences are accepted (covers most valid XML name chars)
-/// - 4-byte (0xF0..0xF7) sequences are rejected (U+10000+ not valid in XML 1.0 names)
-/// - Continuation bytes (0x80..0xBF) are accepted (part of multi-byte sequences)
-fn is_name_char(b: u8) -> bool {
-    matches!(
-        b,
-        b'a'..=b'z'
-            | b'A'..=b'Z'
-            | b'0'..=b'9'
-            | b'-'
-            | b'_'
-            | b':'
-            | b'.'
-            | 0x80..=0xBF // UTF-8 continuation bytes
-            | 0xC0..=0xDF // 2-byte UTF-8 start
-            | 0xE0..=0xEF // 3-byte UTF-8 start
-    )
-}
-
-/// Check if a codepoint is a valid XML 1.0 character
-fn is_valid_xml_char(cp: u32) -> bool {
-    matches!(cp, 0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF)
 }
 
 /// Check if an encoding name is known/supported

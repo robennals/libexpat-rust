@@ -350,9 +350,47 @@ C2Rust preserves C's custom hash tables (open-addressing, manual malloc). In the
 port, use `HashMap<String, T>` instead. Same for STRING_POOL → `String`/`Vec<u8>`.
 Don't port the C data structure implementations.
 
+### Phase 4: Systematic Test Fixing (Current)
+**Method: Parallel haiku agents with categorized batches**
+
+#### Lesson 9: Don't jump in and manually port — build infrastructure first
+When faced with a large porting task (9K line C function), the instinct is to start reading
+code and writing the port. This doesn't scale. Instead:
+1. Build extraction scripts that produce agent-ready prompts
+2. Build verification scripts that check compile + test status
+3. Categorize failures to find root causes
+4. Fix root causes in parallel via haiku agents
+
+#### Lesson 10: Fix root causes, not individual tests
+The prolog_tok whitespace bug caused 7+ test failures across multiple files. Fixing one
+function unlocked 7 tests — much more efficient than debugging each test individually.
+
+#### Lesson 11: The port was further along than it appeared
+Before starting Phase 4, the code already had:
+- DTD data structures (Entity, ElementType, AttributeId, Dtd)
+- Prolog state machine fields (prolog_state, doctype_name, etc.)
+- A do_prolog function handling all role cases
+- Working content_processor and epilog_processor using the proper tokenizer
+
+The main issues were tokenizer bugs (prolog_tok whitespace), encoding handling, and
+position tracking — not missing architecture.
+
+#### Tools created:
+- `scripts/extract-c-function.py` — extract C functions with context, list functions
+- `scripts/verify-port.sh` — quick/full verification (compile, clippy, tests, comparison, unsafe audit)
+- `scripts/list-failures.sh` — list all failing tests grouped by file
+- `agents/fix-test-batch.md` — haiku agent prompt template for fixing test batches
+
+#### Test status progression:
+| Phase | Passed | Failed | Ignored |
+|-------|--------|--------|---------|
+| Before Phase 4 | 122 | 62 | 289 |
+| After prolog_tok whitespace fix | 131 | 53 | 289 |
+| After parallel fix agents | TBD | TBD | TBD |
+
 ### What to Try Next
 
-- **Port DTD support** (~98 tests blocked) — see `plans/c2rust-port-plan.md`
-- **Port external entity support** (~30 tests)
-- **Port stop/resume** (~10 tests)
+- **Fix remaining ~50 test failures** via parallel haiku agents (encoding, position, ns)
+- **Enable ignored tests in batches** by feature (DTD, external entities, stop/resume)
+- **Port missing features** for ignored tests (unknown encoding, custom allocator)
 - Continue using comparison tests as the verification mechanism
