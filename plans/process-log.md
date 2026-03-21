@@ -1,5 +1,98 @@
 # C-to-Rust Porting Process Log
 
+This project is primarily a **test case for learning the best methods** for porting C to
+Rust using AI agents. The transferable insights about methodology matter more than the
+port itself.
+
+## Transferable Lessons for C-to-Rust Porting
+
+### Lesson 1: AI-written ports look correct but have subtle behavioral bugs
+
+Agent-generated Rust code that ports C tends to:
+- Use the right function names and follow the right structure
+- Handle the happy path correctly
+- Miss edge cases around finalization, empty input, error propagation, and state transitions
+
+These bugs are **invisible to code review** — the code reads as a plausible translation.
+You can only catch them by running the C and Rust code side by side on the same inputs.
+
+### Lesson 2: Build a C FFI test harness first, before porting anything
+
+The single most valuable thing you can do when porting C to Rust is:
+1. Create a `-sys` crate that builds the C library from source (using the `cc` crate)
+2. Write a safe Rust wrapper around the C API
+3. Write comparison tests that run identical inputs through both implementations
+
+This took ~30 minutes to set up and immediately found 3 bugs that had survived multiple
+rounds of agent-written code and manual review. **Do this before writing any port code.**
+
+The pattern is:
+```rust
+fn compare(input: &[u8]) {
+    let rust_result = rust_parser.parse(input, true);
+    let c_result = c_parser.parse(input, true);
+    assert_eq!(rust_result, c_result);
+}
+```
+
+Extend to compare error codes, positions, and handler callback output — not just
+success/failure.
+
+### Lesson 3: C2Rust adds modest value; the C FFI harness is what matters
+
+C2Rust (mechanical C→Rust transpiler) sounds appealing but in practice:
+- **Installation is painful** (requires specific LLVM version, macOS compatibility issues)
+- **Output is unusable directly** (39K lines of unsafe Rust with raw pointers and C naming)
+- **Reading C source is just as good** as reading C2Rust output for understanding behavior
+- **The real C library** (linked via FFI) is a better reference than any transpilation
+
+If you only have time for one thing, build the FFI test harness. Skip C2Rust.
+
+### Lesson 4: Haiku agents are excellent for leaf modules, not for core logic
+
+Haiku reliably ported: data tables, hash functions, character classification, simple state
+machines. These are well-defined, have clear test vectors, and don't require understanding
+the broader system.
+
+Haiku-ported code for the core parser (xmlparse.c) had the behavioral bugs described above.
+The core logic involves complex state machines, cross-function invariants, and subtle
+finalization semantics that require more careful verification.
+
+### Lesson 5: The verification workflow matters more than the generation method
+
+Whether code is written by Haiku, Sonnet, Opus, or a human, the same verification workflow
+applies:
+1. Write a comparison test for the specific behavior
+2. Run it — does Rust match C?
+3. If not, read the C source to understand the correct behavior
+4. Fix the Rust code
+5. Re-run to confirm, check for regressions
+
+The quality of the initial generation matters less than having a tight feedback loop.
+A mediocre first draft with good verification beats a careful first draft with no verification.
+
+### Lesson 6: Test the C library's actual behavior, not what the C source says
+
+The C source can be misleading due to preprocessor macros, implicit conversions, and
+platform-specific behavior. The only reliable ground truth is what the compiled C library
+actually does when you feed it input. This is why the FFI harness (running real C code)
+is more valuable than reading C source or C2Rust output.
+
+Example: We initially thought `<doc>\r` with is_final=true should succeed (the Rust test
+said so). The C test suite explicitly expects it to fail. Only by running the C library
+did we discover the correct behavior.
+
+### Lesson 7: Port data structures idiomatically, not literally
+
+C2Rust preserves C's manual hash tables, string pools, and linked lists. The Rust port
+should use `HashMap`, `String`, `Vec` instead. Don't port the C data structure
+implementations — they exist because C lacks standard library equivalents.
+
+### Lesson 8: Comparison tests should cover handlers, not just status codes
+
+Parsing can "succeed" (return Ok) but deliver wrong data to handlers. Test that character
+data, element names, and attribute values delivered to callbacks match between C and Rust.
+
 ## What We've Done So Far
 
 ### Phase 0.1: Rust Project Scaffolding
@@ -127,8 +220,139 @@ For each C module:
 5. **Test** (`cargo test`) → verify behavior
 6. **Verify coverage** (`verify-test-coverage.py`) → ensure 1:1 test mapping
 
+### Phase 3: C2Rust Pipeline for Correctness Verification
+**Method: Opus orchestration + tooling**
+
+The agent-written port had correctness issues that were hard to catch by review. We
+needed a systematic way to verify behavior matches C exactly.
+
+#### What was done:
+1. **Installed C2Rust 0.22.1** with LLVM 17 (brew install llvm@17)
+   - C2Rust requires LLVM 14-17, not the latest — LLVM 22 fails with `ElaboratedType` errors
+   - cmake generates `compile_commands.json`; must strip `-arch arm64` and `-target` flags
+   - macOS ARM `long double` (f128) needed a manual fix → replaced with `f64`
+2. **Transpiled all 3 C source files** → 39K lines of mechanically correct unsafe Rust
+   - xmlparse.rs (12,621 lines), xmlrole.rs (3,695 lines), xmltok.rs (22,702 lines)
+   - Output compiles on nightly Rust (needs `#![feature(extern_types, raw_ref_op)]`)
+3. **Created expat-sys crate** — builds C library from source via `cc` crate, provides safe `CParser` wrapper
+4. **Created 59 comparison tests** — run same XML through both Rust port and C library
+   - 56/59 passing, 3 failures all DOCTYPE (not yet implemented)
+5. **Found and fixed 3 bugs** via comparison tests:
+   - Empty input with is_final=true: was returning Ok, should be Error(NoElements)
+   - Unclosed tags with is_final=true: was returning Ok, should be Error(NoElements)
+   - Two test expectations were testing old incorrect behavior → corrected
+6. **Created transformation scripts** for future porting work
+
+#### Key insight: The real value was expat-sys + comparison tests, not C2Rust itself
+
+The **most valuable thing built** was the `expat-sys` crate and the comparison test suite.
+C2Rust was the motivating reason to set this up, but in hindsight could have been skipped.
+
+**What expat-sys does**: It builds the real C libexpat from source using the `cc` crate
+and provides a safe Rust wrapper (`CParser`) with the same API shape as our Rust port.
+This means you can write a test that parses the same XML through both parsers and compare
+the results — status codes, error codes, line/column positions, even handler callback output.
+
+**Why this matters**: Agent-written Rust code that ports C *looks* correct — it uses the
+right function names, follows the right control flow, handles the same cases. But it has
+subtle behavioral differences that are invisible to code review. The only reliable way to
+catch these is to run the C code and the Rust code side by side on the same inputs and
+compare outputs.
+
+**What C2Rust added on top**: Honestly, modest value. The C2Rust output is a searchable
+Rust-syntax version of the C code, which is slightly easier to read than C when you're
+already in Rust-brain mode. But reading the C source directly works fine too. The C2Rust
+installation was painful (LLVM version compatibility, macOS ARM issues) and the output is
+39K lines of unsafe unidiomatic Rust that can't be used directly. If doing this again,
+skip C2Rust and go straight to building expat-sys + comparison tests.
+
+#### The bug-finding method in detail
+
+Here is exactly how comparison tests found and fixed bugs:
+
+**Step 1: Write comparison tests.** Each test parses a snippet of XML through both parsers:
+```rust
+fn compare_status(xml: &[u8], description: &str) {
+    let (r_status, r_error, _, _) = parse_rust(xml);  // our Rust port
+    let (c_status, c_error, _, _) = parse_c(xml);      // real C library
+    assert_eq!(rust_status_to_u32(r_status), c_status,
+        "STATUS MISMATCH for {description}");
+}
+```
+
+**Step 2: Run them.** Three tests failed immediately:
+
+```
+cmp_empty_input:     Rust: status=1(Ok) error=0  |  C: status=0(Error) error=3(NoElements)
+cmp_unclosed_tag:    Rust: status=1(Ok) error=0  |  C: status=0(Error) error=3(NoElements)
+cmp_simple_doctype:  Rust: status=0(Error) error=2(Syntax)  |  C: status=1(Ok) error=0
+```
+
+**Step 3: Diagnose using the C source (or C2Rust output) as reference.**
+
+For `cmp_empty_input` (empty string with is_final=true): The Rust `scan_buffer()` had:
+```rust
+if self.is_final && !self.seen_root && !data.is_empty() {  // BUG: !data.is_empty()
+```
+The `!data.is_empty()` guard was wrong — empty final input should still be an error.
+The C code in `contentProcessor` has no such guard; it checks `startTagLevel == 0` and
+returns `XML_ERROR_NO_ELEMENTS` unconditionally when final and no root element seen.
+
+For `cmp_unclosed_tag` (`<a>` with is_final=true): The Rust code pushed the tag onto
+`tag_stack` but never checked at end-of-parse whether tags were still open. The C code
+checks `parser->m_tagLevel != startTagLevel` in `doContent` and returns `XML_ERROR_NO_ELEMENTS`.
+Fix: Added `if self.is_final && !self.tag_stack.is_empty()` check at end of `scan_buffer`.
+
+For `cmp_simple_doctype`: Expected failure — DOCTYPE is not implemented yet.
+
+**Step 4: Fix and verify.** After each fix, re-run the full test suite to confirm no
+regressions and the comparison test now passes.
+
+**Step 5: Also found 2 tests with wrong expectations.** The comparison tests revealed
+that `test_trailing_cr` and `test_utf8_auto_align` in the existing test suite were
+testing the old *incorrect* Rust behavior. The C test suite explicitly expects these to
+fail (`if (... == XML_STATUS_OK) fail("Failed to fault unclosed doc")`). Fixed the Rust
+test expectations to match C.
+
+#### Recommendation for future porting work
+
+1. **Always build comparison tests first** before porting new functions. Write the test,
+   confirm it fails (because the feature isn't implemented), then implement until it passes.
+2. **Use expat-sys for ground truth**, not C2Rust output or reading the C source. The C
+   library's actual behavior is the only reliable reference — even the C source can be
+   misleading due to preprocessor macros, implicit type conversions, and platform-specific
+   behavior.
+3. **Test handlers, not just status codes.** The `cmp_chardata_entities` test compares
+   actual character data delivered to handlers, not just whether parsing succeeded. This
+   catches cases where parsing "succeeds" but delivers wrong data.
+
+#### C2Rust output — limited but available
+
+The C2Rust output exists in `c2rust-output/src/` and compiles on nightly. It's useful for:
+- Grepping function names to find where logic lives
+- Getting a rough line count for porting effort estimation
+- Pattern analysis (how many pointer derefs, function pointer calls, etc.)
+
+Not useful for:
+- Direct use (unsafe, unidiomatic, C naming)
+- Understanding intent (the C source with comments is clearer)
+
+#### Tools created:
+- `scripts/c2rust-pipeline.sh` — orchestrator (compare, extract, analyze, functions, cleanup)
+- `scripts/c2rust-cleanup.py` — mechanical type cleanup (c_int→i32, c_char→i8, etc.)
+- `scripts/extract-c2rust-functions.py` — extract functions, compare with existing port
+- `scripts/c2rust-analyze-patterns.py` — count patterns (2,729 ptr derefs, 120 fn ptr calls, etc.)
+- `scripts/transform-function.py` — prepare transformation prompts with context
+- `agents/c2rust-transform.md` — haiku agent prompt for function transformation
+
+#### Key insight: C data structures → Rust idioms
+C2Rust preserves C's custom hash tables (open-addressing, manual malloc). In the Rust
+port, use `HashMap<String, T>` instead. Same for STRING_POOL → `String`/`Vec<u8>`.
+Don't port the C data structure implementations.
+
 ### What to Try Next
 
-- **Implement XML tokenization** in parse() — wire up xmltok/xmltok_impl
-- **Translate basic_tests.c** remaining batches
-- **Port xmlparse.c sub-sections** (DTD, content, entities)
+- **Port DTD support** (~98 tests blocked) — see `plans/c2rust-port-plan.md`
+- **Port external entity support** (~30 tests)
+- **Port stop/resume** (~10 tests)
+- Continue using comparison tests as the verification mechanism

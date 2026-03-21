@@ -13,13 +13,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "expat-rust"
-version = "0.1.0"
-dependencies = [
- "expat-sys",
-]
-
-[[package]]
 name = "expat-sys"
 version = "0.1.0"
 dependencies = [

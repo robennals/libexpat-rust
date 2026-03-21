@@ -1462,8 +1462,14 @@ impl Parser {
             }
         }
 
-        // Check for missing root element on final parse (only if we had data)
-        if self.is_final && !self.seen_root && !data.is_empty() {
+        // Check for missing root element on final parse
+        if self.is_final && !self.seen_root {
+            self.error_code = XmlError::NoElements;
+            return false;
+        }
+
+        // Check for unclosed tags on final parse
+        if self.is_final && !self.tag_stack.is_empty() {
             self.error_code = XmlError::NoElements;
             return false;
         }
