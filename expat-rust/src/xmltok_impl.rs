@@ -1,1 +1,2250 @@
-// Tokenizer implementation — AI-generated port of xmltok_impl.c
+// AI-generated port of xmltok_impl.c
+
+use crate::char_tables::ByteType;
+
+/// Token type enumeration matching XML_TOK_* constants
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum XmlTok {
+    // Error/incomplete tokens (negative values)
+    TrailingRsqb = -5,
+    None = -4,
+    TrailingCr = -3,
+    PartialChar = -2,
+    Partial = -1,
+
+    // Positive tokens
+    Invalid = 0,
+    StartTagWithAtts = 1,
+    StartTagNoAtts = 2,
+    EmptyElementWithAtts = 3,
+    EmptyElementNoAtts = 4,
+    EndTag = 5,
+    DataChars = 6,
+    DataNewline = 7,
+    CdataSectOpen = 8,
+    EntityRef = 9,
+    CharRef = 10,
+
+    // Prolog/both tokens
+    Pi = 11,
+    XmlDecl = 12,
+    Comment = 13,
+    Bom = 14,
+
+    // Prolog-only tokens
+    PrologS = 15,
+    DeclOpen = 16,
+    DeclClose = 17,
+    Name = 18,
+    Nmtoken = 19,
+    PoundName = 20,
+    Or = 21,
+    Percent = 22,
+    OpenParen = 23,
+    CloseParen = 24,
+    OpenBracket = 25,
+    CloseBracket = 26,
+    Literal = 27,
+    ParamEntityRef = 28,
+    InstanceStart = 29,
+
+    // Element type declaration tokens
+    NameQuestion = 30,
+    NameAsterisk = 31,
+    NamePlus = 32,
+    CondSectOpen = 33,
+    CondSectClose = 34,
+    CloseParenQuestion = 35,
+    CloseParenAsterisk = 36,
+    CloseParenPlus = 37,
+    Comma = 38,
+
+    // Attribute value token
+    AttributeValueS = 39,
+
+    // CDATA section token
+    CdataSectClose = 40,
+
+    // Prefixed name
+    PrefixedName = 41,
+
+    // DTD only
+    IgnoreSect = 42,
+}
+
+/// Result of scanning a token
+pub struct TokenResult {
+    pub token: XmlTok,
+    pub next_pos: usize,
+}
+
+/// Encoding trait for handling different character encodings
+pub trait Encoding {
+    /// Get the byte type at the given position
+    fn byte_type(&self, data: &[u8], pos: usize) -> ByteType;
+
+    /// Check if a byte sequence matches an ASCII character
+    fn char_matches(&self, data: &[u8], pos: usize, c: u8) -> bool;
+
+    /// Get minimum bytes per character (1 for UTF-8, 2 for UTF-16)
+    fn min_bytes_per_char(&self) -> usize;
+
+    /// Get ASCII value of a byte sequence
+    fn byte_to_ascii(&self, data: &[u8], pos: usize) -> u8;
+
+    /// Check if position has at least count characters
+    fn has_chars(&self, _data: &[u8], pos: usize, end: usize, count: usize) -> bool {
+        (end - pos) >= (count * self.min_bytes_per_char())
+    }
+
+    /// Check if position has at least 1 character
+    fn has_char(&self, data: &[u8], pos: usize, end: usize) -> bool {
+        self.has_chars(data, pos, end, 1)
+    }
+}
+
+// ASCII character constants
+const ASCII_MINUS: u8 = 0x2D;
+const ASCII_X: u8 = 0x78;
+const ASCII_M: u8 = 0x6D;
+const ASCII_L: u8 = 0x6C;
+const ASCII_GT: u8 = 0x3E;
+const ASCII_RSQB: u8 = 0x5D;
+const ASCII_LSQB: u8 = 0x5B;
+const ASCII_EXCL: u8 = 0x21;
+const ASCII_SEMI: u8 = 0x3B;
+const ASCII_TAB: u8 = 0x09;
+const ASCII_QUOT: u8 = 0x22;
+const ASCII_APOS: u8 = 0x27;
+
+/// Scan a comment token starting after "<!-"
+pub fn scan_comment<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    if !enc.has_char(data, pos, end) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    if !enc.char_matches(data, pos, ASCII_MINUS) {
+        return Err(pos);
+    }
+
+    pos += enc.min_bytes_per_char();
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::NONXML
+            | ByteType::MALFORM
+            | ByteType::TRAIL => {
+                return Err(pos);
+            }
+            ByteType::MINUS => {
+                pos += enc.min_bytes_per_char();
+                if !enc.has_char(data, pos, end) {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                if enc.char_matches(data, pos, ASCII_MINUS) {
+                    pos += enc.min_bytes_per_char();
+                    if !enc.has_char(data, pos, end) {
+                        return Ok(TokenResult {
+                            token: XmlTok::Partial,
+                            next_pos: pos,
+                        });
+                    }
+                    if !enc.char_matches(data, pos, ASCII_GT) {
+                        return Err(pos);
+                    }
+                    return Ok(TokenResult {
+                        token: XmlTok::Comment,
+                        next_pos: pos + enc.min_bytes_per_char(),
+                    });
+                }
+            }
+            _ => {
+                pos += enc.min_bytes_per_char();
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::Partial,
+        next_pos: pos,
+    })
+}
+
+/// Scan a declaration starting after "<!"
+pub fn scan_decl<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    if !enc.has_char(data, pos, end) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    match enc.byte_type(data, pos) {
+        ByteType::MINUS => {
+            return scan_comment(enc, data, pos + enc.min_bytes_per_char(), end);
+        }
+        ByteType::LSQB => {
+            return Ok(TokenResult {
+                token: XmlTok::CondSectOpen,
+                next_pos: pos + enc.min_bytes_per_char(),
+            });
+        }
+        ByteType::NMSTRT | ByteType::HEX => {
+            pos += enc.min_bytes_per_char();
+        }
+        _ => {
+            return Err(pos);
+        }
+    }
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::PERCNT => {
+                if !enc.has_chars(data, pos, end, 2) {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                match enc.byte_type(data, pos + enc.min_bytes_per_char()) {
+                    ByteType::S | ByteType::CR | ByteType::LF | ByteType::PERCNT => {
+                        return Err(pos);
+                    }
+                    _ => {}
+                }
+                pos += enc.min_bytes_per_char();
+            }
+            ByteType::S | ByteType::CR | ByteType::LF => {
+                return Ok(TokenResult {
+                    token: XmlTok::DeclOpen,
+                    next_pos: pos,
+                });
+            }
+            ByteType::NMSTRT | ByteType::HEX => {
+                pos += enc.min_bytes_per_char();
+            }
+            _ => {
+                return Err(pos);
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::Partial,
+        next_pos: pos,
+    })
+}
+
+/// Check PI target name to identify XML declarations
+fn check_pi_target<E: Encoding>(enc: &E, data: &[u8], pos: usize, end: usize) -> (bool, XmlTok) {
+    let mut upper = false;
+    let minbpc = enc.min_bytes_per_char();
+
+    if end - pos != minbpc * 3 {
+        return (true, XmlTok::Pi);
+    }
+
+    match enc.byte_to_ascii(data, pos) {
+        ASCII_X => {}
+        b'X' => {
+            upper = true;
+        }
+        _ => {
+            return (true, XmlTok::Pi);
+        }
+    }
+
+    let pos = pos + minbpc;
+    match enc.byte_to_ascii(data, pos) {
+        ASCII_M => {}
+        b'M' => {
+            upper = true;
+        }
+        _ => {
+            return (true, XmlTok::Pi);
+        }
+    }
+
+    let pos = pos + minbpc;
+    match enc.byte_to_ascii(data, pos) {
+        ASCII_L => {}
+        b'L' => {
+            upper = true;
+        }
+        _ => {
+            return (true, XmlTok::Pi);
+        }
+    }
+
+    if upper {
+        (true, XmlTok::Pi)
+    } else {
+        (true, XmlTok::XmlDecl)
+    }
+}
+
+/// Check if byte type is valid for name continuation
+fn is_name_char(bt: ByteType) -> bool {
+    matches!(
+        bt,
+        ByteType::NMSTRT
+            | ByteType::HEX
+            | ByteType::DIGIT
+            | ByteType::NAME
+            | ByteType::MINUS
+    )
+}
+
+/// Check if byte type is valid for name start
+fn is_nmstrt_char(bt: ByteType) -> bool {
+    matches!(bt, ByteType::NMSTRT | ByteType::HEX)
+}
+
+/// Scan a PI starting after "<?"
+pub fn scan_pi<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    if !enc.has_char(data, pos, end) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    if !is_nmstrt_char(enc.byte_type(data, pos)) {
+        return Err(pos);
+    }
+
+    let target = pos;
+    pos += enc.min_bytes_per_char();
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::S | ByteType::CR | ByteType::LF => {
+                let (valid, tok) = check_pi_target(enc, data, target, pos);
+                if !valid {
+                    return Err(pos);
+                }
+                pos += enc.min_bytes_per_char();
+
+                while enc.has_char(data, pos, end) {
+                    match enc.byte_type(data, pos) {
+                        ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
+                            return Err(pos);
+                        }
+                        ByteType::QUEST => {
+                            pos += enc.min_bytes_per_char();
+                            if !enc.has_char(data, pos, end) {
+                                return Ok(TokenResult {
+                                    token: XmlTok::Partial,
+                                    next_pos: pos,
+                                });
+                            }
+                            if enc.char_matches(data, pos, ASCII_GT) {
+                                return Ok(TokenResult {
+                                    token: tok,
+                                    next_pos: pos + enc.min_bytes_per_char(),
+                                });
+                            }
+                        }
+                        _ => {
+                            pos += enc.min_bytes_per_char();
+                        }
+                    }
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            ByteType::QUEST => {
+                let (valid, tok) = check_pi_target(enc, data, target, pos);
+                if !valid {
+                    return Err(pos);
+                }
+                pos += enc.min_bytes_per_char();
+                if !enc.has_char(data, pos, end) {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                if enc.char_matches(data, pos, ASCII_GT) {
+                    return Ok(TokenResult {
+                        token: tok,
+                        next_pos: pos + enc.min_bytes_per_char(),
+                    });
+                }
+                return Err(pos);
+            }
+            _ if is_name_char(enc.byte_type(data, pos)) => {
+                pos += enc.min_bytes_per_char();
+            }
+            _ => {
+                return Err(pos);
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::Partial,
+        next_pos: pos,
+    })
+}
+
+/// Scan CDATA section start
+pub fn scan_cdata_section<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    const CDATA_LSQB: &[u8] = b"CDATA[";
+
+    if !enc.has_chars(data, pos, end, 6) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    for &expected in CDATA_LSQB {
+        if !enc.char_matches(data, pos, expected) {
+            return Err(pos);
+        }
+        pos += enc.min_bytes_per_char();
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::CdataSectOpen,
+        next_pos: pos,
+    })
+}
+
+/// Scan content within CDATA section
+pub fn cdata_section_tok<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    mut end: usize,
+) -> Result<TokenResult, usize> {
+    let minbpc = enc.min_bytes_per_char();
+
+    if pos >= end {
+        return Ok(TokenResult {
+            token: XmlTok::None,
+            next_pos: pos,
+        });
+    }
+
+    if minbpc > 1 {
+        let n = end - pos;
+        if n & (minbpc - 1) != 0 {
+            let n = n & !(minbpc - 1);
+            if n == 0 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            end = pos + n;
+        }
+    }
+
+    match enc.byte_type(data, pos) {
+        ByteType::RSQB => {
+            pos += minbpc;
+            if !enc.has_char(data, pos, end) {
+                return Ok(TokenResult {
+                    token: XmlTok::DataNewline,
+                    next_pos: pos,
+                });
+            }
+            if !enc.char_matches(data, pos, ASCII_RSQB) {
+                pos -= minbpc;
+            } else {
+                pos += minbpc;
+                if !enc.has_char(data, pos, end) {
+                    return Ok(TokenResult {
+                        token: XmlTok::DataNewline,
+                        next_pos: pos,
+                    });
+                }
+                if !enc.char_matches(data, pos, ASCII_GT) {
+                    pos -= minbpc;
+                } else {
+                    return Ok(TokenResult {
+                        token: XmlTok::CdataSectClose,
+                        next_pos: pos + minbpc,
+                    });
+                }
+            }
+        }
+        ByteType::CR => {
+            pos += minbpc;
+            if !enc.has_char(data, pos, end) {
+                return Ok(TokenResult {
+                    token: XmlTok::DataNewline,
+                    next_pos: pos,
+                });
+            }
+            if enc.byte_type(data, pos) == ByteType::LF {
+                pos += minbpc;
+            }
+            return Ok(TokenResult {
+                token: XmlTok::DataNewline,
+                next_pos: pos,
+            });
+        }
+        ByteType::LF => {
+            return Ok(TokenResult {
+                token: XmlTok::DataNewline,
+                next_pos: pos + minbpc,
+            });
+        }
+        ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
+            return Err(pos);
+        }
+        _ => {
+            pos += minbpc;
+        }
+    }
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4 => {
+                let n = match enc.byte_type(data, pos) {
+                    ByteType::LEAD2 => 2,
+                    ByteType::LEAD3 => 3,
+                    ByteType::LEAD4 => 4,
+                    _ => unreachable!(),
+                };
+                if end - pos < n {
+                    return Ok(TokenResult {
+                        token: XmlTok::DataChars,
+                        next_pos: pos,
+                    });
+                }
+                pos += n;
+            }
+            ByteType::NONXML
+            | ByteType::MALFORM
+            | ByteType::TRAIL
+            | ByteType::CR
+            | ByteType::LF
+            | ByteType::RSQB => {
+                return Ok(TokenResult {
+                    token: XmlTok::DataChars,
+                    next_pos: pos,
+                });
+            }
+            _ => {
+                pos += minbpc;
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::DataChars,
+        next_pos: pos,
+    })
+}
+
+/// Scan an end tag starting after "</"
+pub fn scan_end_tag<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    if !enc.has_char(data, pos, end) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    if !is_nmstrt_char(enc.byte_type(data, pos)) {
+        return Err(pos);
+    }
+
+    pos += enc.min_bytes_per_char();
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::S | ByteType::CR | ByteType::LF => {
+                pos += enc.min_bytes_per_char();
+                while enc.has_char(data, pos, end) {
+                    match enc.byte_type(data, pos) {
+                        ByteType::S | ByteType::CR | ByteType::LF => {
+                            pos += enc.min_bytes_per_char();
+                        }
+                        ByteType::GT => {
+                            return Ok(TokenResult {
+                                token: XmlTok::EndTag,
+                                next_pos: pos + enc.min_bytes_per_char(),
+                            });
+                        }
+                        _ => {
+                            return Err(pos);
+                        }
+                    }
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            ByteType::GT => {
+                return Ok(TokenResult {
+                    token: XmlTok::EndTag,
+                    next_pos: pos + enc.min_bytes_per_char(),
+                });
+            }
+            _ if is_name_char(enc.byte_type(data, pos)) => {
+                pos += enc.min_bytes_per_char();
+            }
+            _ => {
+                return Err(pos);
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::Partial,
+        next_pos: pos,
+    })
+}
+
+/// Scan hex character reference starting after "&#X"
+pub fn scan_hex_char_ref<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    if !enc.has_char(data, pos, end) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    match enc.byte_type(data, pos) {
+        ByteType::DIGIT | ByteType::HEX => {}
+        _ => {
+            return Err(pos);
+        }
+    }
+
+    pos += enc.min_bytes_per_char();
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::DIGIT | ByteType::HEX => {
+                pos += enc.min_bytes_per_char();
+            }
+            ByteType::SEMI => {
+                return Ok(TokenResult {
+                    token: XmlTok::CharRef,
+                    next_pos: pos + enc.min_bytes_per_char(),
+                });
+            }
+            _ => {
+                return Err(pos);
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::Partial,
+        next_pos: pos,
+    })
+}
+
+/// Scan character reference starting after "&#"
+pub fn scan_char_ref<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    if !enc.has_char(data, pos, end) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    if enc.char_matches(data, pos, ASCII_X) {
+        return scan_hex_char_ref(enc, data, pos + enc.min_bytes_per_char(), end);
+    }
+
+    match enc.byte_type(data, pos) {
+        ByteType::DIGIT => {}
+        _ => {
+            return Err(pos);
+        }
+    }
+
+    let mut pos = pos + enc.min_bytes_per_char();
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::DIGIT => {
+                pos += enc.min_bytes_per_char();
+            }
+            ByteType::SEMI => {
+                return Ok(TokenResult {
+                    token: XmlTok::CharRef,
+                    next_pos: pos + enc.min_bytes_per_char(),
+                });
+            }
+            _ => {
+                return Err(pos);
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::Partial,
+        next_pos: pos,
+    })
+}
+
+/// Scan entity reference starting after "&"
+pub fn scan_ref<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    if !enc.has_char(data, pos, end) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    match enc.byte_type(data, pos) {
+        ByteType::NUM => {
+            return scan_char_ref(enc, data, pos + enc.min_bytes_per_char(), end);
+        }
+        _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
+            pos += enc.min_bytes_per_char();
+        }
+        _ => {
+            return Err(pos);
+        }
+    }
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::SEMI => {
+                return Ok(TokenResult {
+                    token: XmlTok::EntityRef,
+                    next_pos: pos + enc.min_bytes_per_char(),
+                });
+            }
+            _ if is_name_char(enc.byte_type(data, pos)) => {
+                pos += enc.min_bytes_per_char();
+            }
+            _ => {
+                return Err(pos);
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::Partial,
+        next_pos: pos,
+    })
+}
+
+/// Scan attributes starting after first character of attribute name
+pub fn scan_atts<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::S | ByteType::CR | ByteType::LF => {
+                pos += enc.min_bytes_per_char();
+                loop {
+                    if !enc.has_char(data, pos, end) {
+                        return Ok(TokenResult {
+                            token: XmlTok::Partial,
+                            next_pos: pos,
+                        });
+                    }
+                    match enc.byte_type(data, pos) {
+                        ByteType::S | ByteType::CR | ByteType::LF => {
+                            pos += enc.min_bytes_per_char();
+                        }
+                        ByteType::EQUALS => {
+                            pos += enc.min_bytes_per_char();
+                            if !enc.has_char(data, pos, end) {
+                                return Ok(TokenResult {
+                                    token: XmlTok::Partial,
+                                    next_pos: pos,
+                                });
+                            }
+                            break;
+                        }
+                        _ => {
+                            return Err(pos);
+                        }
+                    }
+                }
+                // Now parse the value
+                loop {
+                    let open_type = enc.byte_type(data, pos);
+                    match open_type {
+                        ByteType::QUOT | ByteType::APOS => {
+                            break;
+                        }
+                        ByteType::S | ByteType::CR | ByteType::LF => {
+                            pos += enc.min_bytes_per_char();
+                            if !enc.has_char(data, pos, end) {
+                                return Ok(TokenResult {
+                                    token: XmlTok::Partial,
+                                    next_pos: pos,
+                                });
+                            }
+                        }
+                        _ => {
+                            return Err(pos);
+                        }
+                    }
+                }
+
+                pos += enc.min_bytes_per_char();
+
+                // Parse attribute value
+                loop {
+                    if !enc.has_char(data, pos, end) {
+                        return Ok(TokenResult {
+                            token: XmlTok::Partial,
+                            next_pos: pos,
+                        });
+                    }
+
+                    let t = enc.byte_type(data, pos);
+                    if t == enc.byte_type(data, pos - enc.min_bytes_per_char()) {
+                        pos += enc.min_bytes_per_char();
+                        if !enc.has_char(data, pos, end) {
+                            return Ok(TokenResult {
+                                token: XmlTok::Partial,
+                                next_pos: pos,
+                            });
+                        }
+                        match enc.byte_type(data, pos) {
+                            ByteType::S | ByteType::CR | ByteType::LF | ByteType::SOL | ByteType::GT => {
+                                break;
+                            }
+                            _ => {
+                                return Err(pos);
+                            }
+                        }
+                    }
+
+                    match t {
+                        ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
+                            return Err(pos);
+                        }
+                        ByteType::AMP => {
+                            let result = scan_ref(enc, data, pos + enc.min_bytes_per_char(), end)?;
+                            pos = result.next_pos;
+                        }
+                        ByteType::LT => {
+                            return Err(pos);
+                        }
+                        _ => {
+                            pos += enc.min_bytes_per_char();
+                        }
+                    }
+                }
+
+                match enc.byte_type(data, pos) {
+                    ByteType::SOL => {
+                        pos += enc.min_bytes_per_char();
+                        if !enc.has_char(data, pos, end) {
+                            return Ok(TokenResult {
+                                token: XmlTok::Partial,
+                                next_pos: pos,
+                            });
+                        }
+                        if !enc.char_matches(data, pos, ASCII_GT) {
+                            return Err(pos);
+                        }
+                        return Ok(TokenResult {
+                            token: XmlTok::EmptyElementWithAtts,
+                            next_pos: pos + enc.min_bytes_per_char(),
+                        });
+                    }
+                    ByteType::GT => {
+                        return Ok(TokenResult {
+                            token: XmlTok::StartTagWithAtts,
+                            next_pos: pos + enc.min_bytes_per_char(),
+                        });
+                    }
+                    _ => {
+                        return Err(pos);
+                    }
+                }
+            }
+            ByteType::GT => {
+                return Ok(TokenResult {
+                    token: XmlTok::StartTagWithAtts,
+                    next_pos: pos + enc.min_bytes_per_char(),
+                });
+            }
+            ByteType::SOL => {
+                pos += enc.min_bytes_per_char();
+                if !enc.has_char(data, pos, end) {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                if !enc.char_matches(data, pos, ASCII_GT) {
+                    return Err(pos);
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::EmptyElementWithAtts,
+                    next_pos: pos + enc.min_bytes_per_char(),
+                });
+            }
+            _ if is_name_char(enc.byte_type(data, pos)) => {
+                pos += enc.min_bytes_per_char();
+            }
+            _ => {
+                return Err(pos);
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::Partial,
+        next_pos: pos,
+    })
+}
+
+/// Scan a start tag starting after "<"
+pub fn scan_lt<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    if !enc.has_char(data, pos, end) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    match enc.byte_type(data, pos) {
+        ByteType::EXCL => {
+            pos += enc.min_bytes_per_char();
+            if !enc.has_char(data, pos, end) {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            match enc.byte_type(data, pos) {
+                ByteType::MINUS => {
+                    return scan_comment(enc, data, pos + enc.min_bytes_per_char(), end);
+                }
+                ByteType::LSQB => {
+                    return scan_cdata_section(enc, data, pos + enc.min_bytes_per_char(), end);
+                }
+                _ => {
+                    return Err(pos);
+                }
+            }
+        }
+        ByteType::QUEST => {
+            return scan_pi(enc, data, pos + enc.min_bytes_per_char(), end);
+        }
+        ByteType::SOL => {
+            return scan_end_tag(enc, data, pos + enc.min_bytes_per_char(), end);
+        }
+        _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
+            // Start tag - fall through
+        }
+        _ => {
+            return Err(pos);
+        }
+    }
+
+    // Parse start tag
+    pos += enc.min_bytes_per_char();
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::S | ByteType::CR | ByteType::LF => {
+                pos += enc.min_bytes_per_char();
+                while enc.has_char(data, pos, end) {
+                    match enc.byte_type(data, pos) {
+                        ByteType::S | ByteType::CR | ByteType::LF => {
+                            pos += enc.min_bytes_per_char();
+                        }
+                        ByteType::GT => {
+                            return Ok(TokenResult {
+                                token: XmlTok::StartTagNoAtts,
+                                next_pos: pos + enc.min_bytes_per_char(),
+                            });
+                        }
+                        ByteType::SOL => {
+                            pos += enc.min_bytes_per_char();
+                            if !enc.has_char(data, pos, end) {
+                                return Ok(TokenResult {
+                                    token: XmlTok::Partial,
+                                    next_pos: pos,
+                                });
+                            }
+                            if !enc.char_matches(data, pos, ASCII_GT) {
+                                return Err(pos);
+                            }
+                            return Ok(TokenResult {
+                                token: XmlTok::EmptyElementNoAtts,
+                                next_pos: pos + enc.min_bytes_per_char(),
+                            });
+                        }
+                        _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
+                            return scan_atts(enc, data, pos, end);
+                        }
+                        _ => {
+                            return Err(pos);
+                        }
+                    }
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            ByteType::GT => {
+                return Ok(TokenResult {
+                    token: XmlTok::StartTagNoAtts,
+                    next_pos: pos + enc.min_bytes_per_char(),
+                });
+            }
+            ByteType::SOL => {
+                pos += enc.min_bytes_per_char();
+                if !enc.has_char(data, pos, end) {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                if !enc.char_matches(data, pos, ASCII_GT) {
+                    return Err(pos);
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::EmptyElementNoAtts,
+                    next_pos: pos + enc.min_bytes_per_char(),
+                });
+            }
+            _ if is_name_char(enc.byte_type(data, pos)) => {
+                pos += enc.min_bytes_per_char();
+            }
+            _ => {
+                return Err(pos);
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::Partial,
+        next_pos: pos,
+    })
+}
+
+/// Scan content token
+pub fn content_tok<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    mut end: usize,
+) -> Result<TokenResult, usize> {
+    let minbpc = enc.min_bytes_per_char();
+
+    if pos >= end {
+        return Ok(TokenResult {
+            token: XmlTok::None,
+            next_pos: pos,
+        });
+    }
+
+    if minbpc > 1 {
+        let n = end - pos;
+        if n & (minbpc - 1) != 0 {
+            let n = n & !(minbpc - 1);
+            if n == 0 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            end = pos + n;
+        }
+    }
+
+    match enc.byte_type(data, pos) {
+        ByteType::LT => {
+            return scan_lt(enc, data, pos + minbpc, end);
+        }
+        ByteType::AMP => {
+            return scan_ref(enc, data, pos + minbpc, end);
+        }
+        ByteType::CR => {
+            pos += minbpc;
+            if !enc.has_char(data, pos, end) {
+                return Ok(TokenResult {
+                    token: XmlTok::TrailingCr,
+                    next_pos: pos,
+                });
+            }
+            if enc.byte_type(data, pos) == ByteType::LF {
+                pos += minbpc;
+            }
+            return Ok(TokenResult {
+                token: XmlTok::DataNewline,
+                next_pos: pos,
+            });
+        }
+        ByteType::LF => {
+            return Ok(TokenResult {
+                token: XmlTok::DataNewline,
+                next_pos: pos + minbpc,
+            });
+        }
+        ByteType::RSQB => {
+            pos += minbpc;
+            if !enc.has_char(data, pos, end) {
+                return Ok(TokenResult {
+                    token: XmlTok::TrailingRsqb,
+                    next_pos: pos,
+                });
+            }
+            if !enc.char_matches(data, pos, ASCII_RSQB) {
+                pos -= minbpc;
+            } else {
+                pos += minbpc;
+                if !enc.has_char(data, pos, end) {
+                    return Ok(TokenResult {
+                        token: XmlTok::TrailingRsqb,
+                        next_pos: pos,
+                    });
+                }
+                if !enc.char_matches(data, pos, ASCII_GT) {
+                    pos -= minbpc;
+                } else {
+                    return Ok(TokenResult {
+                        token: XmlTok::Invalid,
+                        next_pos: pos,
+                    });
+                }
+            }
+        }
+        ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
+            return Err(pos);
+        }
+        _ => {
+            pos += minbpc;
+        }
+    }
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4 => {
+                let n = match enc.byte_type(data, pos) {
+                    ByteType::LEAD2 => 2,
+                    ByteType::LEAD3 => 3,
+                    ByteType::LEAD4 => 4,
+                    _ => unreachable!(),
+                };
+                if end - pos < n {
+                    return Ok(TokenResult {
+                        token: XmlTok::DataChars,
+                        next_pos: pos,
+                    });
+                }
+                pos += n;
+            }
+            ByteType::RSQB => {
+                if enc.has_chars(data, pos, end, 2) {
+                    if !enc.char_matches(data, pos + minbpc, ASCII_RSQB) {
+                        pos += minbpc;
+                    } else if enc.has_chars(data, pos, end, 3) {
+                        if !enc.char_matches(data, pos + 2 * minbpc, ASCII_GT) {
+                            pos += minbpc;
+                        } else {
+                            return Ok(TokenResult {
+                                token: XmlTok::Invalid,
+                                next_pos: pos + 2 * minbpc,
+                            });
+                        }
+                    }
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::DataChars,
+                    next_pos: pos,
+                });
+            }
+            ByteType::AMP
+            | ByteType::LT
+            | ByteType::NONXML
+            | ByteType::MALFORM
+            | ByteType::TRAIL
+            | ByteType::CR
+            | ByteType::LF => {
+                return Ok(TokenResult {
+                    token: XmlTok::DataChars,
+                    next_pos: pos,
+                });
+            }
+            _ => {
+                pos += minbpc;
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::DataChars,
+        next_pos: pos,
+    })
+}
+
+/// Scan percent token
+pub fn scan_percent<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    if !enc.has_char(data, pos, end) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    match enc.byte_type(data, pos) {
+        ByteType::S | ByteType::LF | ByteType::CR | ByteType::PERCNT => {
+            return Ok(TokenResult {
+                token: XmlTok::Percent,
+                next_pos: pos,
+            });
+        }
+        _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
+            pos += enc.min_bytes_per_char();
+        }
+        _ => {
+            return Err(pos);
+        }
+    }
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::SEMI => {
+                return Ok(TokenResult {
+                    token: XmlTok::ParamEntityRef,
+                    next_pos: pos + enc.min_bytes_per_char(),
+                });
+            }
+            _ if is_name_char(enc.byte_type(data, pos)) => {
+                pos += enc.min_bytes_per_char();
+            }
+            _ => {
+                return Err(pos);
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::Partial,
+        next_pos: pos,
+    })
+}
+
+/// Scan #name token
+pub fn scan_pound_name<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    if !enc.has_char(data, pos, end) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    if !is_nmstrt_char(enc.byte_type(data, pos)) {
+        return Err(pos);
+    }
+
+    pos += enc.min_bytes_per_char();
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::CR
+            | ByteType::LF
+            | ByteType::S
+            | ByteType::RPAR
+            | ByteType::GT
+            | ByteType::PERCNT
+            | ByteType::VERBAR => {
+                return Ok(TokenResult {
+                    token: XmlTok::PoundName,
+                    next_pos: pos,
+                });
+            }
+            _ if is_name_char(enc.byte_type(data, pos)) => {
+                pos += enc.min_bytes_per_char();
+            }
+            _ => {
+                return Err(pos);
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::PoundName,
+        next_pos: pos,
+    })
+}
+
+/// Scan literal (quoted string)
+pub fn scan_lit<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+    open: ByteType,
+) -> Result<TokenResult, usize> {
+    while enc.has_char(data, pos, end) {
+        let t = enc.byte_type(data, pos);
+        match t {
+            ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
+                return Err(pos);
+            }
+            ByteType::QUOT | ByteType::APOS => {
+                pos += enc.min_bytes_per_char();
+                if t != open {
+                    continue;
+                }
+                if !enc.has_char(data, pos, end) {
+                    return Ok(TokenResult {
+                        token: XmlTok::Literal,
+                        next_pos: pos,
+                    });
+                }
+                match enc.byte_type(data, pos) {
+                    ByteType::S | ByteType::CR | ByteType::LF | ByteType::GT | ByteType::PERCNT | ByteType::LSQB => {
+                        return Ok(TokenResult {
+                            token: XmlTok::Literal,
+                            next_pos: pos,
+                        });
+                    }
+                    _ => {
+                        return Err(pos);
+                    }
+                }
+            }
+            _ => {
+                pos += enc.min_bytes_per_char();
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::Partial,
+        next_pos: pos,
+    })
+}
+
+/// Scan prolog token
+pub fn prolog_tok<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    mut end: usize,
+) -> Result<TokenResult, usize> {
+    let minbpc = enc.min_bytes_per_char();
+
+    if pos >= end {
+        return Ok(TokenResult {
+            token: XmlTok::None,
+            next_pos: pos,
+        });
+    }
+
+    if minbpc > 1 {
+        let n = end - pos;
+        if n & (minbpc - 1) != 0 {
+            let n = n & !(minbpc - 1);
+            if n == 0 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            end = pos + n;
+        }
+    }
+
+    match enc.byte_type(data, pos) {
+        ByteType::QUOT => {
+            return scan_lit(enc, data, pos + minbpc, end, ByteType::QUOT);
+        }
+        ByteType::APOS => {
+            return scan_lit(enc, data, pos + minbpc, end, ByteType::APOS);
+        }
+        ByteType::LT => {
+            pos += minbpc;
+            if !enc.has_char(data, pos, end) {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            match enc.byte_type(data, pos) {
+                ByteType::EXCL => {
+                    return scan_decl(enc, data, pos + minbpc, end);
+                }
+                ByteType::QUEST => {
+                    return scan_pi(enc, data, pos + minbpc, end);
+                }
+                ByteType::NMSTRT
+                | ByteType::HEX
+                | ByteType::LEAD2
+                | ByteType::LEAD3
+                | ByteType::LEAD4 => {
+                    return Ok(TokenResult {
+                        token: XmlTok::InstanceStart,
+                        next_pos: pos - minbpc,
+                    });
+                }
+                _ => {
+                    return Err(pos);
+                }
+            }
+        }
+        ByteType::CR => {
+            if pos + minbpc == end {
+                return Ok(TokenResult {
+                    token: XmlTok::PrologS,
+                    next_pos: end,
+                });
+            }
+            pos += minbpc;
+        }
+        ByteType::S | ByteType::LF => {
+            pos += minbpc;
+        }
+        ByteType::PERCNT => {
+            return scan_percent(enc, data, pos + minbpc, end);
+        }
+        ByteType::COMMA => {
+            return Ok(TokenResult {
+                token: XmlTok::Comma,
+                next_pos: pos + minbpc,
+            });
+        }
+        ByteType::LSQB => {
+            return Ok(TokenResult {
+                token: XmlTok::OpenBracket,
+                next_pos: pos + minbpc,
+            });
+        }
+        ByteType::RSQB => {
+            pos += minbpc;
+            if !enc.has_char(data, pos, end) {
+                return Ok(TokenResult {
+                    token: XmlTok::CloseBracket,
+                    next_pos: pos,
+                });
+            }
+            if enc.char_matches(data, pos, ASCII_RSQB) {
+                if enc.has_chars(data, pos, end, 2) && enc.char_matches(data, pos + minbpc, ASCII_GT) {
+                    return Ok(TokenResult {
+                        token: XmlTok::CondSectClose,
+                        next_pos: pos + 2 * minbpc,
+                    });
+                }
+            }
+            return Ok(TokenResult {
+                token: XmlTok::CloseBracket,
+                next_pos: pos,
+            });
+        }
+        ByteType::LPAR => {
+            return Ok(TokenResult {
+                token: XmlTok::OpenParen,
+                next_pos: pos + minbpc,
+            });
+        }
+        ByteType::RPAR => {
+            pos += minbpc;
+            if !enc.has_char(data, pos, end) {
+                return Ok(TokenResult {
+                    token: XmlTok::CloseParen,
+                    next_pos: pos,
+                });
+            }
+            match enc.byte_type(data, pos) {
+                ByteType::AST => {
+                    return Ok(TokenResult {
+                        token: XmlTok::CloseParenAsterisk,
+                        next_pos: pos + minbpc,
+                    });
+                }
+                ByteType::QUEST => {
+                    return Ok(TokenResult {
+                        token: XmlTok::CloseParenQuestion,
+                        next_pos: pos + minbpc,
+                    });
+                }
+                ByteType::PLUS => {
+                    return Ok(TokenResult {
+                        token: XmlTok::CloseParenPlus,
+                        next_pos: pos + minbpc,
+                    });
+                }
+                ByteType::CR | ByteType::LF | ByteType::S | ByteType::GT | ByteType::COMMA | ByteType::VERBAR | ByteType::RPAR => {
+                    return Ok(TokenResult {
+                        token: XmlTok::CloseParen,
+                        next_pos: pos,
+                    });
+                }
+                _ => {
+                    return Err(pos);
+                }
+            }
+        }
+        ByteType::VERBAR => {
+            return Ok(TokenResult {
+                token: XmlTok::Or,
+                next_pos: pos + minbpc,
+            });
+        }
+        ByteType::GT => {
+            return Ok(TokenResult {
+                token: XmlTok::DeclClose,
+                next_pos: pos + minbpc,
+            });
+        }
+        ByteType::NUM => {
+            return scan_pound_name(enc, data, pos + minbpc, end);
+        }
+        _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
+            pos += minbpc;
+        }
+        _ => {
+            return Err(pos);
+        }
+    }
+
+    // Skip whitespace/parse name
+    let start_pos = pos;
+    let mut is_name = matches!(enc.byte_type(data, start_pos - minbpc), ByteType::NMSTRT | ByteType::HEX);
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::GT
+            | ByteType::RPAR
+            | ByteType::COMMA
+            | ByteType::VERBAR
+            | ByteType::LSQB
+            | ByteType::PERCNT
+            | ByteType::S
+            | ByteType::CR
+            | ByteType::LF => {
+                return Ok(TokenResult {
+                    token: if is_name { XmlTok::Name } else { XmlTok::Nmtoken },
+                    next_pos: pos,
+                });
+            }
+            ByteType::PLUS => {
+                if !is_name {
+                    return Err(pos);
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::NamePlus,
+                    next_pos: pos + minbpc,
+                });
+            }
+            ByteType::AST => {
+                if !is_name {
+                    return Err(pos);
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::NameAsterisk,
+                    next_pos: pos + minbpc,
+                });
+            }
+            ByteType::QUEST => {
+                if !is_name {
+                    return Err(pos);
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::NameQuestion,
+                    next_pos: pos + minbpc,
+                });
+            }
+            ByteType::DIGIT | ByteType::NAME | ByteType::MINUS => {
+                is_name = false;
+                pos += minbpc;
+            }
+            _ => {
+                return Err(pos);
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: if is_name { XmlTok::Name } else { XmlTok::Nmtoken },
+        next_pos: pos,
+    })
+}
+
+/// Scan attribute value token
+pub fn attribute_value_tok<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    if pos >= end {
+        return Ok(TokenResult {
+            token: XmlTok::None,
+            next_pos: pos,
+        });
+    }
+
+    if !enc.has_char(data, pos, end) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    let start = pos;
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4 => {
+                let n = match enc.byte_type(data, pos) {
+                    ByteType::LEAD2 => 2,
+                    ByteType::LEAD3 => 3,
+                    ByteType::LEAD4 => 4,
+                    _ => unreachable!(),
+                };
+                pos += n;
+            }
+            ByteType::AMP => {
+                if pos == start {
+                    return scan_ref(enc, data, pos + enc.min_bytes_per_char(), end);
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::DataChars,
+                    next_pos: pos,
+                });
+            }
+            ByteType::LT => {
+                return Err(pos);
+            }
+            ByteType::LF => {
+                if pos == start {
+                    return Ok(TokenResult {
+                        token: XmlTok::DataNewline,
+                        next_pos: pos + enc.min_bytes_per_char(),
+                    });
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::DataChars,
+                    next_pos: pos,
+                });
+            }
+            ByteType::CR => {
+                if pos == start {
+                    pos += enc.min_bytes_per_char();
+                    if !enc.has_char(data, pos, end) {
+                        return Ok(TokenResult {
+                            token: XmlTok::TrailingCr,
+                            next_pos: pos,
+                        });
+                    }
+                    if enc.byte_type(data, pos) == ByteType::LF {
+                        pos += enc.min_bytes_per_char();
+                    }
+                    return Ok(TokenResult {
+                        token: XmlTok::DataNewline,
+                        next_pos: pos,
+                    });
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::DataChars,
+                    next_pos: pos,
+                });
+            }
+            ByteType::S => {
+                if pos == start {
+                    return Ok(TokenResult {
+                        token: XmlTok::AttributeValueS,
+                        next_pos: pos + enc.min_bytes_per_char(),
+                    });
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::DataChars,
+                    next_pos: pos,
+                });
+            }
+            _ => {
+                pos += enc.min_bytes_per_char();
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::DataChars,
+        next_pos: pos,
+    })
+}
+
+/// Scan entity value token
+pub fn entity_value_tok<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<TokenResult, usize> {
+    if pos >= end {
+        return Ok(TokenResult {
+            token: XmlTok::None,
+            next_pos: pos,
+        });
+    }
+
+    if !enc.has_char(data, pos, end) {
+        return Ok(TokenResult {
+            token: XmlTok::Partial,
+            next_pos: pos,
+        });
+    }
+
+    let start = pos;
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4 => {
+                let n = match enc.byte_type(data, pos) {
+                    ByteType::LEAD2 => 2,
+                    ByteType::LEAD3 => 3,
+                    ByteType::LEAD4 => 4,
+                    _ => unreachable!(),
+                };
+                pos += n;
+            }
+            ByteType::AMP => {
+                if pos == start {
+                    return scan_ref(enc, data, pos + enc.min_bytes_per_char(), end);
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::DataChars,
+                    next_pos: pos,
+                });
+            }
+            ByteType::PERCNT => {
+                if pos == start {
+                    let result = scan_percent(enc, data, pos + enc.min_bytes_per_char(), end)?;
+                    if result.token == XmlTok::Percent {
+                        return Err(pos);
+                    }
+                    return Ok(result);
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::DataChars,
+                    next_pos: pos,
+                });
+            }
+            ByteType::LF => {
+                if pos == start {
+                    return Ok(TokenResult {
+                        token: XmlTok::DataNewline,
+                        next_pos: pos + enc.min_bytes_per_char(),
+                    });
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::DataChars,
+                    next_pos: pos,
+                });
+            }
+            ByteType::CR => {
+                if pos == start {
+                    pos += enc.min_bytes_per_char();
+                    if !enc.has_char(data, pos, end) {
+                        return Ok(TokenResult {
+                            token: XmlTok::TrailingCr,
+                            next_pos: pos,
+                        });
+                    }
+                    if enc.byte_type(data, pos) == ByteType::LF {
+                        pos += enc.min_bytes_per_char();
+                    }
+                    return Ok(TokenResult {
+                        token: XmlTok::DataNewline,
+                        next_pos: pos,
+                    });
+                }
+                return Ok(TokenResult {
+                    token: XmlTok::DataChars,
+                    next_pos: pos,
+                });
+            }
+            _ => {
+                pos += enc.min_bytes_per_char();
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::DataChars,
+        next_pos: pos,
+    })
+}
+
+/// Scan ignore section token (DTD only)
+pub fn ignore_section_tok<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    mut end: usize,
+) -> Result<TokenResult, usize> {
+    let minbpc = enc.min_bytes_per_char();
+
+    if minbpc > 1 {
+        let n = end - pos;
+        if n & (minbpc - 1) != 0 {
+            let n = n & !(minbpc - 1);
+            end = pos + n;
+        }
+    }
+
+    let mut level = 0;
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
+                return Err(pos);
+            }
+            ByteType::LT => {
+                pos += minbpc;
+                if !enc.has_char(data, pos, end) {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                if enc.char_matches(data, pos, ASCII_EXCL) {
+                    pos += minbpc;
+                    if !enc.has_char(data, pos, end) {
+                        return Ok(TokenResult {
+                            token: XmlTok::Partial,
+                            next_pos: pos,
+                        });
+                    }
+                    if enc.char_matches(data, pos, ASCII_LSQB) {
+                        level += 1;
+                        pos += minbpc;
+                    }
+                }
+            }
+            ByteType::RSQB => {
+                pos += minbpc;
+                if !enc.has_char(data, pos, end) {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                if enc.char_matches(data, pos, ASCII_RSQB) {
+                    pos += minbpc;
+                    if !enc.has_char(data, pos, end) {
+                        return Ok(TokenResult {
+                            token: XmlTok::Partial,
+                            next_pos: pos,
+                        });
+                    }
+                    if enc.char_matches(data, pos, ASCII_GT) {
+                        pos += minbpc;
+                        if level == 0 {
+                            return Ok(TokenResult {
+                                token: XmlTok::IgnoreSect,
+                                next_pos: pos,
+                            });
+                        }
+                        level -= 1;
+                    }
+                }
+            }
+            _ => {
+                pos += minbpc;
+            }
+        }
+    }
+
+    Ok(TokenResult {
+        token: XmlTok::Partial,
+        next_pos: pos,
+    })
+}
+
+/// Check if a character is valid in a public ID
+pub fn is_public_id<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut ptr: usize,
+    mut end: usize,
+) -> (bool, usize) {
+    let minbpc = enc.min_bytes_per_char();
+    ptr += minbpc;
+    end -= minbpc;
+
+    while enc.has_char(data, ptr, end) {
+        match enc.byte_type(data, ptr) {
+            ByteType::DIGIT
+            | ByteType::HEX
+            | ByteType::MINUS
+            | ByteType::APOS
+            | ByteType::LPAR
+            | ByteType::RPAR
+            | ByteType::PLUS
+            | ByteType::COMMA
+            | ByteType::SOL
+            | ByteType::EQUALS
+            | ByteType::QUEST
+            | ByteType::CR
+            | ByteType::LF
+            | ByteType::SEMI
+            | ByteType::EXCL
+            | ByteType::AST
+            | ByteType::PERCNT
+            | ByteType::NUM => {
+                ptr += minbpc;
+            }
+            ByteType::S => {
+                if enc.char_matches(data, ptr, ASCII_TAB) {
+                    return (false, ptr);
+                }
+                ptr += minbpc;
+            }
+            ByteType::NAME | ByteType::NMSTRT => {
+                if (enc.byte_to_ascii(data, ptr) & 0x80) == 0 {
+                    ptr += minbpc;
+                } else {
+                    return (false, ptr);
+                }
+            }
+            _ => {
+                let c = enc.byte_to_ascii(data, ptr);
+                match c {
+                    0x24 | 0x40 => {
+                        ptr += minbpc;
+                    }
+                    _ => {
+                        return (false, ptr);
+                    }
+                }
+            }
+        }
+    }
+
+    (true, ptr)
+}
+
+/// Get character reference number
+pub fn char_ref_number<E: Encoding>(enc: &E, data: &[u8], mut pos: usize) -> i32 {
+    let mut result: i32 = 0;
+    let minbpc = enc.min_bytes_per_char();
+
+    pos += 2 * minbpc; // skip &#
+
+    if enc.char_matches(data, pos, ASCII_X) {
+        pos += minbpc;
+        while !enc.char_matches(data, pos, ASCII_SEMI) {
+            let c = enc.byte_to_ascii(data, pos);
+            result <<= 4;
+            match c {
+                b'0'..=b'9' => {
+                    result |= (c - b'0') as i32;
+                }
+                b'A'..=b'F' => {
+                    result += 10 + (c - b'A') as i32;
+                }
+                b'a'..=b'f' => {
+                    result += 10 + (c - b'a') as i32;
+                }
+                _ => {}
+            }
+            if result >= 0x110000 {
+                return -1;
+            }
+            pos += minbpc;
+        }
+    } else {
+        while !enc.char_matches(data, pos, ASCII_SEMI) {
+            let c = enc.byte_to_ascii(data, pos);
+            result *= 10;
+            result += (c - b'0') as i32;
+            if result >= 0x110000 {
+                return -1;
+            }
+            pos += minbpc;
+        }
+    }
+
+    check_char_ref_number(result)
+}
+
+/// Validate character reference number
+fn check_char_ref_number(num: i32) -> i32 {
+    if num < 0 || num > 0x10FFFF {
+        return -1;
+    }
+    if (num & 0xFFFE) == 0xFFFE {
+        return -1;
+    }
+    if (num >= 0xD800 && num < 0xE000) || (num >= 0xFDD0 && num < 0xFDF0) {
+        return -1;
+    }
+    num
+}
+
+/// Get predefined entity name
+pub fn predefined_entity_name<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    ptr: usize,
+    end: usize,
+) -> u8 {
+    let minbpc = enc.min_bytes_per_char();
+    let len = (end - ptr) / minbpc;
+
+    match len {
+        2 => {
+            if enc.char_matches(data, ptr + minbpc, b't') {
+                match enc.byte_to_ascii(data, ptr) {
+                    b'l' => ASCII_LT,
+                    b'g' => ASCII_GT,
+                    _ => 0,
+                }
+            } else {
+                0
+            }
+        }
+        3 => {
+            if enc.char_matches(data, ptr, b'a') {
+                if enc.char_matches(data, ptr + minbpc, b'm')
+                    && enc.char_matches(data, ptr + 2 * minbpc, b'p')
+                {
+                    return ASCII_AMP;
+                }
+            }
+            0
+        }
+        4 => match enc.byte_to_ascii(data, ptr) {
+            b'q' if enc.char_matches(data, ptr + minbpc, b'u')
+                && enc.char_matches(data, ptr + 2 * minbpc, b'o')
+                && enc.char_matches(data, ptr + 3 * minbpc, b't') =>
+            {
+                ASCII_QUOT
+            }
+            b'a' if enc.char_matches(data, ptr + minbpc, b'p')
+                && enc.char_matches(data, ptr + 2 * minbpc, b'o')
+                && enc.char_matches(data, ptr + 3 * minbpc, b's') =>
+            {
+                ASCII_APOS
+            }
+            _ => 0,
+        },
+        _ => 0,
+    }
+}
+
+/// Check if name matches ASCII string
+pub fn name_matches_ascii<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut ptr1: usize,
+    end1: usize,
+    ptr2: &[u8],
+) -> bool {
+    let minbpc = enc.min_bytes_per_char();
+
+    for &c in ptr2 {
+        if end1 - ptr1 < minbpc {
+            return false;
+        }
+        if !enc.char_matches(data, ptr1, c) {
+            return false;
+        }
+        ptr1 += minbpc;
+    }
+
+    ptr1 == end1
+}
+
+/// Get length of a name
+pub fn name_length<E: Encoding>(enc: &E, data: &[u8], mut ptr: usize) -> usize {
+    let start = ptr;
+    let minbpc = enc.min_bytes_per_char();
+
+    loop {
+        match enc.byte_type(data, ptr) {
+            ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4 => {
+                let n = match enc.byte_type(data, ptr) {
+                    ByteType::LEAD2 => 2,
+                    ByteType::LEAD3 => 3,
+                    ByteType::LEAD4 => 4,
+                    _ => unreachable!(),
+                };
+                ptr += n;
+            }
+            ByteType::NMSTRT
+            | ByteType::HEX
+            | ByteType::DIGIT
+            | ByteType::NAME
+            | ByteType::MINUS => {
+                ptr += minbpc;
+            }
+            _ => {
+                return ptr - start;
+            }
+        }
+    }
+}
+
+/// Skip whitespace
+pub fn skip_s<E: Encoding>(enc: &E, data: &[u8], mut ptr: usize) -> usize {
+    let minbpc = enc.min_bytes_per_char();
+
+    loop {
+        match enc.byte_type(data, ptr) {
+            ByteType::LF | ByteType::CR | ByteType::S => {
+                ptr += minbpc;
+            }
+            _ => {
+                return ptr;
+            }
+        }
+    }
+}
+
+/// Attribute information (for internal parsing)
+pub struct Attribute {
+    pub name: usize,
+    pub name_end: usize,
+    pub value_ptr: usize,
+    pub value_end: usize,
+    pub normalized: bool,
+}
+
+/// Position information
+pub struct Position {
+    pub line_number: usize,
+    pub column_number: usize,
+}
+
+/// Get attributes from a tag
+/// NOTE: This is a stub - full attribute parsing requires state management
+pub fn get_atts<E: Encoding>(
+    _enc: &E,
+    _data: &[u8],
+    _pos: usize,
+    _atts_max: usize,
+) -> (usize, Vec<Attribute>) {
+    // This function requires more complex state tracking and is primarily
+    // used internally by the C parser. A full implementation would parse
+    // attribute names and values while tracking normalized state.
+    (0, Vec::new())
+}
+
+/// Update position tracking based on character data
+pub fn update_position<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Position {
+    let minbpc = enc.min_bytes_per_char();
+    let mut line_number = 0;
+    let mut column_number = 0;
+
+    while enc.has_char(data, pos, end) {
+        match enc.byte_type(data, pos) {
+            ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4 => {
+                let n = match enc.byte_type(data, pos) {
+                    ByteType::LEAD2 => 2,
+                    ByteType::LEAD3 => 3,
+                    ByteType::LEAD4 => 4,
+                    _ => unreachable!(),
+                };
+                pos += n;
+                column_number += 1;
+            }
+            ByteType::LF => {
+                column_number = 0;
+                line_number += 1;
+                pos += minbpc;
+            }
+            ByteType::CR => {
+                line_number += 1;
+                pos += minbpc;
+                if enc.has_char(data, pos, end) && enc.byte_type(data, pos) == ByteType::LF {
+                    pos += minbpc;
+                }
+                column_number = 0;
+            }
+            _ => {
+                pos += minbpc;
+                column_number += 1;
+            }
+        }
+    }
+
+    Position {
+        line_number,
+        column_number,
+    }
+}
+
+// ASCII constants (additional ones used in functions)
+const ASCII_LT: u8 = 0x3C;
+const ASCII_AMP: u8 = 0x26;
