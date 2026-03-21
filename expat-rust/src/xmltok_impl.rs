@@ -2764,3 +2764,65 @@ fn test_prolog_tok_instance_start() {
         }
     }
 }
+
+#[test]
+fn test_trace_doc_slash() {
+    use crate::xmltok::Utf8Encoding;
+    let enc = Utf8Encoding;
+    let data = b"<doc/>";
+    
+    // Step 1: prolog_tok should return InstanceStart at pos 0
+    let r1 = prolog_tok(&enc, data, 0, data.len());
+    let (tok1, next1) = match r1 {
+        Ok(TokenResult { token, next_pos }) => (token, next_pos),
+        Err(p) => panic!("prolog_tok error at {}", p),
+    };
+    eprintln!("prolog_tok: {:?} next={}", tok1, next1);
+    assert_eq!(tok1, XmlTok::InstanceStart);
+    assert_eq!(next1, 0); // points to '<'
+    
+    // Step 2: content_tok from pos 0 should return EmptyElementNoAtts
+    let r2 = content_tok(&enc, data, 0, data.len());
+    let (tok2, next2) = match r2 {
+        Ok(TokenResult { token, next_pos }) => (token, next_pos),
+        Err(p) => panic!("content_tok error at {}", p),
+    };
+    eprintln!("content_tok: {:?} next={}", tok2, next2);
+    assert_eq!(tok2, XmlTok::EmptyElementNoAtts);
+    assert_eq!(next2, 6); // past '>'
+    
+    // Step 3: content_tok from pos 6 should return None
+    let r3 = content_tok(&enc, data, 6, data.len());
+    let (tok3, _next3) = match r3 {
+        Ok(TokenResult { token, next_pos }) => (token, next_pos),
+        Err(p) => panic!("content_tok error at {}", p),
+    };
+    eprintln!("content_tok #2: {:?}", tok3);
+    assert_eq!(tok3, XmlTok::None);
+}
+
+#[test]
+fn test_trace_doc_with_content() {
+    use crate::xmltok::Utf8Encoding;
+    let enc = Utf8Encoding;
+    let data = b"<doc>hello</doc>";
+    
+    let r1 = prolog_tok(&enc, data, 0, data.len());
+    let (tok1, next1) = match r1 {
+        Ok(TokenResult { token, next_pos }) => (token, next_pos),
+        Err(p) => panic!("prolog_tok error at {}", p),
+    };
+    eprintln!("1. prolog_tok: {:?} next={}", tok1, next1);
+    
+    let mut pos = next1;
+    for i in 0..10 {
+        let r = content_tok(&enc, data, pos, data.len());
+        let (tok, next) = match r {
+            Ok(TokenResult { token, next_pos }) => (token, next_pos),
+            Err(p) => panic!("content_tok error at {}", p),
+        };
+        eprintln!("{}. content_tok({}): {:?} next={}", i+2, pos, tok, next);
+        if tok == XmlTok::None { break; }
+        pos = next;
+    }
+}

@@ -422,10 +422,28 @@ impl Parser {
     }
 
     /// Content processor — corresponds to C contentProcessor()
-    /// Currently delegates to scan_buffer which handles both prolog and content.
-    /// TODO: Replace with do_content using tokenizer once tokenizer path is validated.
+    /// Uses do_content with the tokenizer for content parsing.
     fn content_processor(&mut self) {
-        let _ = self.scan_buffer();
+        let data = std::mem::take(&mut self.buffer);
+        if data.is_empty() {
+            if self.is_final && !self.seen_root {
+                self.error_code = XmlError::NoElements;
+            }
+            return;
+        }
+        let have_more = !self.is_final;
+        let enc = xmltok::Utf8Encoding;
+
+        let (error, next_pos) = self.do_content(0, &enc, &data, 0, data.len(), have_more);
+
+        if error != XmlError::None {
+            self.error_code = error;
+        }
+
+        // Keep unprocessed data for next parse call
+        if next_pos < data.len() && error == XmlError::None {
+            self.buffer = data[next_pos..].to_vec();
+        }
     }
 
     /// Epilog processor — corresponds to C epilogProcessor()
