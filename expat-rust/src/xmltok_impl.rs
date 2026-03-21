@@ -488,21 +488,22 @@ pub fn cdata_section_tok<E: Encoding>(
             pos += minbpc;
             if !enc.has_char(data, pos, end) {
                 return Ok(TokenResult {
-                    token: XmlTok::DataNewline,
+                    token: XmlTok::TrailingRsqb,
                     next_pos: pos,
                 });
             }
             if !enc.char_matches(data, pos, ASCII_RSQB) {
-                pos -= minbpc;
+                // Single ] — keep pos past it and fall through to continuation loop
             } else {
                 pos += minbpc;
                 if !enc.has_char(data, pos, end) {
                     return Ok(TokenResult {
-                        token: XmlTok::DataNewline,
+                        token: XmlTok::TrailingRsqb,
                         next_pos: pos,
                     });
                 }
                 if !enc.char_matches(data, pos, ASCII_GT) {
+                    // ]] but no > — back up to second ], fall through
                     pos -= minbpc;
                 } else {
                     return Ok(TokenResult {
@@ -533,6 +534,18 @@ pub fn cdata_section_tok<E: Encoding>(
                 token: XmlTok::DataNewline,
                 next_pos: pos + minbpc,
             });
+        }
+        ByteType::LEAD2 => {
+            if end - pos < 2 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+            pos += 2;
+        }
+        ByteType::LEAD3 => {
+            if end - pos < 3 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+            pos += 3;
+        }
+        ByteType::LEAD4 => {
+            if end - pos < 4 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+            pos += 4;
         }
         ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
             return Err(pos);
@@ -1706,9 +1719,27 @@ pub fn prolog_tok<E: Encoding>(
                     next_pos: pos + minbpc,
                 });
             }
+            ByteType::NMSTRT | ByteType::HEX => {
+                pos += minbpc;
+            }
             ByteType::DIGIT | ByteType::NAME | ByteType::MINUS => {
                 is_name = false;
                 pos += minbpc;
+            }
+            ByteType::COLON => {
+                pos += minbpc;
+            }
+            ByteType::LEAD2 => {
+                if end - pos < 2 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+                pos += 2;
+            }
+            ByteType::LEAD3 => {
+                if end - pos < 3 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+                pos += 3;
+            }
+            ByteType::LEAD4 => {
+                if end - pos < 4 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+                pos += 4;
             }
             _ => {
                 return Err(pos);
