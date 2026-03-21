@@ -212,7 +212,7 @@ fn test_nsalloc_prefixed_element() {
 // Test namespace allocation with setContext zombie
 #[test]
 #[ignore] // Requires custom allocator infrastructure
-fn test_nsalloc_set_context_zombie() {
+fn test_nsalloc_setContext_zombie() {
     // This test requires duff_allocator and memory tracking infrastructure
     // which are C-specific and not yet ported to Rust
 }

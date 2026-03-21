@@ -6,7 +6,7 @@ use expat_rust::xmlparse::*;
 // DTD validation required; marking as ignore
 #[test]
 #[ignore] // Requires XML_DTD feature
-fn test_batch3_150_reject_lt_in_attribute_value() {
+fn test_reject_lt_in_attribute_value() {
     // DTD parsing required
 }
 
@@ -14,13 +14,13 @@ fn test_batch3_150_reject_lt_in_attribute_value() {
 // DTD validation required; marking as ignore
 #[test]
 #[ignore] // Requires XML_DTD feature
-fn test_batch3_151_reject_unfinished_param_in_att_value() {
+fn test_reject_unfinished_param_in_att_value() {
     // DTD parsing required
 }
 
 // Test 152: test_trailing_cr_in_att_value
 #[test]
-fn test_batch3_152_trailing_cr_in_att_value() {
+fn test_trailing_cr_in_att_value() {
     let text = b"<doc a='value\r'/>";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
@@ -38,7 +38,7 @@ fn test_batch3_152_trailing_cr_in_att_value() {
 // Parameter entity parsing required; marking as ignore
 #[test]
 #[ignore] // Requires XML_DTD and parameter entity features
-fn test_batch3_153_standalone_internal_entity() {
+fn test_standalone_internal_entity() {
     // Parameter entity parsing required
 }
 
@@ -46,7 +46,7 @@ fn test_batch3_153_standalone_internal_entity() {
 // External entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires external entity reference handler
-fn test_batch3_154_skipped_external_entity() {
+fn test_skipped_external_entity() {
     // External entity handling required
 }
 
@@ -54,7 +54,7 @@ fn test_batch3_154_skipped_external_entity() {
 // External entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires external entity reference handler
-fn test_batch3_155_skipped_null_loaded_ext_entity() {
+fn test_skipped_null_loaded_ext_entity() {
     // External entity handling required
 }
 
@@ -62,7 +62,7 @@ fn test_batch3_155_skipped_null_loaded_ext_entity() {
 // External entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires external entity reference handler
-fn test_batch3_156_skipped_unloaded_ext_entity() {
+fn test_skipped_unloaded_ext_entity() {
     // External entity handling required
 }
 
@@ -70,7 +70,7 @@ fn test_batch3_156_skipped_unloaded_ext_entity() {
 // Parameter entity parsing required; marking as ignore
 #[test]
 #[ignore] // Requires XML_DTD and parameter entity features
-fn test_batch3_157_param_entity_with_trailing_cr() {
+fn test_param_entity_with_trailing_cr() {
     // Parameter entity parsing required
 }
 
@@ -78,7 +78,7 @@ fn test_batch3_157_param_entity_with_trailing_cr() {
 // DTD entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires XML_DTD feature
-fn test_batch3_158_invalid_character_entity() {
+fn test_invalid_character_entity() {
     // DTD entity handling required
 }
 
@@ -86,13 +86,13 @@ fn test_batch3_158_invalid_character_entity() {
 // DTD entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires XML_DTD feature
-fn test_batch3_159_invalid_character_entity_2() {
+fn test_invalid_character_entity_2() {
     // DTD entity handling required
 }
 
 // Test 160: test_invalid_character_entity_3
 #[test]
-fn test_batch3_160_invalid_character_entity_3() {
+fn test_invalid_character_entity_3() {
     // UTF-16 encoded DOCTYPE with invalid entity reference
     let text = b"\x00<\x00!\x00D\x00O\x00C\x00T\x00Y\x00P\x00E\x00 \x00d\x00o\x00c\x00 \x00[\x00\n\
                   \x00<\x00!\x00E\x00N\x00T\x00I\x00T\x00Y\x00 \x00e\x00n\x00t\x00i\x00t\x00y\x00 \
@@ -117,13 +117,13 @@ fn test_batch3_160_invalid_character_entity_3() {
 // DTD entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires XML_DTD feature
-fn test_batch3_161_invalid_character_entity_4() {
+fn test_invalid_character_entity_4() {
     // DTD entity handling required
 }
 
 // Test 162: test_pi_handled_in_default
 #[test]
-fn test_batch3_162_pi_handled_in_default() {
+fn test_pi_handled_in_default() {
     let text = b"<?test processing instruction?>\n<doc/>";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
@@ -149,7 +149,7 @@ fn test_batch3_162_pi_handled_in_default() {
 
 // Test 163: test_comment_handled_in_default
 #[test]
-fn test_batch3_163_comment_handled_in_default() {
+fn test_comment_handled_in_default() {
     let text = b"<!-- This is a comment -->\n<doc/>";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
@@ -175,7 +175,7 @@ fn test_batch3_163_comment_handled_in_default() {
 
 // Test 164: test_pi_yml
 #[test]
-fn test_batch3_164_pi_yml() {
+fn test_pi_yml() {
     let text = b"<?yml something like data?><doc/>";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
@@ -204,7 +204,7 @@ fn test_batch3_164_pi_yml() {
 
 // Test 165: test_pi_xnl
 #[test]
-fn test_batch3_165_pi_xnl() {
+fn test_pi_xnl() {
     let text = b"<?xnl nothing like data?><doc/>";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
@@ -233,7 +233,7 @@ fn test_batch3_165_pi_xnl() {
 
 // Test 166: test_pi_xmm
 #[test]
-fn test_batch3_166_pi_xmm() {
+fn test_pi_xmm() {
     let text = b"<?xmm everything like data?><doc/>";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
@@ -262,7 +262,7 @@ fn test_batch3_166_pi_xmm() {
 
 // Test 167: test_utf16_pi
 #[test]
-fn test_batch3_167_utf16_pi() {
+fn test_utf16_pi() {
     let text = b"<\x00?\x00\x04\x0e\x08\x0e?\x00>\x00<\x00q\x00/\x00>\x00";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
@@ -288,7 +288,7 @@ fn test_batch3_167_utf16_pi() {
 
 // Test 168: test_utf16_be_pi
 #[test]
-fn test_batch3_168_utf16_be_pi() {
+fn test_utf16_be_pi() {
     let text = b"\x00<\x00?\x0e\x04\x0e\x08\x00?\x00>\x00<\x00q\x00/\x00>";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
@@ -314,7 +314,7 @@ fn test_batch3_168_utf16_be_pi() {
 
 // Test 169: test_utf16_be_comment
 #[test]
-fn test_batch3_169_utf16_be_comment() {
+fn test_utf16_be_comment() {
     let text = b"\x00<\x00!\x00-\x00-\x00 \x00C\x00o\x00m\x00m\x00e\x00n\x00t\x00 \x00A\x00 \x00-\x00-\x00>\x00\n\x00<\x00d\x00o\x00c\x00/\x00>";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
@@ -340,7 +340,7 @@ fn test_batch3_169_utf16_be_comment() {
 
 // Test 170: test_utf16_le_comment
 #[test]
-fn test_batch3_170_utf16_le_comment() {
+fn test_utf16_le_comment() {
     let text = b"<\x00!\x00-\x00-\x00 \x00C\x00o\x00m\x00m\x00e\x00n\x00t\x00 \x00B\x00 \x00-\x00-\x00>\x00\n\x00<\x00d\x00o\x00c\x00/\x00>\x00";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
@@ -368,7 +368,7 @@ fn test_batch3_170_utf16_le_comment() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_171_missing_encoding_conversion_fn() {
+fn test_missing_encoding_conversion_fn() {
     // Unknown encoding handler required
 }
 
@@ -376,7 +376,7 @@ fn test_batch3_171_missing_encoding_conversion_fn() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_172_failing_encoding_conversion_fn() {
+fn test_failing_encoding_conversion_fn() {
     // Unknown encoding handler required
 }
 
@@ -384,7 +384,7 @@ fn test_batch3_172_failing_encoding_conversion_fn() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_173_unknown_encoding_success() {
+fn test_unknown_encoding_success() {
     // Unknown encoding handler required
 }
 
@@ -392,7 +392,7 @@ fn test_batch3_173_unknown_encoding_success() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_174_unknown_encoding_bad_name() {
+fn test_unknown_encoding_bad_name() {
     // Unknown encoding handler required
 }
 
@@ -400,7 +400,7 @@ fn test_batch3_174_unknown_encoding_bad_name() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_175_unknown_encoding_bad_name_2() {
+fn test_unknown_encoding_bad_name_2() {
     // Unknown encoding handler required
 }
 
@@ -408,7 +408,7 @@ fn test_batch3_175_unknown_encoding_bad_name_2() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_176_unknown_encoding_long_name_1() {
+fn test_unknown_encoding_long_name_1() {
     // Unknown encoding handler required
 }
 
@@ -416,7 +416,7 @@ fn test_batch3_176_unknown_encoding_long_name_1() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_177_unknown_encoding_long_name_2() {
+fn test_unknown_encoding_long_name_2() {
     // Unknown encoding handler required
 }
 
@@ -424,7 +424,7 @@ fn test_batch3_177_unknown_encoding_long_name_2() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_178_invalid_unknown_encoding() {
+fn test_invalid_unknown_encoding() {
     // Unknown encoding handler required
 }
 
@@ -432,7 +432,7 @@ fn test_batch3_178_invalid_unknown_encoding() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_179_unknown_ascii_encoding_ok() {
+fn test_unknown_ascii_encoding_ok() {
     // Unknown encoding handler required
 }
 
@@ -440,7 +440,7 @@ fn test_batch3_179_unknown_ascii_encoding_ok() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_180_unknown_ascii_encoding_fail() {
+fn test_unknown_ascii_encoding_fail() {
     // Unknown encoding handler required
 }
 
@@ -448,7 +448,7 @@ fn test_batch3_180_unknown_ascii_encoding_fail() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_181_unknown_encoding_invalid_length() {
+fn test_unknown_encoding_invalid_length() {
     // Unknown encoding handler required
 }
 
@@ -456,7 +456,7 @@ fn test_batch3_181_unknown_encoding_invalid_length() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_182_unknown_encoding_invalid_topbit() {
+fn test_unknown_encoding_invalid_topbit() {
     // Unknown encoding handler required
 }
 
@@ -464,7 +464,7 @@ fn test_batch3_182_unknown_encoding_invalid_topbit() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_183_unknown_encoding_invalid_surrogate() {
+fn test_unknown_encoding_invalid_surrogate() {
     // Unknown encoding handler required
 }
 
@@ -472,7 +472,7 @@ fn test_batch3_183_unknown_encoding_invalid_surrogate() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_184_unknown_encoding_invalid_high() {
+fn test_unknown_encoding_invalid_high() {
     // Unknown encoding handler required
 }
 
@@ -480,7 +480,7 @@ fn test_batch3_184_unknown_encoding_invalid_high() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_185_unknown_encoding_invalid_attr_value() {
+fn test_unknown_encoding_invalid_attr_value() {
     // Unknown encoding handler required
 }
 
@@ -488,7 +488,7 @@ fn test_batch3_185_unknown_encoding_invalid_attr_value() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_186_unknown_encoding_user_data_primary() {
+fn test_unknown_encoding_user_data_primary() {
     // Unknown encoding handler required
 }
 
@@ -496,7 +496,7 @@ fn test_batch3_186_unknown_encoding_user_data_primary() {
 // Unknown encoding handler required; marking as ignore
 #[test]
 #[ignore] // Requires unknown encoding handler
-fn test_batch3_187_unknown_encoding_user_data_secondary() {
+fn test_unknown_encoding_user_data_secondary() {
     // Unknown encoding handler required
 }
 
@@ -504,7 +504,7 @@ fn test_batch3_187_unknown_encoding_user_data_secondary() {
 // External entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires external entity reference handler
-fn test_batch3_188_ext_entity_latin1_utf16le_bom() {
+fn test_ext_entity_latin1_utf16le_bom() {
     // External entity handling required
 }
 
@@ -512,7 +512,7 @@ fn test_batch3_188_ext_entity_latin1_utf16le_bom() {
 // External entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires external entity reference handler
-fn test_batch3_189_ext_entity_latin1_utf16be_bom() {
+fn test_ext_entity_latin1_utf16be_bom() {
     // External entity handling required
 }
 
@@ -520,7 +520,7 @@ fn test_batch3_189_ext_entity_latin1_utf16be_bom() {
 // External entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires external entity reference handler
-fn test_batch3_190_ext_entity_latin1_utf16le_bom2() {
+fn test_ext_entity_latin1_utf16le_bom2() {
     // External entity handling required
 }
 
@@ -528,7 +528,7 @@ fn test_batch3_190_ext_entity_latin1_utf16le_bom2() {
 // External entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires external entity reference handler
-fn test_batch3_191_ext_entity_latin1_utf16be_bom2() {
+fn test_ext_entity_latin1_utf16be_bom2() {
     // External entity handling required
 }
 
@@ -536,7 +536,7 @@ fn test_batch3_191_ext_entity_latin1_utf16be_bom2() {
 // External entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires external entity reference handler
-fn test_batch3_192_ext_entity_utf16_be() {
+fn test_ext_entity_utf16_be() {
     // External entity handling required
 }
 
@@ -544,7 +544,7 @@ fn test_batch3_192_ext_entity_utf16_be() {
 // External entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires external entity reference handler
-fn test_batch3_193_ext_entity_utf16_le() {
+fn test_ext_entity_utf16_le() {
     // External entity handling required
 }
 
@@ -552,7 +552,7 @@ fn test_batch3_193_ext_entity_utf16_le() {
 // External entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires external entity reference handler
-fn test_batch3_194_ext_entity_utf16_unknown() {
+fn test_ext_entity_utf16_unknown() {
     // External entity handling required
 }
 
@@ -560,13 +560,13 @@ fn test_batch3_194_ext_entity_utf16_unknown() {
 // External entity handling required; marking as ignore
 #[test]
 #[ignore] // Requires external entity reference handler
-fn test_batch3_195_ext_entity_utf8_non_bom() {
+fn test_ext_entity_utf8_non_bom() {
     // External entity handling required
 }
 
 // Test 196: test_utf8_in_cdata_section
 #[test]
-fn test_batch3_196_utf8_in_cdata_section() {
+fn test_utf8_in_cdata_section() {
     let text = b"<doc><![CDATA[one \xc3\xa9 two]]></doc>";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
@@ -592,7 +592,7 @@ fn test_batch3_196_utf8_in_cdata_section() {
 
 // Test 197: test_utf8_in_cdata_section_2
 #[test]
-fn test_batch3_197_utf8_in_cdata_section_2() {
+fn test_utf8_in_cdata_section_2() {
     let text = b"<doc><![CDATA[\xc3\xa9]\xc3\xa9two]]></doc>";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
@@ -620,13 +620,13 @@ fn test_batch3_197_utf8_in_cdata_section_2() {
 // Complex UTF-8 validation test; marking as ignore
 #[test]
 #[ignore] // Requires complex UTF-8 validation logic
-fn test_batch3_198_utf8_in_start_tags() {
+fn test_utf8_in_start_tags() {
     // Complex UTF-8 validation test
 }
 
 // Test 199: test_trailing_spaces_in_elements
 #[test]
-fn test_batch3_199_trailing_spaces_in_elements() {
+fn test_trailing_spaces_in_elements() {
     let text = b"<doc   >Hi</doc >";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
