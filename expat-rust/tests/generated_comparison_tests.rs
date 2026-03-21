@@ -27,6 +27,36 @@ fn compare(xml: &[u8], desc: &str) {
         std::str::from_utf8(xml).unwrap_or("<binary>"));
 }
 
+/// Compare incremental parsing: split input at every byte position
+fn compare_incremental(xml: &[u8], desc: &str) {
+    // First compare single-call
+    compare(xml, desc);
+    // Then compare split at each byte boundary
+    for split in 1..xml.len() {
+        let mut r_parser = Parser::new(None).unwrap();
+        let r1 = r_parser.parse(&xml[..split], false);
+        let r_final = if r1 == expat_rust::xmlparse::XmlStatus::Ok {
+            r_parser.parse(&xml[split..], true)
+        } else {
+            r1
+        };
+        let r_err = r_parser.error_code();
+
+        let c_parser = CParser::new(None).unwrap();
+        let (c1, _) = c_parser.parse(&xml[..split], false);
+        let (c_final, c_err) = if c1 == 1 { // XML_STATUS_OK
+            c_parser.parse(&xml[split..], true)
+        } else {
+            (c1, c_parser.parse(&xml[split..], true).1)
+        };
+
+        let rs = r_final as u32;
+        let re = r_err as u32;
+        assert!(rs == c_final && re == c_err,
+            "INCREMENTAL MISMATCH {desc} split@{split}: Rust status={rs} err={re}, C status={c_final} err={c_err}");
+    }
+}
+
 fn compare_ns(xml: &[u8], desc: &str) {
     // NS tests use non-NS parser for now — still catches basic parse errors
     compare(xml, desc);
@@ -427,3 +457,51 @@ fn gen_utf8_in_name() {
     compare(b"<r\xc3\xa9/>", "UTF-8 in element name");
 }
 
+
+// ======================== Incremental parsing tests ========================
+// These split inputs at every byte boundary to test buffering logic
+
+#[test]
+fn incr_simple() { compare_incremental(b"<r/>", "incremental simple"); }
+
+#[test]
+fn incr_with_content() { compare_incremental(b"<r>hello</r>", "incremental with content"); }
+
+#[test]
+fn incr_with_attrs() { compare_incremental(b"<r a='1' b='2'/>", "incremental with attrs"); }
+
+#[test]
+fn incr_xmldecl() { compare_incremental(b"<?xml version='1.0'?><r/>", "incremental xmldecl"); }
+
+#[test]
+fn incr_doctype() { compare_incremental(b"<!DOCTYPE r><r/>", "incremental doctype"); }
+
+#[test]
+fn incr_cdata() { compare_incremental(b"<r><![CDATA[data]]></r>", "incremental cdata"); }
+
+#[test]
+fn incr_comment() { compare_incremental(b"<r><!-- comment --></r>", "incremental comment"); }
+
+#[test]
+fn incr_pi() { compare_incremental(b"<r><?target data?></r>", "incremental pi"); }
+
+#[test]
+fn incr_charref() { compare_incremental(b"<r>&#65;&#x42;</r>", "incremental charref"); }
+
+#[test]
+fn incr_entity() { compare_incremental(b"<r>&amp;&lt;&gt;</r>", "incremental entities"); }
+
+#[test]
+fn incr_nested() { compare_incremental(b"<a><b><c/></b></a>", "incremental nested"); }
+
+#[test]
+fn incr_epilog() { compare_incremental(b"<r/>\n<!-- done -->\n", "incremental epilog"); }
+
+#[test]
+fn incr_utf8() { compare_incremental(b"<r>\xc3\xa9</r>", "incremental utf8"); }
+
+#[test]
+fn incr_dtd_entity() { compare_incremental(b"<!DOCTYPE r [<!ENTITY e 'val'>]><r>&e;</r>", "incremental dtd entity"); }
+
+#[test]
+fn incr_empty_element() { compare_incremental(b"<r><a/><b/></r>", "incremental empty elements"); }

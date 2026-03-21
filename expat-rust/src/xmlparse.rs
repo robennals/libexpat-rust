@@ -148,6 +148,8 @@ pub enum Processor {
     Prolog,
     /// Processes element content
     Content,
+    /// Processes CDATA section content (resumed from interrupted CDATA)
+    CdataSection,
     /// Processes after root element closes
     Epilog,
 }
@@ -440,6 +442,7 @@ impl Parser {
             Processor::PrologInit => self.prolog_init_processor(),
             Processor::Prolog => self.prolog_processor(),
             Processor::Content => self.content_processor(),
+            Processor::CdataSection => self.cdata_section_processor(),
             Processor::Epilog => self.epilog_processor(),
         }
     }
@@ -845,6 +848,41 @@ impl Parser {
                 // Other roles — ignore for now
                 XmlError::None
             }
+        }
+    }
+
+    /// CDATA section processor — resumes interrupted CDATA section parsing
+    /// Corresponds to C cdataSectionProcessor()
+    fn cdata_section_processor(&mut self) {
+        let data = std::mem::take(&mut self.buffer);
+        if data.is_empty() {
+            if self.is_final {
+                self.error_code = XmlError::UnclosedCdataSection;
+            }
+            return;
+        }
+        let have_more = !self.is_final;
+        let enc = xmltok::Utf8Encoding;
+
+        let (error, next_pos) = self.do_cdata_section(&enc, &data, 0, data.len(), have_more);
+
+        if error != XmlError::None {
+            self.error_code = error;
+            return;
+        }
+
+        // CDATA section completed — switch back to content processor
+        self.processor = Processor::Content;
+
+        // Process remaining data as content
+        if next_pos < data.len() {
+            self.buffer = data[next_pos..].to_vec();
+            self.content_processor();
+        } else if have_more {
+            // All data consumed, more coming
+        } else if self.is_final {
+            // Final and no more data — check if we're properly closed
+            // (The content processor will handle this)
         }
     }
 
@@ -1289,10 +1327,20 @@ impl Parser {
                         handler();
                     }
                     // Scan CDATA content
+                    let saved_processor = self.processor;
+                    self.processor = Processor::CdataSection; // Mark as in-CDATA
                     let (cdata_err, cdata_next) = self.do_cdata_section(enc, data, next, end, have_more);
                     if cdata_err != XmlError::None {
+                        self.processor = saved_processor;
                         return (cdata_err, next);
                     }
+                    if self.processor == Processor::CdataSection {
+                        // CDATA section didn't close yet — stay in CDATA processor
+                        // so next parse call resumes in CDATA mode
+                        return (XmlError::None, cdata_next);
+                    }
+                    // CDATA section closed — processor was restored by do_cdata_section
+                    self.processor = saved_processor;
                     pos = cdata_next;
                     continue; // don't update pos from next
                 }
@@ -1373,6 +1421,8 @@ impl Parser {
                     if let Some(handler) = &mut self.end_cdata_section_handler {
                         handler();
                     }
+                    // Signal that CDATA section has closed
+                    self.processor = Processor::Content;
                     return (XmlError::None, next);
                 }
                 XmlTok::DataNewline => {
@@ -1409,6 +1459,16 @@ impl Parser {
                         return (XmlError::None, pos);
                     }
                     return (XmlError::UnclosedCdataSection, pos);
+                }
+                XmlTok::TrailingRsqb => {
+                    // Trailing ]] — need more data to determine if ]]>
+                    if have_more {
+                        return (XmlError::None, pos);
+                    }
+                    // Final buffer — deliver the ]] as character data
+                    if let Some(handler) = &mut self.character_data_handler {
+                        handler(&data[pos..next]);
+                    }
                 }
                 _ => {}
             }
