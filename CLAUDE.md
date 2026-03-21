@@ -5,7 +5,7 @@ The C source is in `expat/lib/xmlparse.c`, the Rust port is in `expat-rust/src/x
 
 ## Critical Rules
 
-1. **Match C behavior exactly** — The real C library (via `expat-sys` FFI) is ground truth, not the C source code
+1. **Match C behavior exactly** — When in doubt, the compiled C library's actual behavior (tested via `expat-sys` FFI) is ground truth. The C source can mislead due to preprocessor macros, implicit conversions, and platform-specific behavior. Run comparison tests to settle ambiguities.
 2. **Never edit xmlparse.rs with parallel agents** — They clobber each other's changes
 3. **Always run tests with `RUST_TEST_THREADS=1`** to avoid resource contention
 4. **Run tests from `expat-rust/` directory** — `cd expat-rust && RUST_TEST_THREADS=1 cargo test`
