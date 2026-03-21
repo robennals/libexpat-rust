@@ -511,6 +511,9 @@ impl Parser {
         // Keep unprocessed data for next parse call
         if next_pos < data.len() {
             self.buffer = data[next_pos..].to_vec();
+        } else if self.is_final && self.processor != Processor::Content && !self.seen_root {
+            // All prolog data consumed, is_final, but no root element seen
+            self.error_code = XmlError::NoElements;
         }
     }
 
@@ -1012,7 +1015,7 @@ impl Parser {
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&[b'\n']);
                     }
-                    if start_tag_level == 0 && !self.seen_root {
+                    if start_tag_level == 0 {
                         return (XmlError::NoElements, next);
                     }
                     return (XmlError::None, end);
@@ -1028,10 +1031,10 @@ impl Parser {
                         }
                         return (XmlError::None, pos);
                     }
-                    if !self.seen_root {
-                        return (XmlError::NoElements, pos);
-                    }
-                    return (XmlError::None, pos);
+                    // At top level, reaching end of data means no root element
+                    // was fully parsed (either never opened, or still open).
+                    // C always returns XML_ERROR_NO_ELEMENTS here.
+                    return (XmlError::NoElements, pos);
                 }
 
                 XmlTok::Invalid => {
