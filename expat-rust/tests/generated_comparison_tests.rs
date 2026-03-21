@@ -505,3 +505,84 @@ fn incr_dtd_entity() { compare_incremental(b"<!DOCTYPE r [<!ENTITY e 'val'>]><r>
 
 #[test]
 fn incr_empty_element() { compare_incremental(b"<r><a/><b/></r>", "incremental empty elements"); }
+
+// ======================== DTD coverage tests ========================
+
+#[test]
+fn ext_dtd_attlist_cdata() {
+    compare(b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED b CDATA #REQUIRED>]><r a='1' b='2'/>", "attlist CDATA");
+}
+
+#[test]
+fn ext_dtd_attlist_enum() {
+    compare(b"<!DOCTYPE r [<!ATTLIST r a (x|y|z) #IMPLIED>]><r a='x'/>", "attlist enum");
+}
+
+#[test]
+fn ext_dtd_attlist_default() {
+    compare(b"<!DOCTYPE r [<!ATTLIST r a CDATA 'default'>]><r/>", "attlist with default");
+}
+
+#[test]
+fn ext_dtd_entity_multiple() {
+    compare(b"<!DOCTYPE r [<!ENTITY a 'alpha'><!ENTITY b 'beta'><!ENTITY c 'gamma'>]><r>&a;&b;&c;</r>", "multiple entities");
+}
+
+#[test]
+fn ext_dtd_notation_system() {
+    compare(b"<!DOCTYPE r [<!NOTATION n SYSTEM 'http://example.com'>]><r/>", "notation SYSTEM");
+}
+
+#[test]
+fn ext_dtd_notation_public() {
+    compare(b"<!DOCTYPE r [<!NOTATION n PUBLIC 'pubid' 'http://example.com'>]><r/>", "notation PUBLIC");
+}
+
+#[test]
+fn ext_dtd_element_any() {
+    compare(b"<!DOCTYPE r [<!ELEMENT r ANY>]><r>text</r>", "element ANY");
+}
+
+#[test]
+fn ext_dtd_element_empty() {
+    compare(b"<!DOCTYPE r [<!ELEMENT r EMPTY>]><r/>", "element EMPTY");
+}
+
+#[test]
+fn ext_dtd_element_children() {
+    compare(b"<!DOCTYPE r [<!ELEMENT r (a,b,c)><!ELEMENT a EMPTY><!ELEMENT b EMPTY><!ELEMENT c EMPTY>]><r><a/><b/><c/></r>", "element children");
+}
+
+#[test]
+fn ext_dtd_element_choice() {
+    compare(b"<!DOCTYPE r [<!ELEMENT r (a|b)><!ELEMENT a EMPTY><!ELEMENT b EMPTY>]><r><a/></r>", "element choice");
+}
+
+#[test]
+fn ext_dtd_element_quantifiers() {
+    compare(b"<!DOCTYPE r [<!ELEMENT r (a+)><!ELEMENT a EMPTY>]><r><a/><a/></r>", "element quantifiers");
+}
+
+#[test]
+fn ext_dtd_public_system() {
+    compare(b"<!DOCTYPE r PUBLIC 'pubid' 'sysid'><r/>", "DOCTYPE PUBLIC+SYSTEM");
+}
+
+#[test]
+fn ext_dtd_system_only() {
+    compare(b"<!DOCTYPE r SYSTEM 'sysid'><r/>", "DOCTYPE SYSTEM");
+}
+
+#[test]
+fn incr_dtd_entity2() {
+    compare_incremental(b"<!DOCTYPE r [<!ENTITY e 'v'>]><r>&e;</r>", "incremental DTD entity2");
+}
+
+#[test]
+#[ignore] // Known: incremental prolog parsing incomplete for ATTLIST
+fn incr_dtd_attlist() {
+    compare_incremental(
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED>]><r a='1'/>",
+        "incremental DTD attlist"
+    );
+}
