@@ -95,7 +95,7 @@ pub trait Encoding {
 
     /// Check if position has at least count characters
     fn has_chars(&self, _data: &[u8], pos: usize, end: usize, count: usize) -> bool {
-        (end - pos) >= (count * self.min_bytes_per_char())
+        pos <= end && (end - pos) >= (count * self.min_bytes_per_char())
     }
 
     /// Check if position has at least 1 character
@@ -782,163 +782,70 @@ pub fn scan_ref<E: Encoding>(
 }
 
 /// Scan attributes starting after first character of attribute name
+/// Scan attributes in a start tag — 1:1 port of C scanAtts()
+/// pos points to the first attribute name start character
 pub fn scan_atts<E: Encoding>(
     enc: &E,
     data: &[u8],
     mut pos: usize,
     end: usize,
 ) -> Result<TokenResult, usize> {
+    let minbpc = enc.min_bytes_per_char();
+
+    // Outer loop: scan attribute name characters
     while enc.has_char(data, pos, end) {
         match enc.byte_type(data, pos) {
-            ByteType::S | ByteType::CR | ByteType::LF => {
-                pos += enc.min_bytes_per_char();
-                loop {
-                    if !enc.has_char(data, pos, end) {
-                        return Ok(TokenResult {
-                            token: XmlTok::Partial,
-                            next_pos: pos,
-                        });
-                    }
-                    match enc.byte_type(data, pos) {
-                        ByteType::S | ByteType::CR | ByteType::LF => {
-                            pos += enc.min_bytes_per_char();
-                        }
-                        ByteType::EQUALS => {
-                            pos += enc.min_bytes_per_char();
-                            if !enc.has_char(data, pos, end) {
-                                return Ok(TokenResult {
-                                    token: XmlTok::Partial,
-                                    next_pos: pos,
-                                });
-                            }
-                            break;
-                        }
-                        _ => {
-                            return Err(pos);
-                        }
-                    }
-                }
-                // Now parse the value
-                loop {
-                    let open_type = enc.byte_type(data, pos);
-                    match open_type {
-                        ByteType::QUOT | ByteType::APOS => {
-                            break;
-                        }
-                        ByteType::S | ByteType::CR | ByteType::LF => {
-                            pos += enc.min_bytes_per_char();
-                            if !enc.has_char(data, pos, end) {
-                                return Ok(TokenResult {
-                                    token: XmlTok::Partial,
-                                    next_pos: pos,
-                                });
-                            }
-                        }
-                        _ => {
-                            return Err(pos);
-                        }
-                    }
-                }
-
-                pos += enc.min_bytes_per_char();
-
-                // Parse attribute value
-                loop {
-                    if !enc.has_char(data, pos, end) {
-                        return Ok(TokenResult {
-                            token: XmlTok::Partial,
-                            next_pos: pos,
-                        });
-                    }
-
-                    let t = enc.byte_type(data, pos);
-                    if t == enc.byte_type(data, pos - enc.min_bytes_per_char()) {
-                        pos += enc.min_bytes_per_char();
-                        if !enc.has_char(data, pos, end) {
-                            return Ok(TokenResult {
-                                token: XmlTok::Partial,
-                                next_pos: pos,
-                            });
-                        }
-                        match enc.byte_type(data, pos) {
-                            ByteType::S | ByteType::CR | ByteType::LF | ByteType::SOL | ByteType::GT => {
-                                break;
-                            }
-                            _ => {
-                                return Err(pos);
-                            }
-                        }
-                    }
-
-                    match t {
-                        ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
-                            return Err(pos);
-                        }
-                        ByteType::AMP => {
-                            let result = scan_ref(enc, data, pos + enc.min_bytes_per_char(), end)?;
-                            pos = result.next_pos;
-                        }
-                        ByteType::LT => {
-                            return Err(pos);
-                        }
-                        _ => {
-                            pos += enc.min_bytes_per_char();
-                        }
-                    }
-                }
-
-                match enc.byte_type(data, pos) {
-                    ByteType::SOL => {
-                        pos += enc.min_bytes_per_char();
-                        if !enc.has_char(data, pos, end) {
-                            return Ok(TokenResult {
-                                token: XmlTok::Partial,
-                                next_pos: pos,
-                            });
-                        }
-                        if !enc.char_matches(data, pos, ASCII_GT) {
-                            return Err(pos);
-                        }
-                        return Ok(TokenResult {
-                            token: XmlTok::EmptyElementWithAtts,
-                            next_pos: pos + enc.min_bytes_per_char(),
-                        });
-                    }
-                    ByteType::GT => {
-                        return Ok(TokenResult {
-                            token: XmlTok::StartTagWithAtts,
-                            next_pos: pos + enc.min_bytes_per_char(),
-                        });
-                    }
-                    _ => {
-                        return Err(pos);
-                    }
-                }
+            // Name characters — continue scanning attr name
+            _ if is_name_char(enc.byte_type(data, pos))
+                && !matches!(enc.byte_type(data, pos), ByteType::S | ByteType::CR | ByteType::LF
+                    | ByteType::GT | ByteType::SOL | ByteType::EQUALS | ByteType::QUOT | ByteType::APOS) =>
+            {
+                pos += minbpc;
             }
+
+            // Whitespace after attr name — find '='
+            ByteType::S | ByteType::CR | ByteType::LF => {
+                loop {
+                    pos += minbpc;
+                    if !enc.has_char(data, pos, end) {
+                        return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos });
+                    }
+                    let t = enc.byte_type(data, pos);
+                    if t == ByteType::EQUALS {
+                        break;
+                    }
+                    match t {
+                        ByteType::S | ByteType::LF | ByteType::CR => {}
+                        _ => return Err(pos),
+                    }
+                }
+                // Fall through to EQUALS handling below
+                pos = scan_attr_value(enc, data, pos, end)?;
+            }
+
+            // '=' after attr name — parse value
+            ByteType::EQUALS => {
+                pos = scan_attr_value(enc, data, pos, end)?;
+            }
+
             ByteType::GT => {
                 return Ok(TokenResult {
                     token: XmlTok::StartTagWithAtts,
-                    next_pos: pos + enc.min_bytes_per_char(),
+                    next_pos: pos + minbpc,
                 });
             }
             ByteType::SOL => {
-                pos += enc.min_bytes_per_char();
+                pos += minbpc;
                 if !enc.has_char(data, pos, end) {
-                    return Ok(TokenResult {
-                        token: XmlTok::Partial,
-                        next_pos: pos,
-                    });
+                    return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos });
                 }
                 if !enc.char_matches(data, pos, ASCII_GT) {
                     return Err(pos);
                 }
                 return Ok(TokenResult {
                     token: XmlTok::EmptyElementWithAtts,
-                    next_pos: pos + enc.min_bytes_per_char(),
+                    next_pos: pos + minbpc,
                 });
-            }
-            _ if is_name_char(enc.byte_type(data, pos)) => {
-                pos += enc.min_bytes_per_char();
             }
             _ => {
                 return Err(pos);
@@ -950,6 +857,85 @@ pub fn scan_atts<E: Encoding>(
         token: XmlTok::Partial,
         next_pos: pos,
     })
+}
+
+/// Helper: scan attribute value starting from '=' position.
+/// Returns the position after the closing quote and any following whitespace/delimiter.
+fn scan_attr_value<E: Encoding>(
+    enc: &E,
+    data: &[u8],
+    mut pos: usize,
+    end: usize,
+) -> Result<usize, usize> {
+    let minbpc = enc.min_bytes_per_char();
+
+    // pos points to '=' — skip it and find opening quote
+    let open;
+    loop {
+        pos += minbpc;
+        if !enc.has_char(data, pos, end) {
+            return Ok(pos); // Partial — will be detected by caller
+        }
+        let bt = enc.byte_type(data, pos);
+        if bt == ByteType::QUOT || bt == ByteType::APOS {
+            open = bt;
+            break;
+        }
+        match bt {
+            ByteType::S | ByteType::LF | ByteType::CR => {}
+            _ => return Err(pos),
+        }
+    }
+
+    // Skip opening quote
+    pos += minbpc;
+
+    // Scan attribute value content until matching closing quote
+    loop {
+        if !enc.has_char(data, pos, end) {
+            return Ok(pos); // Partial
+        }
+        let t = enc.byte_type(data, pos);
+        if t == open {
+            break; // Found closing quote
+        }
+        match t {
+            ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => return Err(pos),
+            ByteType::AMP => {
+                let result = scan_ref(enc, data, pos + minbpc, end)?;
+                pos = result.next_pos;
+            }
+            ByteType::LT => return Err(pos),
+            _ => {
+                pos += minbpc;
+            }
+        }
+    }
+
+    // Skip closing quote
+    pos += minbpc;
+
+    // After closing quote: expect whitespace, '/', '>', or next attr name
+    if !enc.has_char(data, pos, end) {
+        return Ok(pos); // Partial
+    }
+    match enc.byte_type(data, pos) {
+        ByteType::S | ByteType::CR | ByteType::LF => {
+            // Skip whitespace, then look for next attr or end of tag
+            loop {
+                pos += minbpc;
+                if !enc.has_char(data, pos, end) {
+                    return Ok(pos);
+                }
+                match enc.byte_type(data, pos) {
+                    ByteType::S | ByteType::CR | ByteType::LF => {}
+                    _ => break, // found next token
+                }
+            }
+            Ok(pos) // return to outer loop to handle GT/SOL/name
+        }
+        _ => Ok(pos), // GT/SOL/name — return to outer loop
+    }
 }
 
 /// Scan a start tag starting after "<"
@@ -2305,6 +2291,11 @@ pub fn get_atts<E: Encoding>(
             // Whitespace
             ByteType::S => {
                 if matches!(state, State::InName) {
+                    if nAtts < atts_max {
+                        if let Some(att) = atts.last_mut() {
+                            att.name_end = pos;
+                        }
+                    }
                     state = State::Other;
                 } else if matches!(state, State::InValue) && nAtts < atts_max {
                     if let Some(att) = atts.last_mut() {
@@ -2324,11 +2315,27 @@ pub fn get_atts<E: Encoding>(
             // Carriage return or line feed
             ByteType::CR | ByteType::LF => {
                 if matches!(state, State::InName) {
+                    if nAtts < atts_max {
+                        if let Some(att) = atts.last_mut() {
+                            att.name_end = pos;
+                        }
+                    }
                     state = State::Other;
                 } else if matches!(state, State::InValue) && nAtts < atts_max {
                     if let Some(att) = atts.last_mut() {
                         att.normalized = false;
                     }
+                }
+            }
+            // Equals sign — end of attribute name
+            ByteType::EQUALS => {
+                if matches!(state, State::InName) {
+                    if nAtts < atts_max {
+                        if let Some(att) = atts.last_mut() {
+                            att.name_end = pos;
+                        }
+                    }
+                    state = State::Other;
                 }
             }
             // End of tag
@@ -2824,5 +2831,31 @@ fn test_trace_doc_with_content() {
         eprintln!("{}. content_tok({}): {:?} next={}", i+2, pos, tok, next);
         if tok == XmlTok::None { break; }
         pos = next;
+    }
+}
+
+#[test]
+fn test_content_tok_with_attrs() {
+    use crate::xmltok::Utf8Encoding;
+    let enc = Utf8Encoding;
+    let data = b"<e a='1'/>";
+    let r = content_tok(&enc, data, 0, data.len());
+    match r {
+        Ok(TokenResult { token, next_pos }) => {
+            eprintln!("token: {:?}, next: {}", token, next_pos);
+            assert!(matches!(token, XmlTok::EmptyElementWithAtts | XmlTok::EmptyElementNoAtts));
+            
+            // Test get_atts
+            let (count, atts) = get_atts(&enc, data, 0, 10);
+            eprintln!("get_atts: count={}, atts.len={}", count, atts.len());
+            for (i, att) in atts.iter().enumerate() {
+                eprintln!("  attr {}: name={}..{} value={}..{}", i, att.name, att.name_end, att.value_ptr, att.value_end);
+                let name = std::str::from_utf8(&data[att.name..att.name_end]).unwrap();
+                let value = std::str::from_utf8(&data[att.value_ptr..att.value_end]).unwrap();
+                eprintln!("  attr {}: name='{}' value='{}'", i, name, value);
+            }
+            assert_eq!(count, 1);
+        }
+        Err(p) => panic!("content_tok error at {}", p),
     }
 }
