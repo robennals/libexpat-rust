@@ -1,4 +1,5 @@
 /.idea/
+.broomy/output/
 # CVS default ignores begin
 tags
 TAGS
