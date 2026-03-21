@@ -202,6 +202,18 @@ pub struct Parser {
     param_entity_parsing: ParamEntityParsing,
     /// Reparse deferral enabled flag
     reparse_deferral_enabled: bool,
+    /// Stack of open tag names for mismatch detection
+    tag_stack: Vec<String>,
+    /// Whether we've seen the root element
+    seen_root: bool,
+    /// Whether the root element has been closed
+    root_closed: bool,
+    /// Whether we've seen an XML declaration
+    seen_xml_decl: bool,
+    /// Detected encoding from BOM/auto-detection
+    detected_encoding: Option<String>,
+    /// Total byte offset in input (for tracking position across parse calls)
+    byte_offset: u64,
 
     // Handler fields
     start_element_handler: Option<StartElementHandler>,
@@ -249,6 +261,12 @@ impl Parser {
             base_uri: None,
             param_entity_parsing: ParamEntityParsing::Never,
             reparse_deferral_enabled: false,
+            tag_stack: Vec::new(),
+            seen_root: false,
+            root_closed: false,
+            seen_xml_decl: false,
+            detected_encoding: None,
+            byte_offset: 0,
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -294,6 +312,12 @@ impl Parser {
             base_uri: None,
             param_entity_parsing: ParamEntityParsing::Never,
             reparse_deferral_enabled: false,
+            tag_stack: Vec::new(),
+            seen_root: false,
+            root_closed: false,
+            seen_xml_decl: false,
+            detected_encoding: None,
+            byte_offset: 0,
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -332,6 +356,12 @@ impl Parser {
         self.is_final = false;
         self.encoding_name = encoding.map(|s| s.to_string());
         self.tag_level = 0;
+        self.tag_stack.clear();
+        self.seen_root = false;
+        self.root_closed = false;
+        self.seen_xml_decl = false;
+        self.detected_encoding = None;
+        self.byte_offset = 0;
         true
     }
 
@@ -364,12 +394,71 @@ impl Parser {
         // Store the is_final flag
         self.is_final = is_final;
 
-        // Add data to buffer
-        self.buffer.extend_from_slice(data);
+        // Add data to buffer, handling encoding detection on first parse
+        if self.buffer.is_empty() && !self.seen_root && !self.seen_xml_decl {
+            // First chunk — check for pre-set encoding validity
+            if let Some(ref enc) = self.encoding_name {
+                let enc_upper = enc.to_uppercase();
+                if enc_upper == "UTF-16LE" || enc_upper == "UTF-16BE" {
+                    // Explicit UTF-16 encoding — transcode
+                    let is_be = enc_upper == "UTF-16BE";
+                    self.detected_encoding = Some(enc_upper);
+                    match self.transcode_utf16(data, is_be) {
+                        Ok(transcoded) => {
+                            self.buffer = transcoded;
+                        }
+                        Err(err) => {
+                            self.error_code = err;
+                            self.parsing_state = ParsingState::Finished;
+                            return XmlStatus::Error;
+                        }
+                    }
+                } else if !is_known_encoding(&enc_upper) {
+                    self.error_code = XmlError::UnknownEncoding;
+                    self.parsing_state = ParsingState::Finished;
+                    return XmlStatus::Error;
+                } else {
+                    // Known encoding, detect BOM etc
+                    match self.detect_and_transcode(data) {
+                        Ok(transcoded) => self.buffer = transcoded,
+                        Err(err) => {
+                            self.error_code = err;
+                            self.parsing_state = ParsingState::Finished;
+                            return XmlStatus::Error;
+                        }
+                    }
+                }
+            } else {
+                // No pre-set encoding — detect from BOM
+                match self.detect_and_transcode(data) {
+                    Ok(transcoded) => self.buffer = transcoded,
+                    Err(err) => {
+                        self.error_code = err;
+                        self.parsing_state = ParsingState::Finished;
+                        return XmlStatus::Error;
+                    }
+                }
+            }
+        } else if self.detected_encoding.is_some() {
+            // Subsequent chunk with UTF-16 encoding — transcode
+            let is_be = self.detected_encoding.as_deref() == Some("UTF-16BE");
+            match self.transcode_utf16(data, is_be) {
+                Ok(transcoded) => self.buffer.extend_from_slice(&transcoded),
+                Err(err) => {
+                    self.error_code = err;
+                    self.parsing_state = ParsingState::Finished;
+                    return XmlStatus::Error;
+                }
+            }
+        } else {
+            self.buffer.extend_from_slice(data);
+        }
 
-        // If final buffer and no data, set NoElements error
-        if is_final && data.is_empty() && self.buffer.is_empty() {
-            self.error_code = XmlError::NoElements;
+        // Scan the buffer
+        let scan_result = self.scan_buffer();
+
+        // If an error occurred during scanning, return error
+        if self.error_code != XmlError::None {
             self.parsing_state = ParsingState::Finished;
             return XmlStatus::Error;
         }
@@ -379,7 +468,1199 @@ impl Parser {
             self.parsing_state = ParsingState::Finished;
         }
 
-        XmlStatus::Ok
+        // Return based on scanning result
+        if !scan_result {
+            XmlStatus::Error
+        } else {
+            XmlStatus::Ok
+        }
+    }
+
+    /// Advance position tracking for a single byte
+    fn advance_pos(&mut self, b: u8) {
+        if b == b'\n' {
+            self.line_number += 1;
+            self.column_number = 0;
+        } else if b == b'\r' {
+            // \r handled as newline (like \n); if \r\n, the \n will reset again
+            self.line_number += 1;
+            self.column_number = 0;
+        } else {
+            self.column_number += 1;
+        }
+    }
+
+    /// Advance position tracking for a slice of bytes
+    fn advance_pos_slice(&mut self, data: &[u8]) {
+        for &b in data {
+            self.advance_pos(b);
+        }
+    }
+
+    /// Check if the input starts with a UTF-16 BOM and transcode if needed.
+    /// Returns the (possibly transcoded) data and the detected encoding name.
+    fn detect_and_transcode(&mut self, data: &[u8]) -> Result<Vec<u8>, XmlError> {
+        if data.len() >= 2 {
+            // UTF-16 BE BOM: FE FF
+            if data[0] == 0xFE && data[1] == 0xFF {
+                // Check if user declared a conflicting encoding
+                if let Some(ref enc) = self.encoding_name {
+                    let enc_upper = enc.to_uppercase();
+                    if enc_upper != "UTF-16" && enc_upper != "UTF-16BE" {
+                        return Err(XmlError::IncorrectEncoding);
+                    }
+                }
+                self.detected_encoding = Some("UTF-16BE".to_string());
+                return self.transcode_utf16(&data[2..], true);
+            }
+            // UTF-16 LE BOM: FF FE
+            if data[0] == 0xFF && data[1] == 0xFE {
+                if let Some(ref enc) = self.encoding_name {
+                    let enc_upper = enc.to_uppercase();
+                    if enc_upper != "UTF-16" && enc_upper != "UTF-16LE" {
+                        return Err(XmlError::IncorrectEncoding);
+                    }
+                }
+                self.detected_encoding = Some("UTF-16LE".to_string());
+                return self.transcode_utf16(&data[2..], false);
+            }
+            // Check for UTF-16 without BOM (NUL byte pattern)
+            if data.len() >= 4 {
+                if data[0] == 0 && data[1] == b'<' {
+                    // UTF-16 BE without BOM
+                    self.detected_encoding = Some("UTF-16BE".to_string());
+                    return self.transcode_utf16(data, true);
+                }
+                if data[0] == b'<' && data[1] == 0 {
+                    // UTF-16 LE without BOM
+                    self.detected_encoding = Some("UTF-16LE".to_string());
+                    return self.transcode_utf16(data, false);
+                }
+            }
+        }
+        // UTF-8 BOM: EF BB BF — skip it
+        if data.len() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+            return Ok(data[3..].to_vec());
+        }
+        Ok(data.to_vec())
+    }
+
+    /// Transcode UTF-16 data to UTF-8
+    fn transcode_utf16(&self, data: &[u8], big_endian: bool) -> Result<Vec<u8>, XmlError> {
+        let mut result = Vec::with_capacity(data.len());
+        let mut i = 0;
+        while i + 1 < data.len() {
+            let code_unit = if big_endian {
+                ((data[i] as u16) << 8) | (data[i + 1] as u16)
+            } else {
+                (data[i] as u16) | ((data[i + 1] as u16) << 8)
+            };
+            i += 2;
+
+            let ch = if (0xD800..=0xDBFF).contains(&code_unit) {
+                // High surrogate — need low surrogate
+                if i + 1 >= data.len() {
+                    return Err(XmlError::PartialChar);
+                }
+                let low = if big_endian {
+                    ((data[i] as u16) << 8) | (data[i + 1] as u16)
+                } else {
+                    (data[i] as u16) | ((data[i + 1] as u16) << 8)
+                };
+                i += 2;
+                if !(0xDC00..=0xDFFF).contains(&low) {
+                    return Err(XmlError::InvalidToken);
+                }
+                let cp = 0x10000 + ((code_unit as u32 - 0xD800) << 10) + (low as u32 - 0xDC00);
+                match char::from_u32(cp) {
+                    Some(c) => c,
+                    None => return Err(XmlError::InvalidToken),
+                }
+            } else if (0xDC00..=0xDFFF).contains(&code_unit) {
+                return Err(XmlError::InvalidToken);
+            } else {
+                match char::from_u32(code_unit as u32) {
+                    Some(c) => c,
+                    None => return Err(XmlError::InvalidToken),
+                }
+            };
+
+            let mut buf = [0u8; 4];
+            let encoded = ch.encode_utf8(&mut buf);
+            result.extend_from_slice(encoded.as_bytes());
+        }
+        Ok(result)
+    }
+
+    /// Scan the buffer for XML tokens and call handlers
+    fn scan_buffer(&mut self) -> bool {
+        let data = std::mem::take(&mut self.buffer);
+        let len = data.len();
+        let mut pos = 0;
+
+        // Handle prolog (XML declaration, DOCTYPE, comments, PIs before root element)
+        if !self.seen_root {
+            pos = match self.scan_prolog(&data, pos) {
+                Ok(p) => p,
+                Err(_) => return false,
+            };
+        }
+
+        // Handle content
+        while pos < len {
+            if data[pos] == b'<' {
+                pos += 1;
+                self.column_number += 1;
+
+                if pos >= len {
+                    if self.is_final {
+                        self.error_code = XmlError::UnclosedToken;
+                        return false;
+                    }
+                    break;
+                }
+
+                match data[pos] {
+                    // Comment <!-- ... -->
+                    b'!' if pos + 2 < len && data[pos + 1] == b'-' && data[pos + 2] == b'-' => {
+                        self.column_number += 2; // for !-
+                        pos += 2;
+                        let comment_start = pos + 1; // after the second -
+                        self.column_number += 1;
+                        pos += 1;
+                        match self.find_comment_end(&data, pos) {
+                            Some(end_pos) => {
+                                let comment_data = &data[comment_start..end_pos];
+                                if let Some(handler) = &mut self.comment_handler {
+                                    handler(comment_data);
+                                }
+                                // advance past -->
+                                self.advance_pos_slice(&data[pos..end_pos]);
+                                self.column_number += 3; // for -->
+                                pos = end_pos + 3;
+                            }
+                            None => {
+                                if self.is_final {
+                                    self.error_code = XmlError::UnclosedToken;
+                                    return false;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    // CDATA section <![CDATA[...]]>
+                    b'!' if pos + 7 < len && &data[pos..pos + 7] == b"[CDATA[" => {
+                        self.advance_pos_slice(&data[pos..pos + 7]);
+                        pos += 7;
+                        match self.find_cdata_end(&data, pos) {
+                            Some(end_pos) => {
+                                if let Some(handler) = &mut self.start_cdata_section_handler {
+                                    handler();
+                                }
+                                let cdata = &data[pos..end_pos];
+                                if let Some(handler) = &mut self.character_data_handler {
+                                    handler(cdata);
+                                }
+                                if let Some(handler) = &mut self.end_cdata_section_handler {
+                                    handler();
+                                }
+                                self.advance_pos_slice(&data[pos..end_pos]);
+                                self.column_number += 3; // for ]]>
+                                pos = end_pos + 3;
+                            }
+                            None => {
+                                if self.is_final {
+                                    self.error_code = XmlError::UnclosedCdataSection;
+                                    return false;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    // DOCTYPE <!DOCTYPE ...>
+                    b'!' => {
+                        // Should not see DOCTYPE after root element
+                        if self.seen_root {
+                            self.error_code = XmlError::Syntax;
+                            return false;
+                        }
+                        // Handle as prolog item
+                        pos -= 1; // back to '<'
+                        self.column_number -= 1;
+                        pos = match self.scan_prolog(&data, pos) {
+                            Ok(p) => p,
+                            Err(_) => return false,
+                        };
+                    }
+                    // Processing instruction <?...?>
+                    b'?' => {
+                        self.column_number += 1;
+                        pos += 1;
+                        match self.scan_pi(&data, pos) {
+                            Ok((target, pi_data, new_pos)) => {
+                                // Check for misplaced XML declaration
+                                if target.eq_ignore_ascii_case("xml") {
+                                    self.error_code = XmlError::MisplacedXmlPi;
+                                    return false;
+                                }
+                                if let Some(handler) = &mut self.processing_instruction_handler {
+                                    handler(&target, &pi_data);
+                                }
+                                pos = new_pos;
+                            }
+                            Err(_) => return false,
+                        }
+                    }
+                    // End tag </...>
+                    b'/' => {
+                        self.column_number += 1;
+                        pos += 1;
+                        let (tag_name, new_pos) = self.scan_end_tag(&data, pos);
+                        if new_pos == 0 {
+                            return false;
+                        }
+
+                        if let Some(expected) = self.tag_stack.last() {
+                            if expected != &tag_name {
+                                self.error_code = XmlError::TagMismatch;
+                                return false;
+                            }
+                        } else {
+                            self.error_code = XmlError::TagMismatch;
+                            return false;
+                        }
+
+                        self.tag_stack.pop();
+                        self.tag_level = self.tag_level.saturating_sub(1);
+
+                        if let Some(handler) = &mut self.end_element_handler {
+                            handler(&tag_name);
+                        }
+
+                        // After root element closes, check for junk
+                        if self.tag_stack.is_empty() {
+                            self.root_closed = true;
+                        }
+
+                        pos = new_pos;
+                    }
+                    // Start tag <...>
+                    _ => {
+                        let (tag_name, attrs, is_empty, new_pos) = self.scan_start_tag(&data, pos);
+                        if new_pos == 0 {
+                            return false;
+                        }
+
+                        if self.root_closed {
+                            self.error_code = XmlError::JunkAfterDocElement;
+                            return false;
+                        }
+
+                        self.seen_root = true;
+
+                        if let Some(handler) = &mut self.start_element_handler {
+                            let attr_refs: Vec<(&str, &str)> =
+                                attrs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                            handler(&tag_name, &attr_refs);
+                        }
+
+                        if is_empty {
+                            if let Some(handler) = &mut self.end_element_handler {
+                                handler(&tag_name);
+                            }
+                            if self.tag_stack.is_empty() {
+                                self.root_closed = true;
+                            }
+                        } else {
+                            self.tag_stack.push(tag_name);
+                            self.tag_level += 1;
+                        }
+
+                        pos = new_pos;
+                    }
+                }
+            } else if self.root_closed {
+                // After root element, only whitespace, comments, and PIs are allowed
+                if (data[pos] as char).is_ascii_whitespace() {
+                    self.advance_pos(data[pos]);
+                    pos += 1;
+                } else {
+                    self.error_code = XmlError::JunkAfterDocElement;
+                    return false;
+                }
+            } else if !self.seen_root {
+                // Before root element, only whitespace is allowed (comments/PIs handled above)
+                if (data[pos] as char).is_ascii_whitespace() {
+                    self.advance_pos(data[pos]);
+                    pos += 1;
+                } else {
+                    self.error_code = XmlError::Syntax;
+                    return false;
+                }
+            } else {
+                // Character data inside elements
+                let result = self.scan_char_data(&data, pos);
+                match result {
+                    Ok((char_data, new_pos)) => {
+                        if new_pos == pos {
+                            // No progress — skip byte to avoid infinite loop
+                            pos += 1;
+                            continue;
+                        }
+                        if !char_data.is_empty() {
+                            if let Some(handler) = &mut self.character_data_handler {
+                                handler(&char_data);
+                            }
+                        }
+                        pos = new_pos;
+                    }
+                    Err(_) => return false,
+                }
+            }
+        }
+
+        // Check for missing root element on final parse (only if we had data)
+        if self.is_final && !self.seen_root && !data.is_empty() {
+            self.error_code = XmlError::NoElements;
+            return false;
+        }
+
+        true
+    }
+
+    /// Scan prolog content (XML declaration, DOCTYPE, comments, PIs)
+    fn scan_prolog(&mut self, data: &[u8], mut pos: usize) -> Result<usize, ()> {
+        let len = data.len();
+
+        while pos < len {
+            // Skip whitespace — but track byte offset for XML declaration check
+            while pos < len && (data[pos] as char).is_ascii_whitespace() {
+                self.advance_pos(data[pos]);
+                self.byte_offset += 1;
+                pos += 1;
+            }
+            if pos >= len {
+                break;
+            }
+
+            if data[pos] != b'<' {
+                // Non-whitespace, non-tag content in prolog — start of content
+                break;
+            }
+
+            pos += 1;
+            self.column_number += 1;
+            if pos >= len {
+                break;
+            }
+
+            match data[pos] {
+                b'?' => {
+                    // Processing instruction or XML declaration
+                    self.column_number += 1;
+                    pos += 1;
+                    match self.scan_pi(&data, pos) {
+                        Ok((target, pi_data, new_pos)) => {
+                            if target.eq_ignore_ascii_case("xml") {
+                                // XML declaration must be at the very start (byte_offset == 0)
+                                // The '<' was at byte_offset, and we skipped whitespace before it
+                                if self.seen_xml_decl || self.byte_offset > 0 {
+                                    self.error_code = XmlError::MisplacedXmlPi;
+                                    return Err(());
+                                }
+                                self.seen_xml_decl = true;
+                                self.process_xml_decl(&pi_data)?;
+                            } else {
+                                if let Some(handler) = &mut self.processing_instruction_handler {
+                                    handler(&target, &pi_data);
+                                }
+                            }
+                            pos = new_pos;
+                        }
+                        Err(_) => return Err(()),
+                    }
+                }
+                b'!' if pos + 2 < len && data[pos + 1] == b'-' && data[pos + 2] == b'-' => {
+                    // Comment
+                    self.column_number += 2;
+                    pos += 2;
+                    let comment_start = pos + 1;
+                    self.column_number += 1;
+                    pos += 1;
+                    match self.find_comment_end(data, pos) {
+                        Some(end_pos) => {
+                            let comment_data = &data[comment_start..end_pos];
+                            if let Some(handler) = &mut self.comment_handler {
+                                handler(comment_data);
+                            }
+                            self.advance_pos_slice(&data[pos..end_pos]);
+                            self.column_number += 3;
+                            pos = end_pos + 3;
+                        }
+                        None => {
+                            if self.is_final {
+                                self.error_code = XmlError::UnclosedToken;
+                                return Err(());
+                            }
+                            break;
+                        }
+                    }
+                }
+                b'!' => {
+                    // DOCTYPE
+                    if pos + 7 <= len && &data[pos..pos + 7] == b"DOCTYPE" {
+                        self.advance_pos_slice(&data[pos..pos + 7]);
+                        pos += 7;
+                        pos = self.scan_doctype(data, pos)?;
+                    } else {
+                        self.error_code = XmlError::Syntax;
+                        return Err(());
+                    }
+                }
+                _ => {
+                    // Start tag — back up and return to content scanning
+                    pos -= 1; // back to '<'
+                    self.column_number -= 1;
+                    break;
+                }
+            }
+        }
+        Ok(pos)
+    }
+
+    /// Process XML declaration attributes (version, encoding, standalone)
+    fn process_xml_decl(&mut self, decl_data: &str) -> Result<(), ()> {
+        let mut version: Option<String> = None;
+        let mut encoding: Option<String> = None;
+        let mut standalone: Option<i32> = None;
+
+        let trimmed = decl_data.trim();
+
+        // Parse pseudo-attributes
+        let mut remaining = trimmed;
+        let mut seen_version = false;
+        let mut seen_encoding = false;
+        let mut seen_standalone = false;
+        let mut attr_count = 0;
+
+        while !remaining.is_empty() {
+            // Skip whitespace
+            remaining = remaining.trim_start();
+            if remaining.is_empty() {
+                break;
+            }
+
+            // Parse attribute name
+            let name_end = remaining
+                .find(|c: char| c == '=' || c.is_whitespace())
+                .unwrap_or(remaining.len());
+            if name_end == 0 {
+                self.error_code = XmlError::XmlDecl;
+                return Err(());
+            }
+            let name = &remaining[..name_end];
+            remaining = remaining[name_end..].trim_start();
+
+            // Expect '='
+            if !remaining.starts_with('=') {
+                self.error_code = XmlError::XmlDecl;
+                return Err(());
+            }
+            remaining = remaining[1..].trim_start();
+
+            // Parse attribute value (quoted)
+            if remaining.is_empty() {
+                self.error_code = XmlError::XmlDecl;
+                return Err(());
+            }
+            let quote = remaining.as_bytes()[0];
+            if quote != b'"' && quote != b'\'' {
+                self.error_code = XmlError::XmlDecl;
+                return Err(());
+            }
+            remaining = &remaining[1..];
+            let value_end = remaining.find(quote as char);
+            match value_end {
+                Some(end) => {
+                    let value = &remaining[..end];
+                    remaining = &remaining[end + 1..];
+
+                    match name {
+                        "version" => {
+                            if attr_count != 0 {
+                                // version must be first
+                                self.error_code = XmlError::XmlDecl;
+                                return Err(());
+                            }
+                            seen_version = true;
+                            version = Some(value.to_string());
+                        }
+                        "encoding" => {
+                            if !seen_version || seen_encoding {
+                                self.error_code = XmlError::XmlDecl;
+                                return Err(());
+                            }
+                            seen_encoding = true;
+                            encoding = Some(value.to_string());
+
+                            // Validate encoding
+                            let enc_upper = value.to_uppercase();
+                            if enc_upper == "UTF-16" {
+                                // UTF-16 declared in what we're parsing as UTF-8
+                                if self.detected_encoding.is_none() {
+                                    self.error_code = XmlError::IncorrectEncoding;
+                                    return Err(());
+                                }
+                            } else if !is_known_encoding(&enc_upper) {
+                                // Check unknown encoding handler
+                                let mut handled = false;
+                                if let Some(handler) = &mut self.unknown_encoding_handler {
+                                    handled = handler(value);
+                                }
+                                if !handled {
+                                    self.error_code = XmlError::UnknownEncoding;
+                                    return Err(());
+                                }
+                            }
+                        }
+                        "standalone" => {
+                            if !seen_version || seen_standalone {
+                                self.error_code = XmlError::XmlDecl;
+                                return Err(());
+                            }
+                            seen_standalone = true;
+                            standalone = match value {
+                                "yes" => Some(1),
+                                "no" => Some(0),
+                                _ => {
+                                    self.error_code = XmlError::XmlDecl;
+                                    return Err(());
+                                }
+                            };
+                        }
+                        _ => {
+                            self.error_code = XmlError::XmlDecl;
+                            return Err(());
+                        }
+                    }
+                    attr_count += 1;
+                }
+                None => {
+                    self.error_code = XmlError::XmlDecl;
+                    return Err(());
+                }
+            }
+        }
+
+        // version is required
+        if !seen_version {
+            self.error_code = XmlError::XmlDecl;
+            return Err(());
+        }
+
+        // Call XML declaration handler
+        if let Some(handler) = &mut self.xml_decl_handler {
+            handler(
+                version.as_deref(),
+                encoding.as_deref(),
+                standalone,
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Scan a DOCTYPE declaration (simplified — skips internal subset)
+    fn scan_doctype(&mut self, data: &[u8], mut pos: usize) -> Result<usize, ()> {
+        let len = data.len();
+
+        // Skip whitespace
+        while pos < len && (data[pos] as char).is_ascii_whitespace() {
+            self.advance_pos(data[pos]);
+            pos += 1;
+        }
+
+        // Parse root element name
+        let name_start = pos;
+        while pos < len && is_name_char(data[pos]) {
+            pos += 1;
+        }
+        if pos == name_start {
+            self.error_code = XmlError::Syntax;
+            return Err(());
+        }
+        let root_name = std::str::from_utf8(&data[name_start..pos]).unwrap_or("");
+        self.advance_pos_slice(&data[name_start..pos]);
+
+        let mut system_id: Option<String> = None;
+        let mut public_id: Option<String> = None;
+        let mut has_internal_subset = false;
+
+        // Skip whitespace
+        while pos < len && (data[pos] as char).is_ascii_whitespace() {
+            self.advance_pos(data[pos]);
+            pos += 1;
+        }
+
+        // Check for SYSTEM or PUBLIC
+        if pos + 6 <= len && &data[pos..pos + 6] == b"SYSTEM" {
+            self.advance_pos_slice(&data[pos..pos + 6]);
+            pos += 6;
+            while pos < len && (data[pos] as char).is_ascii_whitespace() {
+                self.advance_pos(data[pos]);
+                pos += 1;
+            }
+            let (sid, new_pos) = self.scan_quoted_string(data, pos)?;
+            system_id = Some(sid);
+            pos = new_pos;
+        } else if pos + 6 <= len && &data[pos..pos + 6] == b"PUBLIC" {
+            self.advance_pos_slice(&data[pos..pos + 6]);
+            pos += 6;
+            while pos < len && (data[pos] as char).is_ascii_whitespace() {
+                self.advance_pos(data[pos]);
+                pos += 1;
+            }
+            let (pid, new_pos) = self.scan_quoted_string(data, pos)?;
+            public_id = Some(pid);
+            pos = new_pos;
+            while pos < len && (data[pos] as char).is_ascii_whitespace() {
+                self.advance_pos(data[pos]);
+                pos += 1;
+            }
+            let (sid, new_pos) = self.scan_quoted_string(data, pos)?;
+            system_id = Some(sid);
+            pos = new_pos;
+        }
+
+        // Skip whitespace
+        while pos < len && (data[pos] as char).is_ascii_whitespace() {
+            self.advance_pos(data[pos]);
+            pos += 1;
+        }
+
+        // Call start doctype handler
+        if let Some(handler) = &mut self.start_doctype_decl_handler {
+            handler(
+                root_name,
+                system_id.as_deref(),
+                public_id.as_deref(),
+                pos < len && data[pos] == b'[',
+            );
+        }
+
+        // Handle internal subset [...]
+        if pos < len && data[pos] == b'[' {
+            has_internal_subset = true;
+            self.column_number += 1;
+            pos += 1;
+            pos = self.skip_internal_subset(data, pos)?;
+        }
+
+        // Skip whitespace
+        while pos < len && (data[pos] as char).is_ascii_whitespace() {
+            self.advance_pos(data[pos]);
+            pos += 1;
+        }
+
+        if pos >= len || data[pos] != b'>' {
+            self.error_code = XmlError::Syntax;
+            return Err(());
+        }
+        self.column_number += 1;
+        pos += 1;
+
+        let _ = has_internal_subset;
+
+        // Call end doctype handler
+        if let Some(handler) = &mut self.end_doctype_decl_handler {
+            handler();
+        }
+
+        Ok(pos)
+    }
+
+    /// Scan a quoted string (for DOCTYPE SYSTEM/PUBLIC identifiers)
+    fn scan_quoted_string(&mut self, data: &[u8], mut pos: usize) -> Result<(String, usize), ()> {
+        if pos >= data.len() || (data[pos] != b'"' && data[pos] != b'\'') {
+            self.error_code = XmlError::Syntax;
+            return Err(());
+        }
+        let quote = data[pos];
+        self.column_number += 1;
+        pos += 1;
+        let start = pos;
+        while pos < data.len() && data[pos] != quote {
+            self.advance_pos(data[pos]);
+            pos += 1;
+        }
+        if pos >= data.len() {
+            self.error_code = XmlError::UnclosedToken;
+            return Err(());
+        }
+        let value = std::str::from_utf8(&data[start..pos]).unwrap_or("").to_string();
+        self.column_number += 1;
+        pos += 1;
+        Ok((value, pos))
+    }
+
+    /// Skip internal subset in DOCTYPE [...] — simplified, handles nested brackets
+    fn skip_internal_subset(&mut self, data: &[u8], mut pos: usize) -> Result<usize, ()> {
+        let len = data.len();
+        let mut depth = 0; // for nested <!...> declarations
+        // Safety: limit iterations to prevent infinite loops
+        let max_iter = len * 2;
+        let mut iter = 0;
+        while pos < len {
+            iter += 1;
+            if iter > max_iter {
+                self.error_code = XmlError::Syntax;
+                return Err(());
+            }
+            match data[pos] {
+                b']' if depth == 0 => {
+                    self.column_number += 1;
+                    pos += 1;
+                    return Ok(pos);
+                }
+                b'<' if pos + 1 < len && data[pos + 1] == b'!' => {
+                    depth += 1;
+                    self.advance_pos(data[pos]);
+                    pos += 1;
+                }
+                b'>' if depth > 0 => {
+                    depth -= 1;
+                    self.column_number += 1;
+                    pos += 1;
+                }
+                b'\'' | b'"' => {
+                    // Skip quoted strings inside declarations
+                    let quote = data[pos];
+                    self.column_number += 1;
+                    pos += 1;
+                    while pos < len && data[pos] != quote {
+                        self.advance_pos(data[pos]);
+                        pos += 1;
+                    }
+                    if pos < len {
+                        self.column_number += 1;
+                        pos += 1;
+                    }
+                }
+                _ => {
+                    self.advance_pos(data[pos]);
+                    pos += 1;
+                }
+            }
+        }
+        self.error_code = XmlError::Syntax;
+        Err(())
+    }
+
+    /// Find the end of a comment (position of first '-' in '-->'), returns None if not found
+    fn find_comment_end(&self, data: &[u8], pos: usize) -> Option<usize> {
+        let mut i = pos;
+        while i + 2 < data.len() {
+            if data[i] == b'-' && data[i + 1] == b'-' && data[i + 2] == b'>' {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Find the end of a CDATA section (position of first ']' in ']]>'), returns None if not found
+    fn find_cdata_end(&self, data: &[u8], pos: usize) -> Option<usize> {
+        let mut i = pos;
+        while i + 2 < data.len() {
+            if data[i] == b']' && data[i + 1] == b']' && data[i + 2] == b'>' {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Scan a processing instruction: target data ?>
+    /// pos should be right after '<?'
+    fn scan_pi(&mut self, data: &[u8], mut pos: usize) -> Result<(String, String, usize), ()> {
+        let len = data.len();
+
+        // Parse target name
+        let target_start = pos;
+        while pos < len && is_name_char(data[pos]) {
+            pos += 1;
+        }
+        if pos == target_start {
+            self.error_code = XmlError::Syntax;
+            return Err(());
+        }
+        let target = std::str::from_utf8(&data[target_start..pos])
+            .unwrap_or("")
+            .to_string();
+        self.advance_pos_slice(&data[target_start..pos]);
+
+        // For XML declaration, check for immediate ?>
+        if pos + 1 < len && data[pos] == b'?' && data[pos + 1] == b'>' {
+            self.column_number += 2;
+            return Ok((target, String::new(), pos + 2));
+        }
+
+        // Skip whitespace before data
+        if pos < len && (data[pos] as char).is_ascii_whitespace() {
+            self.advance_pos(data[pos]);
+            pos += 1;
+        }
+
+        // Find ?>
+        let data_start = pos;
+        while pos + 1 < len {
+            if data[pos] == b'?' && data[pos + 1] == b'>' {
+                let pi_data = std::str::from_utf8(&data[data_start..pos])
+                    .unwrap_or("")
+                    .to_string();
+                self.advance_pos_slice(&data[data_start..pos]);
+                self.column_number += 2;
+                return Ok((target, pi_data, pos + 2));
+            }
+            pos += 1;
+        }
+
+        if self.is_final {
+            self.error_code = XmlError::UnclosedToken;
+        }
+        Err(())
+    }
+
+    /// Scan a start tag <tagname attrs...>
+    fn scan_start_tag(
+        &mut self,
+        data: &[u8],
+        mut pos: usize,
+    ) -> (String, Vec<(String, String)>, bool, usize) {
+        let len = data.len();
+
+        // Parse tag name
+        let tag_start = pos;
+        while pos < len && is_name_char(data[pos]) {
+            pos += 1;
+        }
+
+        if pos == tag_start {
+            self.error_code = XmlError::Syntax;
+            return (String::new(), vec![], false, 0);
+        }
+
+        let tag_name = match std::str::from_utf8(&data[tag_start..pos]) {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                self.error_code = XmlError::InvalidToken;
+                return (String::new(), vec![], false, 0);
+            }
+        };
+
+        self.advance_pos_slice(&data[tag_start..pos]);
+
+        // Check for invalid bytes immediately following the name (e.g., 4-byte UTF-8)
+        if pos < len && data[pos] >= 0xF0 && data[pos] <= 0xF7 {
+            self.error_code = XmlError::InvalidToken;
+            return (String::new(), vec![], false, 0);
+        }
+
+        let mut attrs: Vec<(String, String)> = Vec::new();
+        let mut attr_names: Vec<String> = Vec::new();
+        let mut is_empty = false;
+
+        loop {
+            // Skip whitespace
+            while pos < len && (data[pos] as char).is_ascii_whitespace() {
+                self.advance_pos(data[pos]);
+                pos += 1;
+            }
+
+            if pos >= len {
+                if self.is_final {
+                    self.error_code = XmlError::UnclosedToken;
+                }
+                return (String::new(), vec![], false, 0);
+            }
+
+            // Check for end of tag
+            if data[pos] == b'>' {
+                self.column_number += 1;
+                return (tag_name, attrs, is_empty, pos + 1);
+            }
+
+            if data[pos] == b'/' {
+                self.column_number += 1;
+                pos += 1;
+                if pos < len && data[pos] == b'>' {
+                    self.column_number += 1;
+                    is_empty = true;
+                    return (tag_name, attrs, is_empty, pos + 1);
+                } else {
+                    self.error_code = XmlError::Syntax;
+                    return (String::new(), vec![], false, 0);
+                }
+            }
+
+            // Parse attribute name
+            let attr_name_start = pos;
+            while pos < len
+                && data[pos] != b'='
+                && data[pos] != b'>'
+                && data[pos] != b'/'
+                && !(data[pos] as char).is_ascii_whitespace()
+            {
+                pos += 1;
+            }
+            if pos == attr_name_start {
+                self.error_code = XmlError::Syntax;
+                return (String::new(), vec![], false, 0);
+            }
+            let attr_name = std::str::from_utf8(&data[attr_name_start..pos])
+                .unwrap_or("")
+                .to_string();
+            self.advance_pos_slice(&data[attr_name_start..pos]);
+
+            // Check for duplicate attribute
+            if attr_names.contains(&attr_name) {
+                self.error_code = XmlError::DuplicateAttribute;
+                return (String::new(), vec![], false, 0);
+            }
+            attr_names.push(attr_name.clone());
+
+            // Skip whitespace
+            while pos < len && (data[pos] as char).is_ascii_whitespace() {
+                self.advance_pos(data[pos]);
+                pos += 1;
+            }
+
+            // Expect '='
+            if pos >= len || data[pos] != b'=' {
+                self.error_code = XmlError::Syntax;
+                return (String::new(), vec![], false, 0);
+            }
+            self.column_number += 1;
+            pos += 1;
+
+            // Skip whitespace
+            while pos < len && (data[pos] as char).is_ascii_whitespace() {
+                self.advance_pos(data[pos]);
+                pos += 1;
+            }
+
+            // Parse attribute value (quoted)
+            if pos >= len || (data[pos] != b'"' && data[pos] != b'\'') {
+                self.error_code = XmlError::Syntax;
+                return (String::new(), vec![], false, 0);
+            }
+            let quote = data[pos];
+            self.column_number += 1;
+            pos += 1;
+
+            let mut attr_value = Vec::new();
+            while pos < len && data[pos] != quote {
+                if data[pos] == b'&' {
+                    // Entity/character reference in attribute value
+                    match self.resolve_reference(&data, pos) {
+                        Ok((replacement, new_pos)) => {
+                            attr_value.extend_from_slice(&replacement);
+                            self.advance_pos_slice(&data[pos..new_pos]);
+                            pos = new_pos;
+                        }
+                        Err(_) => {
+                            return (String::new(), vec![], false, 0);
+                        }
+                    }
+                } else {
+                    if data[pos] == b'\n' || data[pos] == b'\r' || data[pos] == b'\t' {
+                        attr_value.push(b' '); // normalize whitespace in attrs
+                    } else {
+                        attr_value.push(data[pos]);
+                    }
+                    self.advance_pos(data[pos]);
+                    pos += 1;
+                }
+            }
+            if pos >= len {
+                self.error_code = XmlError::UnclosedToken;
+                return (String::new(), vec![], false, 0);
+            }
+            self.column_number += 1; // closing quote
+            pos += 1;
+
+            let attr_value_str = String::from_utf8(attr_value).unwrap_or_default();
+            attrs.push((attr_name, attr_value_str));
+        }
+    }
+
+    /// Scan an end tag </tagname>
+    fn scan_end_tag(&mut self, data: &[u8], mut pos: usize) -> (String, usize) {
+        let len = data.len();
+
+        // Parse tag name
+        let tag_start = pos;
+        while pos < len && is_name_char(data[pos]) {
+            pos += 1;
+        }
+
+        if pos == tag_start {
+            self.error_code = XmlError::Syntax;
+            return (String::new(), 0);
+        }
+
+        let tag_name = match std::str::from_utf8(&data[tag_start..pos]) {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                self.error_code = XmlError::InvalidToken;
+                return (String::new(), 0);
+            }
+        };
+
+        self.advance_pos_slice(&data[tag_start..pos]);
+
+        // Skip whitespace
+        while pos < len && (data[pos] as char).is_ascii_whitespace() {
+            self.advance_pos(data[pos]);
+            pos += 1;
+        }
+
+        if pos >= len || data[pos] != b'>' {
+            self.error_code = XmlError::Syntax;
+            return (String::new(), 0);
+        }
+
+        self.column_number += 1;
+        (tag_name, pos + 1)
+    }
+
+    /// Scan character data, handling entity/character references.
+    /// Returns the expanded text and the new position.
+    fn scan_char_data(&mut self, data: &[u8], mut pos: usize) -> Result<(Vec<u8>, usize), ()> {
+        let len = data.len();
+        let mut result = Vec::new();
+
+        while pos < len && data[pos] != b'<' {
+            if data[pos] == 0 {
+                self.error_code = XmlError::InvalidToken;
+                return Err(());
+            }
+
+            if data[pos] == b'&' {
+                match self.resolve_reference(data, pos) {
+                    Ok((replacement, new_pos)) => {
+                        result.extend_from_slice(&replacement);
+                        self.advance_pos_slice(&data[pos..new_pos]);
+                        pos = new_pos;
+                    }
+                    Err(_) => return Err(()),
+                }
+            } else {
+                self.advance_pos(data[pos]);
+                result.push(data[pos]);
+                pos += 1;
+            }
+        }
+
+        Ok((result, pos))
+    }
+
+    /// Resolve an entity reference (&...; or &#...; or &#x...;)
+    /// Returns the replacement bytes and the position after the ';'
+    fn resolve_reference(&mut self, data: &[u8], pos: usize) -> Result<(Vec<u8>, usize), ()> {
+        let len = data.len();
+        debug_assert!(data[pos] == b'&');
+        let start = pos;
+        let mut p = pos + 1;
+
+        if p >= len {
+            self.error_code = XmlError::UnclosedToken;
+            return Err(());
+        }
+
+        if data[p] == b'#' {
+            // Character reference
+            p += 1;
+            if p >= len {
+                self.error_code = XmlError::UnclosedToken;
+                return Err(());
+            }
+
+            let hex = data[p] == b'x' || data[p] == b'X';
+            if hex {
+                p += 1;
+            }
+
+            let num_start = p;
+            while p < len && data[p] != b';' {
+                p += 1;
+            }
+            if p >= len {
+                self.error_code = XmlError::UnclosedToken;
+                return Err(());
+            }
+
+            let num_str = std::str::from_utf8(&data[num_start..p]).unwrap_or("");
+            let codepoint = if hex {
+                u32::from_str_radix(num_str, 16).unwrap_or(0xFFFFFFFF)
+            } else {
+                num_str.parse::<u32>().unwrap_or(0xFFFFFFFF)
+            };
+
+            // Validate codepoint — XML 1.0 allows specific ranges
+            if !is_valid_xml_char(codepoint) {
+                self.error_code = XmlError::BadCharRef;
+                return Err(());
+            }
+
+            let ch = match char::from_u32(codepoint) {
+                Some(c) => c,
+                None => {
+                    self.error_code = XmlError::BadCharRef;
+                    return Err(());
+                }
+            };
+
+            let mut buf = [0u8; 4];
+            let encoded = ch.encode_utf8(&mut buf);
+            let _ = start;
+            Ok((encoded.as_bytes().to_vec(), p + 1))
+        } else {
+            // Named entity reference
+            let name_start = p;
+            while p < len && data[p] != b';' {
+                if !is_name_char(data[p]) {
+                    self.error_code = XmlError::Syntax;
+                    return Err(());
+                }
+                p += 1;
+            }
+            if p >= len {
+                self.error_code = XmlError::UnclosedToken;
+                return Err(());
+            }
+
+            let name = std::str::from_utf8(&data[name_start..p]).unwrap_or("");
+            p += 1; // skip ';'
+
+            match name {
+                "amp" => Ok((b"&".to_vec(), p)),
+                "lt" => Ok((b"<".to_vec(), p)),
+                "gt" => Ok((b">".to_vec(), p)),
+                "quot" => Ok((b"\"".to_vec(), p)),
+                "apos" => Ok((b"'".to_vec(), p)),
+                _ => {
+                    // General entity — call skipped entity handler or report error
+                    if let Some(handler) = &mut self.skipped_entity_handler {
+                        handler(name, false);
+                        Ok((vec![], p))
+                    } else {
+                        self.error_code = XmlError::UndefinedEntity;
+                        Err(())
+                    }
+                }
+            }
+        }
     }
 
     /// Get a buffer for incremental parsing
@@ -462,7 +1743,7 @@ impl Parser {
     ///
     /// Equivalent to XML_GetCurrentByteIndex(parser) in C
     pub fn current_byte_index(&self) -> i64 {
-        -1 // Placeholder
+        self.byte_offset as i64
     }
 
     /// Get the number of bytes in the current event
@@ -811,6 +2092,44 @@ impl Drop for Parser {
         // Rust's ownership model handles cleanup automatically
         // All Vec and String fields will be dropped naturally
     }
+}
+
+/// Check if a byte is a valid XML name character (or start of a valid multi-byte name char).
+/// This handles ASCII name chars directly. For multi-byte UTF-8:
+/// - 2-byte (0xC0..0xDF) and 3-byte (0xE0..0xEF) sequences are accepted (covers most valid XML name chars)
+/// - 4-byte (0xF0..0xF7) sequences are rejected (U+10000+ not valid in XML 1.0 names)
+/// - Continuation bytes (0x80..0xBF) are accepted (part of multi-byte sequences)
+fn is_name_char(b: u8) -> bool {
+    matches!(
+        b,
+        b'a'..=b'z'
+            | b'A'..=b'Z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b':'
+            | b'.'
+            | 0x80..=0xBF // UTF-8 continuation bytes
+            | 0xC0..=0xDF // 2-byte UTF-8 start
+            | 0xE0..=0xEF // 3-byte UTF-8 start
+    )
+}
+
+/// Check if a codepoint is a valid XML 1.0 character
+fn is_valid_xml_char(cp: u32) -> bool {
+    matches!(cp, 0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF)
+}
+
+/// Check if an encoding name is known/supported
+fn is_known_encoding(name: &str) -> bool {
+    matches!(
+        name,
+        "UTF-8" | "US-ASCII" | "ASCII" | "ISO-8859-1" | "LATIN1"
+            | "UTF-16" | "UTF-16BE" | "UTF-16LE"
+            | "ISO-8859-2" | "ISO-8859-3" | "ISO-8859-4" | "ISO-8859-5"
+            | "ISO-8859-6" | "ISO-8859-7" | "ISO-8859-8" | "ISO-8859-9"
+            | "WINDOWS-1252"
+    )
 }
 
 // Free functions (not tied to a parser instance)
