@@ -436,3 +436,157 @@ fn debug_c_behavior() {
         );
     }
 }
+
+// ======================== Extended coverage tests ========================
+
+#[test]
+fn cmp_multiline_content() {
+    compare_parse(b"<doc>line1\nline2\nline3</doc>", "multiline content");
+}
+
+#[test]
+fn cmp_empty_attribute() {
+    compare_parse(b"<a x=\"\"/>", "empty attribute value");
+}
+
+#[test]
+fn cmp_single_quote_attributes() {
+    compare_parse(b"<a x='hello'/>", "single-quoted attribute");
+}
+
+#[test]
+fn cmp_many_attributes() {
+    compare_parse(b"<a a=\"1\" b=\"2\" c=\"3\" d=\"4\" e=\"5\"/>", "many attributes");
+}
+
+#[test]
+fn cmp_nested_deep() {
+    compare_parse(b"<a><b><c><d><e><f/></e></d></c></b></a>", "deeply nested");
+}
+
+#[test]
+fn cmp_self_closing_with_space() {
+    compare_parse(b"<a />", "self-closing with space");
+}
+
+#[test]
+fn cmp_pi_after_root() {
+    compare_status(b"<a/><?target data?>", "PI after root element");
+}
+
+#[test]
+fn cmp_comment_after_root() {
+    compare_status(b"<a/><!-- comment -->", "comment after root element");
+}
+
+#[test]
+fn cmp_whitespace_after_root() {
+    compare_status(b"<a/>  \n  ", "whitespace after root element");
+}
+
+#[test]
+fn cmp_empty_element() {
+    compare_parse(b"<a></a>", "empty element");
+}
+
+#[test]
+fn cmp_sibling_elements() {
+    compare_parse(b"<r><a/><b/><c/></r>", "sibling elements");
+}
+
+#[test]
+fn cmp_mixed_content() {
+    compare_parse(b"<r>text<a/>more<b/>end</r>", "mixed text and element content");
+}
+
+#[test]
+fn cmp_error_tag_mismatch() {
+    let xml = b"<a></b>";
+    let (r_status, r_error, _, _) = parse_rust(xml);
+    let (c_status, c_error, _, _) = parse_c(xml);
+    assert_eq!(rust_status_to_u32(r_status), c_status, "Tag mismatch status");
+    assert_eq!(rust_error_to_u32(r_error), c_error, "Tag mismatch error code");
+}
+
+#[test]
+fn cmp_many_small_elements() {
+    let mut xml = b"<r>".to_vec();
+    for i in 0..100 {
+        xml.extend_from_slice(format!("<e{i}/>").as_bytes());
+    }
+    xml.extend_from_slice(b"</r>");
+    compare_status(&xml, "100 small elements");
+}
+
+#[test]
+fn cmp_long_text() {
+    let mut xml = b"<a>".to_vec();
+    for _ in 0..1000 {
+        xml.extend_from_slice(b"some text content ");
+    }
+    xml.extend_from_slice(b"</a>");
+    compare_status(&xml, "long text content");
+}
+
+#[test]
+fn cmp_utf8_element_content() {
+    compare_parse("<a>こんにちは</a>".as_bytes(), "UTF-8 element content");
+}
+
+#[test]
+fn cmp_chardata_simple() {
+    let xml = b"<a>hello world</a>";
+    let mut r_data = Vec::new();
+    {
+        let mut parser = Parser::new(None).unwrap();
+        let r_ref = &mut r_data as *mut Vec<u8>;
+        parser.set_character_data_handler(Some(Box::new(move |data: &[u8]| {
+            unsafe { (*r_ref).extend_from_slice(data); }
+        })));
+        parser.parse(xml, true);
+    }
+    let c_data: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+    unsafe extern "C" fn c_cd(ud: *mut c_void, s: *const c_char, len: c_int) {
+        let dv = &*(ud as *const RefCell<Vec<u8>>);
+        let sl = std::slice::from_raw_parts(s as *const u8, len as usize);
+        dv.borrow_mut().extend_from_slice(sl);
+    }
+    {
+        let parser = CParser::new(None).unwrap();
+        unsafe {
+            expat_sys::XML_SetUserData(parser.raw_parser(), &c_data as *const _ as *mut c_void);
+            expat_sys::XML_SetCharacterDataHandler(parser.raw_parser(), Some(c_cd));
+        }
+        parser.parse(xml, true);
+    }
+    assert_eq!(r_data, c_data.into_inner(), "Character data mismatch");
+}
+
+#[test]
+fn cmp_chardata_entities() {
+    let xml = b"<a>&lt;&gt;&amp;</a>";
+    let mut r_data = Vec::new();
+    {
+        let mut parser = Parser::new(None).unwrap();
+        let r_ref = &mut r_data as *mut Vec<u8>;
+        parser.set_character_data_handler(Some(Box::new(move |data: &[u8]| {
+            unsafe { (*r_ref).extend_from_slice(data); }
+        })));
+        parser.parse(xml, true);
+    }
+    let c_data: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+    unsafe extern "C" fn c_cd2(ud: *mut c_void, s: *const c_char, len: c_int) {
+        let dv = &*(ud as *const RefCell<Vec<u8>>);
+        let sl = std::slice::from_raw_parts(s as *const u8, len as usize);
+        dv.borrow_mut().extend_from_slice(sl);
+    }
+    {
+        let parser = CParser::new(None).unwrap();
+        unsafe {
+            expat_sys::XML_SetUserData(parser.raw_parser(), &c_data as *const _ as *mut c_void);
+            expat_sys::XML_SetCharacterDataHandler(parser.raw_parser(), Some(c_cd2));
+        }
+        parser.parse(xml, true);
+    }
+    assert_eq!(r_data, c_data.into_inner(), "Entity chardata mismatch");
+}
