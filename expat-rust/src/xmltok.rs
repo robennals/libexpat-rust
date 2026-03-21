@@ -483,9 +483,9 @@ fn parse_pseudo_attribute(
         }
 
         // Validate attribute value characters
-        if !((b'a'..=b'z').contains(&(c as u8))
-            || (b'A'..=b'Z').contains(&(c as u8))
-            || (b'0'..=b'9').contains(&(c as u8))
+        if !((c as u8).is_ascii_lowercase()
+            || (c as u8).is_ascii_uppercase()
+            || (c as u8).is_ascii_digit()
             || c == b'.' as i32
             || c == b'-' as i32
             || c == b'_' as i32)

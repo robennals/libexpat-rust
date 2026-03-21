@@ -99,9 +99,36 @@
 - Identified trait-based Rust design (generic over encoding)
 - Currently testing Haiku on this — it's the complexity threshold test
 
+### Quality Audit Process
+**Method: clippy + Haiku subagents**
+
+After porting, code quality must be audited:
+1. Run `cargo clippy` to get baseline warnings
+2. Launch parallel haiku agents to fix clippy warnings per-file
+3. Verify tests still pass after fixes
+4. Run `scripts/verify-test-coverage.py` to ensure 1:1 test mapping
+
+**Finding**: Initial haiku output had 58 clippy warnings. Main categories:
+- Complex handler types → fix with type aliases
+- Manual bit rotation → use .rotate_left()
+- Manual range checks → use .contains()
+- Identity operations (<<0) → remove
+
+**Lesson**: Haiku optimizes for "compiles and works" not "idiomatic Rust."
+Add clippy as a verification step AFTER each port, not just cargo check.
+
+### Revised Workflow (Proven)
+
+For each C module:
+1. **Analyze** (haiku, research-only) → understand structure
+2. **Port** (haiku, write code) → translate to Rust
+3. **Compile** (`cargo check`) → catch type/syntax errors
+4. **Audit** (`cargo clippy` + haiku fix agent) → enforce idioms
+5. **Test** (`cargo test`) → verify behavior
+6. **Verify coverage** (`verify-test-coverage.py`) → ensure 1:1 test mapping
+
 ### What to Try Next
 
-- **Verify tokenizer port quality** — if Haiku fails, escalate to Sonnet
-- **Translate basic_tests.c** — 244 tests in batches
-- **Port xmltok.c** (front-end, depends on xmltok_impl)
-- **Start implementing actual parser logic** in xmlparse.rs (replace todo!() stubs)
+- **Implement XML tokenization** in parse() — wire up xmltok/xmltok_impl
+- **Translate basic_tests.c** remaining batches
+- **Port xmlparse.c sub-sections** (DTD, content, entities)

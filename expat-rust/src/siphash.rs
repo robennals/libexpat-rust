@@ -7,20 +7,16 @@
 /// Perform a left rotate on a 64-bit value
 #[inline]
 fn rotl64(x: u64, b: u32) -> u64 {
-    (x << b) | (x >> (64 - b))
+    x.rotate_left(b)
 }
 
 /// Parse a 64-bit little-endian value from 8 bytes
 fn u8_to_u64_le(bytes: &[u8]) -> u64 {
     assert!(bytes.len() >= 8, "Not enough bytes");
-    ((bytes[0] as u64) << 0)
-        | ((bytes[1] as u64) << 8)
-        | ((bytes[2] as u64) << 16)
-        | ((bytes[3] as u64) << 24)
-        | ((bytes[4] as u64) << 32)
-        | ((bytes[5] as u64) << 40)
-        | ((bytes[6] as u64) << 48)
-        | ((bytes[7] as u64) << 56)
+    u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5], bytes[6], bytes[7],
+    ])
 }
 
 /// A SipHash state machine for incremental hashing
@@ -118,9 +114,8 @@ impl SipHasher {
         let mut b = total_len << 56;
 
         // Add the remaining bytes in little-endian order
-        match left {
-            7 => b |= (self.buf[6] as u64) << 48,
-            _ => {}
+        if left == 7 {
+            b |= (self.buf[6] as u64) << 48;
         }
         if left >= 6 {
             b |= (self.buf[5] as u64) << 40;
@@ -138,7 +133,7 @@ impl SipHasher {
             b |= (self.buf[1] as u64) << 8;
         }
         if left >= 1 {
-            b |= (self.buf[0] as u64) << 0;
+            b |= self.buf[0] as u64;
         }
 
         // Finalization

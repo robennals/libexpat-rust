@@ -1493,13 +1493,14 @@ pub fn prolog_tok<E: Encoding>(
                     next_pos: pos,
                 });
             }
-            if enc.char_matches(data, pos, ASCII_RSQB) {
-                if enc.has_chars(data, pos, end, 2) && enc.char_matches(data, pos + minbpc, ASCII_GT) {
-                    return Ok(TokenResult {
-                        token: XmlTok::CondSectClose,
-                        next_pos: pos + 2 * minbpc,
-                    });
-                }
+            if enc.char_matches(data, pos, ASCII_RSQB)
+                && enc.has_chars(data, pos, end, 2)
+                && enc.char_matches(data, pos + minbpc, ASCII_GT)
+            {
+                return Ok(TokenResult {
+                    token: XmlTok::CondSectClose,
+                    next_pos: pos + 2 * minbpc,
+                });
             }
             return Ok(TokenResult {
                 token: XmlTok::CloseBracket,
@@ -2035,13 +2036,13 @@ pub fn char_ref_number<E: Encoding>(enc: &E, data: &[u8], mut pos: usize) -> i32
 
 /// Validate character reference number
 fn check_char_ref_number(num: i32) -> i32 {
-    if num < 0 || num > 0x10FFFF {
+    if !((0..=0x10FFFF).contains(&num)) {
         return -1;
     }
     if (num & 0xFFFE) == 0xFFFE {
         return -1;
     }
-    if (num >= 0xD800 && num < 0xE000) || (num >= 0xFDD0 && num < 0xFDF0) {
+    if (0xD800..0xE000).contains(&num) || (0xFDD0..0xFDF0).contains(&num) {
         return -1;
     }
     num
@@ -2070,12 +2071,11 @@ pub fn predefined_entity_name<E: Encoding>(
             }
         }
         3 => {
-            if enc.char_matches(data, ptr, b'a') {
-                if enc.char_matches(data, ptr + minbpc, b'm')
-                    && enc.char_matches(data, ptr + 2 * minbpc, b'p')
-                {
-                    return ASCII_AMP;
-                }
+            if enc.char_matches(data, ptr, b'a')
+                && enc.char_matches(data, ptr + minbpc, b'm')
+                && enc.char_matches(data, ptr + 2 * minbpc, b'p')
+            {
+                return ASCII_AMP;
             }
             0
         }

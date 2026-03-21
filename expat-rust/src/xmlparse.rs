@@ -1,5 +1,28 @@
 // AI-generated API facade from expat.h — stubs with todo!()
 
+// Type aliases for handler function types
+type StartElementHandler = Box<dyn FnMut(&str, &[(&str, &str)]) + 'static>;
+type EndElementHandler = Box<dyn FnMut(&str) + 'static>;
+type CharacterDataHandler = Box<dyn FnMut(&[u8]) + 'static>;
+type ProcessingInstructionHandler = Box<dyn FnMut(&str, &str) + 'static>;
+type CommentHandler = Box<dyn FnMut(&[u8]) + 'static>;
+type CdataSectionHandler = Box<dyn FnMut() + 'static>;
+type DefaultHandler = Box<dyn FnMut(&[u8]) + 'static>;
+type StartDoctypeDeclHandler = Box<dyn FnMut(&str, Option<&str>, Option<&str>, bool) + 'static>;
+type EndDoctypeDeclHandler = Box<dyn FnMut() + 'static>;
+type ElementDeclHandler = Box<dyn FnMut(&str, &str) + 'static>;
+type AttlistDeclHandler = Box<dyn FnMut(&str, &str, &str, Option<&str>, Option<&str>, bool) + 'static>;
+type XmlDeclHandler = Box<dyn FnMut(Option<&str>, Option<&str>, Option<i32>) + 'static>;
+type EntityDeclHandler = Box<dyn FnMut(&str, bool, Option<&str>, Option<&str>, Option<&str>) + 'static>;
+type UnparsedEntityDeclHandler = Box<dyn FnMut(&str, Option<&str>, &str, Option<&str>) + 'static>;
+type NotationDeclHandler = Box<dyn FnMut(&str, Option<&str>, &str, Option<&str>) + 'static>;
+type NamespaceDeclHandler = Box<dyn FnMut(Option<&str>, &str) + 'static>;
+type NamespaceDeclEndHandler = Box<dyn FnMut(Option<&str>) + 'static>;
+type NotStandaloneHandler = Box<dyn FnMut() -> bool + 'static>;
+type ExternalEntityRefHandler = Box<dyn FnMut(&str, Option<&str>, Option<&str>, Option<&str>) -> bool + 'static>;
+type SkippedEntityHandler = Box<dyn FnMut(&str, bool) + 'static>;
+type UnknownEncodingHandler = Box<dyn FnMut(&str) -> bool + 'static>;
+
 /// XML parsing status result type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XmlStatus {
@@ -181,29 +204,29 @@ pub struct Parser {
     reparse_deferral_enabled: bool,
 
     // Handler fields
-    start_element_handler: Option<Box<dyn FnMut(&str, &[(&str, &str)]) + 'static>>,
-    end_element_handler: Option<Box<dyn FnMut(&str) + 'static>>,
-    character_data_handler: Option<Box<dyn FnMut(&[u8]) + 'static>>,
-    processing_instruction_handler: Option<Box<dyn FnMut(&str, &str) + 'static>>,
-    comment_handler: Option<Box<dyn FnMut(&[u8]) + 'static>>,
-    start_cdata_section_handler: Option<Box<dyn FnMut() + 'static>>,
-    end_cdata_section_handler: Option<Box<dyn FnMut() + 'static>>,
-    default_handler: Option<Box<dyn FnMut(&[u8]) + 'static>>,
-    default_handler_expand: Option<Box<dyn FnMut(&[u8]) + 'static>>,
-    start_doctype_decl_handler: Option<Box<dyn FnMut(&str, Option<&str>, Option<&str>, bool) + 'static>>,
-    end_doctype_decl_handler: Option<Box<dyn FnMut() + 'static>>,
-    element_decl_handler: Option<Box<dyn FnMut(&str, &str) + 'static>>,
-    attlist_decl_handler: Option<Box<dyn FnMut(&str, &str, &str, Option<&str>, Option<&str>, bool) + 'static>>,
-    xml_decl_handler: Option<Box<dyn FnMut(Option<&str>, Option<&str>, Option<i32>) + 'static>>,
-    entity_decl_handler: Option<Box<dyn FnMut(&str, bool, Option<&str>, Option<&str>, Option<&str>) + 'static>>,
-    unparsed_entity_decl_handler: Option<Box<dyn FnMut(&str, Option<&str>, &str, Option<&str>) + 'static>>,
-    notation_decl_handler: Option<Box<dyn FnMut(&str, Option<&str>, &str, Option<&str>) + 'static>>,
-    start_namespace_decl_handler: Option<Box<dyn FnMut(Option<&str>, &str) + 'static>>,
-    end_namespace_decl_handler: Option<Box<dyn FnMut(Option<&str>) + 'static>>,
-    not_standalone_handler: Option<Box<dyn FnMut() -> bool + 'static>>,
-    external_entity_ref_handler: Option<Box<dyn FnMut(&str, Option<&str>, Option<&str>, Option<&str>) -> bool + 'static>>,
-    skipped_entity_handler: Option<Box<dyn FnMut(&str, bool) + 'static>>,
-    unknown_encoding_handler: Option<Box<dyn FnMut(&str) -> bool + 'static>>,
+    start_element_handler: Option<StartElementHandler>,
+    end_element_handler: Option<EndElementHandler>,
+    character_data_handler: Option<CharacterDataHandler>,
+    processing_instruction_handler: Option<ProcessingInstructionHandler>,
+    comment_handler: Option<CommentHandler>,
+    start_cdata_section_handler: Option<CdataSectionHandler>,
+    end_cdata_section_handler: Option<CdataSectionHandler>,
+    default_handler: Option<DefaultHandler>,
+    default_handler_expand: Option<DefaultHandler>,
+    start_doctype_decl_handler: Option<StartDoctypeDeclHandler>,
+    end_doctype_decl_handler: Option<EndDoctypeDeclHandler>,
+    element_decl_handler: Option<ElementDeclHandler>,
+    attlist_decl_handler: Option<AttlistDeclHandler>,
+    xml_decl_handler: Option<XmlDeclHandler>,
+    entity_decl_handler: Option<EntityDeclHandler>,
+    unparsed_entity_decl_handler: Option<UnparsedEntityDeclHandler>,
+    notation_decl_handler: Option<NotationDeclHandler>,
+    start_namespace_decl_handler: Option<NamespaceDeclHandler>,
+    end_namespace_decl_handler: Option<NamespaceDeclEndHandler>,
+    not_standalone_handler: Option<NotStandaloneHandler>,
+    external_entity_ref_handler: Option<ExternalEntityRefHandler>,
+    skipped_entity_handler: Option<SkippedEntityHandler>,
+    unknown_encoding_handler: Option<UnknownEncodingHandler>,
 }
 
 impl Parser {
@@ -533,28 +556,22 @@ impl Parser {
     ///
     /// Handler receives (element_name, attributes)
     /// where attributes is a slice of (name, value) pairs
-    pub fn set_start_element_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(&str, &[(&str, &str)]) + 'static>>,
-    ) {
+    pub fn set_start_element_handler(&mut self, handler: Option<StartElementHandler>) {
         self.start_element_handler = handler;
     }
 
     /// Set the end element handler
     ///
     /// Handler receives element_name
-    pub fn set_end_element_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(&str) + 'static>>,
-    ) {
+    pub fn set_end_element_handler(&mut self, handler: Option<EndElementHandler>) {
         self.end_element_handler = handler;
     }
 
     /// Set both start and end element handlers
     pub fn set_element_handlers(
         &mut self,
-        start: Option<Box<dyn FnMut(&str, &[(&str, &str)]) + 'static>>,
-        end: Option<Box<dyn FnMut(&str) + 'static>>,
+        start: Option<StartElementHandler>,
+        end: Option<EndElementHandler>,
     ) {
         self.start_element_handler = start;
         self.end_element_handler = end;
@@ -563,10 +580,7 @@ impl Parser {
     /// Set the character data handler
     ///
     /// Handler receives character data as &[u8]
-    pub fn set_character_data_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(&[u8]) + 'static>>,
-    ) {
+    pub fn set_character_data_handler(&mut self, handler: Option<CharacterDataHandler>) {
         self.character_data_handler = handler;
     }
 
@@ -575,7 +589,7 @@ impl Parser {
     /// Handler receives (target, data)
     pub fn set_processing_instruction_handler(
         &mut self,
-        handler: Option<Box<dyn FnMut(&str, &str) + 'static>>,
+        handler: Option<ProcessingInstructionHandler>,
     ) {
         self.processing_instruction_handler = handler;
     }
@@ -583,198 +597,137 @@ impl Parser {
     /// Set the comment handler
     ///
     /// Handler receives comment data
-    pub fn set_comment_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(&[u8]) + 'static>>,
-    ) {
+    pub fn set_comment_handler(&mut self, handler: Option<CommentHandler>) {
         self.comment_handler = handler;
     }
 
     /// Set the CDATA section handlers
     pub fn set_cdata_section_handlers(
         &mut self,
-        start: Option<Box<dyn FnMut() + 'static>>,
-        end: Option<Box<dyn FnMut() + 'static>>,
+        start: Option<CdataSectionHandler>,
+        end: Option<CdataSectionHandler>,
     ) {
         self.start_cdata_section_handler = start;
         self.end_cdata_section_handler = end;
     }
 
     /// Set the start CDATA section handler
-    pub fn set_start_cdata_section_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut() + 'static>>,
-    ) {
+    pub fn set_start_cdata_section_handler(&mut self, handler: Option<CdataSectionHandler>) {
         self.start_cdata_section_handler = handler;
     }
 
     /// Set the end CDATA section handler
-    pub fn set_end_cdata_section_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut() + 'static>>,
-    ) {
+    pub fn set_end_cdata_section_handler(&mut self, handler: Option<CdataSectionHandler>) {
         self.end_cdata_section_handler = handler;
     }
 
     /// Set the default handler
     ///
     /// Handler receives raw data as &[u8]
-    pub fn set_default_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(&[u8]) + 'static>>,
-    ) {
+    pub fn set_default_handler(&mut self, handler: Option<DefaultHandler>) {
         self.default_handler = handler;
     }
 
     /// Set the default handler (without inhibiting internal entity expansion)
-    pub fn set_default_handler_expand(
-        &mut self,
-        handler: Option<Box<dyn FnMut(&[u8]) + 'static>>,
-    ) {
+    pub fn set_default_handler_expand(&mut self, handler: Option<DefaultHandler>) {
         self.default_handler_expand = handler;
     }
 
     /// Set the DOCTYPE declaration handlers
     pub fn set_doctype_decl_handlers(
         &mut self,
-        start: Option<Box<dyn FnMut(&str, Option<&str>, Option<&str>, bool) + 'static>>,
-        end: Option<Box<dyn FnMut() + 'static>>,
+        start: Option<StartDoctypeDeclHandler>,
+        end: Option<EndDoctypeDeclHandler>,
     ) {
         self.start_doctype_decl_handler = start;
         self.end_doctype_decl_handler = end;
     }
 
     /// Set the start DOCTYPE declaration handler
-    pub fn set_start_doctype_decl_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(&str, Option<&str>, Option<&str>, bool) + 'static>>,
-    ) {
+    pub fn set_start_doctype_decl_handler(&mut self, handler: Option<StartDoctypeDeclHandler>) {
         self.start_doctype_decl_handler = handler;
     }
 
     /// Set the end DOCTYPE declaration handler
-    pub fn set_end_doctype_decl_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut() + 'static>>,
-    ) {
+    pub fn set_end_doctype_decl_handler(&mut self, handler: Option<EndDoctypeDeclHandler>) {
         self.end_doctype_decl_handler = handler;
     }
 
     /// Set the element declaration handler
     ///
     /// Handler receives (element_name, content_model)
-    pub fn set_element_decl_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(&str, &str) + 'static>>,
-    ) {
+    pub fn set_element_decl_handler(&mut self, handler: Option<ElementDeclHandler>) {
         self.element_decl_handler = handler;
     }
 
     /// Set the attribute list declaration handler
-    pub fn set_attlist_decl_handler(
-        &mut self,
-        handler: Option<
-            Box<dyn FnMut(&str, &str, &str, Option<&str>, Option<&str>, bool) + 'static>,
-        >,
-    ) {
+    pub fn set_attlist_decl_handler(&mut self, handler: Option<AttlistDeclHandler>) {
         self.attlist_decl_handler = handler;
     }
 
     /// Set the XML declaration handler
-    pub fn set_xml_decl_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(Option<&str>, Option<&str>, Option<i32>) + 'static>>,
-    ) {
+    pub fn set_xml_decl_handler(&mut self, handler: Option<XmlDeclHandler>) {
         self.xml_decl_handler = handler;
     }
 
     /// Set the entity declaration handler
-    pub fn set_entity_decl_handler(
-        &mut self,
-        handler: Option<
-            Box<
-                dyn FnMut(&str, bool, Option<&str>, Option<&str>, Option<&str>) + 'static,
-            >,
-        >,
-    ) {
+    pub fn set_entity_decl_handler(&mut self, handler: Option<EntityDeclHandler>) {
         self.entity_decl_handler = handler;
     }
 
     /// Set the unparsed entity declaration handler
     pub fn set_unparsed_entity_decl_handler(
         &mut self,
-        handler: Option<Box<dyn FnMut(&str, Option<&str>, &str, Option<&str>) + 'static>>,
+        handler: Option<UnparsedEntityDeclHandler>,
     ) {
         self.unparsed_entity_decl_handler = handler;
     }
 
     /// Set the notation declaration handler
-    pub fn set_notation_decl_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(&str, Option<&str>, &str, Option<&str>) + 'static>>,
-    ) {
+    pub fn set_notation_decl_handler(&mut self, handler: Option<NotationDeclHandler>) {
         self.notation_decl_handler = handler;
     }
 
     /// Set the namespace declaration handlers
     pub fn set_namespace_decl_handlers(
         &mut self,
-        start: Option<Box<dyn FnMut(Option<&str>, &str) + 'static>>,
-        end: Option<Box<dyn FnMut(Option<&str>) + 'static>>,
+        start: Option<NamespaceDeclHandler>,
+        end: Option<NamespaceDeclEndHandler>,
     ) {
         self.start_namespace_decl_handler = start;
         self.end_namespace_decl_handler = end;
     }
 
     /// Set the start namespace declaration handler
-    pub fn set_start_namespace_decl_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(Option<&str>, &str) + 'static>>,
-    ) {
+    pub fn set_start_namespace_decl_handler(&mut self, handler: Option<NamespaceDeclHandler>) {
         self.start_namespace_decl_handler = handler;
     }
 
     /// Set the end namespace declaration handler
-    pub fn set_end_namespace_decl_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(Option<&str>) + 'static>>,
-    ) {
+    pub fn set_end_namespace_decl_handler(&mut self, handler: Option<NamespaceDeclEndHandler>) {
         self.end_namespace_decl_handler = handler;
     }
 
     /// Set the "not standalone" handler
-    pub fn set_not_standalone_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut() -> bool + 'static>>,
-    ) {
+    pub fn set_not_standalone_handler(&mut self, handler: Option<NotStandaloneHandler>) {
         self.not_standalone_handler = handler;
     }
 
     /// Set the external entity reference handler
     pub fn set_external_entity_ref_handler(
         &mut self,
-        handler: Option<
-            Box<
-                dyn FnMut(&str, Option<&str>, Option<&str>, Option<&str>) -> bool + 'static,
-            >,
-        >,
+        handler: Option<ExternalEntityRefHandler>,
     ) {
         self.external_entity_ref_handler = handler;
     }
 
     /// Set the skipped entity handler
-    pub fn set_skipped_entity_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(&str, bool) + 'static>>,
-    ) {
+    pub fn set_skipped_entity_handler(&mut self, handler: Option<SkippedEntityHandler>) {
         self.skipped_entity_handler = handler;
     }
 
     /// Set the unknown encoding handler
-    pub fn set_unknown_encoding_handler(
-        &mut self,
-        handler: Option<Box<dyn FnMut(&str) -> bool + 'static>>,
-    ) {
+    pub fn set_unknown_encoding_handler(&mut self, handler: Option<UnknownEncodingHandler>) {
         self.unknown_encoding_handler = handler;
     }
 

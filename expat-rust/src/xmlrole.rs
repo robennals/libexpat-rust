@@ -176,9 +176,9 @@ pub struct XmlRoleState {
     pub in_entity_value: bool,
 }
 
-impl XmlRoleState {
-    pub fn new() -> Self {
-        XmlRoleState {
+impl Default for XmlRoleState {
+    fn default() -> Self {
+        Self {
             state: PrologState::Prolog0,
             level: 0,
             role_none: Role::None,
@@ -186,6 +186,12 @@ impl XmlRoleState {
             document_entity: true,
             in_entity_value: false,
         }
+    }
+}
+
+impl XmlRoleState {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn init_external_entity(&mut self) {
@@ -202,7 +208,7 @@ fn keyword_matches(text: &[u8], keyword: &str) -> bool {
     }
     text.iter()
         .zip(keyword.bytes())
-        .all(|(a, b)| a.to_ascii_uppercase() == b.to_ascii_uppercase())
+        .all(|(a, b)| a.eq_ignore_ascii_case(&b))
 }
 
 fn set_top_level(state: &mut XmlRoleState) {
