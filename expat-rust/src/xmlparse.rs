@@ -1,4 +1,7 @@
-// AI-generated API facade from expat.h — stubs with todo!()
+// AI-generated port of xmlparse.c — 1:1 function correspondence with C
+
+use crate::xmltok;
+use crate::xmltok_impl::{self, Encoding, TokenResult, XmlTok};
 
 // Type aliases for handler function types
 type StartElementHandler = Box<dyn FnMut(&str, &[(&str, &str)]) + 'static>;
@@ -411,26 +414,490 @@ impl Parser {
         self.prolog_processor();
     }
 
-    /// Prolog processor — processes XML declaration, DOCTYPE, comments, PIs
+    /// Prolog processor — corresponds to C prologProcessor()
+    /// Currently delegates to scan_buffer.
+    /// TODO: Replace with do_prolog using prolog_tok once validated.
     fn prolog_processor(&mut self) {
-        // Use existing scan_buffer which contains prolog logic
         let _ = self.scan_buffer();
-        // scan_buffer updates error_code if needed
     }
 
-    /// Content processor — processes element content
+    /// Content processor — corresponds to C contentProcessor()
+    /// Currently delegates to scan_buffer which handles both prolog and content.
+    /// TODO: Replace with do_content using tokenizer once tokenizer path is validated.
     fn content_processor(&mut self) {
-        // Use existing scan_buffer which contains content logic
         let _ = self.scan_buffer();
-        // scan_buffer updates error_code if needed
     }
 
-    /// Epilog processor — processes after root element closes
+    /// Epilog processor — corresponds to C epilogProcessor()
+    /// After root element, only whitespace, comments, and PIs are allowed
     fn epilog_processor(&mut self) {
         let data = std::mem::take(&mut self.buffer);
-        // In epilog, we expect no content, just EOF or whitespace
-        if !data.is_empty() && data.iter().any(|&b| b != b' ' && b != b'\t' && b != b'\n' && b != b'\r') {
-            self.error_code = XmlError::JunkAfterDocElement;
+        let have_more = !self.is_final;
+        let enc = xmltok::Utf8Encoding;
+        let len = data.len();
+        let mut pos = 0;
+
+        while pos < len {
+            let result = xmltok_impl::prolog_tok(&enc, &data, pos, len);
+            match result {
+                Ok(TokenResult { token, next_pos }) => {
+                    match token {
+                        XmlTok::PrologS => {
+                            pos = next_pos;
+                        }
+                        XmlTok::Comment => {
+                            self.report_comment(&enc, &data, pos, next_pos);
+                            pos = next_pos;
+                        }
+                        XmlTok::Pi => {
+                            self.report_processing_instruction(&enc, &data, pos, next_pos);
+                            pos = next_pos;
+                        }
+                        XmlTok::None => {
+                            break;
+                        }
+                        XmlTok::Partial | XmlTok::TrailingCr => {
+                            if have_more {
+                                self.buffer = data[pos..].to_vec();
+                                return;
+                            }
+                            self.error_code = XmlError::UnclosedToken;
+                            return;
+                        }
+                        XmlTok::Invalid => {
+                            self.error_code = XmlError::JunkAfterDocElement;
+                            return;
+                        }
+                        _ => {
+                            self.error_code = XmlError::JunkAfterDocElement;
+                            return;
+                        }
+                    }
+                }
+                Err(_) => {
+                    self.error_code = XmlError::JunkAfterDocElement;
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Main content parsing loop — corresponds to C doContent()
+    /// Uses content_tok from xmltok_impl to tokenize, then dispatches on token type
+    fn do_content<E: Encoding>(
+        &mut self,
+        start_tag_level: u32,
+        enc: &E,
+        data: &[u8],
+        start: usize,
+        end: usize,
+        have_more: bool,
+    ) -> (XmlError, usize) {
+        let mut pos = start;
+
+        loop {
+            let result = xmltok_impl::content_tok(enc, data, pos, end);
+            let (tok, next) = match result {
+                Ok(TokenResult { token, next_pos }) => (token, next_pos),
+                Err(err_pos) => {
+                    let _ = err_pos;
+                    return (XmlError::InvalidToken, pos);
+                }
+            };
+
+            match tok {
+                XmlTok::TrailingCr => {
+                    if have_more {
+                        return (XmlError::None, pos);
+                    }
+                    if let Some(handler) = &mut self.character_data_handler {
+                        handler(&[b'\n']);
+                    }
+                    if start_tag_level == 0 && !self.seen_root {
+                        return (XmlError::NoElements, next);
+                    }
+                    return (XmlError::None, end);
+                }
+
+                XmlTok::None => {
+                    if have_more {
+                        return (XmlError::None, pos);
+                    }
+                    if start_tag_level > 0 {
+                        if self.tag_level != start_tag_level {
+                            return (XmlError::AsyncEntity, pos);
+                        }
+                        return (XmlError::None, pos);
+                    }
+                    if !self.seen_root {
+                        return (XmlError::NoElements, pos);
+                    }
+                    return (XmlError::None, pos);
+                }
+
+                XmlTok::Invalid => {
+                    return (XmlError::InvalidToken, next);
+                }
+
+                XmlTok::Partial => {
+                    if have_more {
+                        return (XmlError::None, pos);
+                    }
+                    return (XmlError::UnclosedToken, pos);
+                }
+
+                XmlTok::PartialChar => {
+                    if have_more {
+                        return (XmlError::None, pos);
+                    }
+                    return (XmlError::PartialChar, pos);
+                }
+
+                XmlTok::EntityRef => {
+                    // Check for predefined entities first
+                    let minbpc = enc.min_bytes_per_char();
+                    let name_start = pos + minbpc; // skip '&'
+                    let name_end = next - minbpc;  // skip ';'
+                    let ch = xmltok_impl::predefined_entity_name(enc, data, name_start, name_end);
+                    if ch != 0 {
+                        if let Some(handler) = &mut self.character_data_handler {
+                            let mut buf = [0u8; 4];
+                            if let Some(c) = char::from_u32(ch as u32) {
+                                let encoded = c.encode_utf8(&mut buf);
+                                handler(encoded.as_bytes());
+                            }
+                        }
+                    } else {
+                        // General entity reference
+                        let name = std::str::from_utf8(&data[name_start..name_end]).unwrap_or("");
+                        if let Some(handler) = &mut self.skipped_entity_handler {
+                            handler(name, false);
+                        } else {
+                            // No handler and no DTD — report undefined entity
+                            // But only if standalone or no param entity refs
+                            self.error_code = XmlError::UndefinedEntity;
+                            return (XmlError::UndefinedEntity, pos);
+                        }
+                    }
+                }
+
+                XmlTok::StartTagNoAtts | XmlTok::StartTagWithAtts => {
+                    let minbpc = enc.min_bytes_per_char();
+                    let raw_name_start = pos + minbpc; // skip '<'
+                    let raw_name_len = xmltok_impl::name_length(enc, data, raw_name_start);
+                    let tag_name = std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len])
+                        .unwrap_or("");
+
+                    self.tag_level += 1;
+                    self.seen_root = true;
+
+                    // Extract attributes
+                    let attrs = if tok == XmlTok::StartTagWithAtts {
+                        self.extract_attrs(enc, data, pos, next)
+                    } else {
+                        Vec::new()
+                    };
+
+                    self.tag_stack.push(tag_name.to_string());
+
+                    if let Some(handler) = &mut self.start_element_handler {
+                        let attr_refs: Vec<(&str, &str)> =
+                            attrs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                        handler(tag_name, &attr_refs);
+                    }
+                }
+
+                XmlTok::EmptyElementNoAtts | XmlTok::EmptyElementWithAtts => {
+                    let minbpc = enc.min_bytes_per_char();
+                    let raw_name_start = pos + minbpc;
+                    let raw_name_len = xmltok_impl::name_length(enc, data, raw_name_start);
+                    let tag_name = std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len])
+                        .unwrap_or("")
+                        .to_string();
+
+                    self.seen_root = true;
+
+                    let attrs = if tok == XmlTok::EmptyElementWithAtts {
+                        self.extract_attrs(enc, data, pos, next)
+                    } else {
+                        Vec::new()
+                    };
+
+                    if let Some(handler) = &mut self.start_element_handler {
+                        let attr_refs: Vec<(&str, &str)> =
+                            attrs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                        handler(&tag_name, &attr_refs);
+                    }
+                    if let Some(handler) = &mut self.end_element_handler {
+                        handler(&tag_name);
+                    }
+
+                    // Check if root element closed (empty root element)
+                    if self.tag_level == 0 {
+                        self.root_closed = true;
+                        self.processor = Processor::Epilog;
+                        // Process epilog inline
+                        if next < end {
+                            let epilog_data = data[next..end].to_vec();
+                            self.buffer = epilog_data;
+                            self.epilog_processor();
+                        }
+                        return (self.error_code, end);
+                    }
+                }
+
+                XmlTok::EndTag => {
+                    let minbpc = enc.min_bytes_per_char();
+                    let raw_name_start = pos + minbpc * 2; // skip '</'
+                    let raw_name_len = xmltok_impl::name_length(enc, data, raw_name_start);
+                    let tag_name = std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len])
+                        .unwrap_or("");
+
+                    // Check tag mismatch
+                    if let Some(expected) = self.tag_stack.last() {
+                        if expected != tag_name {
+                            return (XmlError::TagMismatch, pos);
+                        }
+                    } else {
+                        return (XmlError::TagMismatch, pos);
+                    }
+
+                    self.tag_stack.pop();
+                    self.tag_level = self.tag_level.saturating_sub(1);
+
+                    if let Some(handler) = &mut self.end_element_handler {
+                        handler(tag_name);
+                    }
+
+                    // Check if root element closed
+                    if self.tag_level == 0 {
+                        self.root_closed = true;
+                        self.processor = Processor::Epilog;
+                        if next < end {
+                            let epilog_data = data[next..end].to_vec();
+                            self.buffer = epilog_data;
+                            self.epilog_processor();
+                        }
+                        return (self.error_code, end);
+                    }
+                }
+
+                XmlTok::CharRef => {
+                    let n = xmltok_impl::char_ref_number(enc, data, pos);
+                    if n < 0 {
+                        return (XmlError::BadCharRef, pos);
+                    }
+                    if let Some(handler) = &mut self.character_data_handler {
+                        let mut buf = [0u8; 4];
+                        if let Some(c) = char::from_u32(n as u32) {
+                            let encoded = c.encode_utf8(&mut buf);
+                            handler(encoded.as_bytes());
+                        }
+                    }
+                }
+
+                XmlTok::XmlDecl => {
+                    return (XmlError::MisplacedXmlPi, pos);
+                }
+
+                XmlTok::DataNewline => {
+                    if let Some(handler) = &mut self.character_data_handler {
+                        handler(&[b'\n']);
+                    }
+                }
+
+                XmlTok::CdataSectOpen => {
+                    if let Some(handler) = &mut self.start_cdata_section_handler {
+                        handler();
+                    }
+                    // Scan CDATA content
+                    let (cdata_err, cdata_next) = self.do_cdata_section(enc, data, next, end, have_more);
+                    if cdata_err != XmlError::None {
+                        return (cdata_err, next);
+                    }
+                    pos = cdata_next;
+                    continue; // don't update pos from next
+                }
+
+                XmlTok::TrailingRsqb => {
+                    if have_more {
+                        return (XmlError::None, pos);
+                    }
+                    if let Some(handler) = &mut self.character_data_handler {
+                        handler(&data[pos..end]);
+                    }
+                    if start_tag_level == 0 && !self.seen_root {
+                        return (XmlError::NoElements, end);
+                    }
+                    return (XmlError::None, end);
+                }
+
+                XmlTok::DataChars => {
+                    if let Some(handler) = &mut self.character_data_handler {
+                        handler(&data[pos..next]);
+                    }
+                }
+
+                XmlTok::Pi => {
+                    self.report_processing_instruction(enc, data, pos, next);
+                }
+
+                XmlTok::Comment => {
+                    self.report_comment(enc, data, pos, next);
+                }
+
+                _ => {
+                    // Unhandled token — skip
+                }
+            }
+
+            // Check parsing state after handler calls
+            match self.parsing_state {
+                ParsingState::Suspended => {
+                    return (XmlError::None, next);
+                }
+                ParsingState::Finished => {
+                    return (XmlError::Aborted, next);
+                }
+                _ => {}
+            }
+
+            pos = next;
+        }
+    }
+
+    /// Process a CDATA section — corresponds to C doCdataSection()
+    fn do_cdata_section<E: Encoding>(
+        &mut self,
+        enc: &E,
+        data: &[u8],
+        start: usize,
+        end: usize,
+        have_more: bool,
+    ) -> (XmlError, usize) {
+        let mut pos = start;
+        loop {
+            let result = xmltok_impl::cdata_section_tok(enc, data, pos, end);
+            let (tok, next) = match result {
+                Ok(TokenResult { token, next_pos }) => (token, next_pos),
+                Err(_) => return (XmlError::InvalidToken, pos),
+            };
+
+            match tok {
+                XmlTok::CdataSectClose => {
+                    if let Some(handler) = &mut self.end_cdata_section_handler {
+                        handler();
+                    }
+                    return (XmlError::None, next);
+                }
+                XmlTok::DataNewline => {
+                    if let Some(handler) = &mut self.character_data_handler {
+                        handler(&[b'\n']);
+                    }
+                }
+                XmlTok::DataChars => {
+                    if let Some(handler) = &mut self.character_data_handler {
+                        handler(&data[pos..next]);
+                    }
+                }
+                XmlTok::None | XmlTok::Partial => {
+                    if have_more {
+                        return (XmlError::None, pos);
+                    }
+                    return (XmlError::UnclosedCdataSection, pos);
+                }
+                _ => {}
+            }
+            pos = next;
+        }
+    }
+
+    /// Extract attributes from a start tag token span.
+    /// Uses get_atts from xmltok_impl.
+    fn extract_attrs<E: Encoding>(
+        &self,
+        enc: &E,
+        data: &[u8],
+        start: usize,
+        end: usize,
+    ) -> Vec<(String, String)> {
+        let max_atts = 64; // reasonable upper bound
+        let (_, atts) = xmltok_impl::get_atts(enc, data, start, max_atts);
+        atts.iter()
+            .map(|attr| {
+                let name = std::str::from_utf8(&data[attr.name..attr.name_end])
+                    .unwrap_or("")
+                    .to_string();
+                let value = std::str::from_utf8(&data[attr.value_ptr..attr.value_end])
+                    .unwrap_or("")
+                    .to_string();
+                (name, value)
+            })
+            .collect()
+    }
+
+    /// Report a processing instruction — corresponds to C reportProcessingInstruction()
+    fn report_processing_instruction<E: Encoding>(
+        &mut self,
+        enc: &E,
+        data: &[u8],
+        start: usize,
+        end: usize,
+    ) {
+        let minbpc = enc.min_bytes_per_char();
+        // PI format: <?target data?>
+        let target_start = start + minbpc * 2; // skip '<?'
+        let target_len = xmltok_impl::name_length(enc, data, target_start);
+        let target = std::str::from_utf8(&data[target_start..target_start + target_len])
+            .unwrap_or("");
+
+        // Skip whitespace after target name
+        let mut data_start = target_start + target_len;
+        let pi_end = end - minbpc * 2; // before '?>'
+        data_start = xmltok_impl::skip_s(enc, data, data_start);
+        let pi_data = if data_start < pi_end {
+            std::str::from_utf8(&data[data_start..pi_end]).unwrap_or("")
+        } else {
+            ""
+        };
+
+        if let Some(handler) = &mut self.processing_instruction_handler {
+            handler(target, pi_data);
+        }
+    }
+
+    /// Report a comment — corresponds to C reportComment()
+    fn report_comment<E: Encoding>(
+        &mut self,
+        enc: &E,
+        data: &[u8],
+        start: usize,
+        end: usize,
+    ) {
+        let minbpc = enc.min_bytes_per_char();
+        // Comment format: <!--data-->
+        let comment_start = start + minbpc * 4; // skip '<!--'
+        let comment_end = end - minbpc * 3; // before '-->'
+        let comment_data = if comment_start <= comment_end {
+            &data[comment_start..comment_end]
+        } else {
+            &[]
+        };
+        if let Some(handler) = &mut self.comment_handler {
+            handler(comment_data);
+        }
+    }
+
+    /// Report default content — corresponds to C reportDefault()
+    fn report_default<E: Encoding>(
+        &mut self,
+        _enc: &E,
+        data: &[u8],
+        start: usize,
+        end: usize,
+    ) {
+        if let Some(handler) = &mut self.default_handler {
+            handler(&data[start..end]);
         }
     }
 

@@ -2746,3 +2746,21 @@ mod tests {
         assert_eq!(atts.len(), 2);
     }
 }
+
+#[test]
+fn test_prolog_tok_instance_start() {
+    use crate::xmltok::Utf8Encoding;
+    let enc = Utf8Encoding;
+    let data = b"<doc>hello</doc>";
+    let result = prolog_tok(&enc, data, 0, data.len());
+    match result {
+        Ok(TokenResult { token, next_pos }) => {
+            eprintln!("prolog_tok returned: {:?} at {}", token, next_pos);
+            assert_eq!(token, XmlTok::InstanceStart);
+            assert_eq!(next_pos, 0); // should point to '<'
+        }
+        Err(pos) => {
+            panic!("prolog_tok failed at pos {}", pos);
+        }
+    }
+}
