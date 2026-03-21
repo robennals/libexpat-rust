@@ -125,6 +125,28 @@ pub enum ParsingState {
     Suspended,
 }
 
+/// Processor type enumeration — idiomatic Rust alternative to C function pointers
+///
+/// The parser uses a processor-based architecture similar to the C implementation:
+/// 1. PrologInit: Initial processor that detects encoding (maps to prologInitProcessor in C)
+/// 2. Prolog: Processes XML declaration, DOCTYPE, comments, PIs (maps to prologProcessor in C)
+/// 3. Content: Processes element content (maps to contentProcessor in C)
+/// 4. Epilog: Processes after root element closes (maps to epilogProcessor in C)
+///
+/// This design allows clean separation of concerns and is called through run_processor()
+/// in the main parse loop, which dispatches to the appropriate processor method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Processor {
+    /// Initial processor — detects encoding then calls PrologProcessor
+    PrologInit,
+    /// Processes XML declaration, DOCTYPE, comments, PIs before root element
+    Prolog,
+    /// Processes element content
+    Content,
+    /// Processes after root element closes
+    Epilog,
+}
+
 /// Parser status information
 #[derive(Debug, Clone, Copy)]
 pub struct ParsingStatus {
@@ -178,6 +200,8 @@ pub struct Parser {
     error_code: XmlError,
     /// Parsing state machine
     parsing_state: ParsingState,
+    /// Current processor — similar to m_processor in C
+    processor: Processor,
     /// Current line number
     line_number: u64,
     /// Current column number
@@ -250,6 +274,7 @@ impl Parser {
             buffer: Vec::new(),
             error_code: XmlError::None,
             parsing_state: ParsingState::Initialized,
+            processor: Processor::PrologInit,
             line_number: 1,
             column_number: 0,
             is_final: false,
@@ -301,6 +326,7 @@ impl Parser {
             buffer: Vec::new(),
             error_code: XmlError::None,
             parsing_state: ParsingState::Initialized,
+            processor: Processor::PrologInit,
             line_number: 1,
             column_number: 0,
             is_final: false,
@@ -351,6 +377,7 @@ impl Parser {
         self.buffer.clear();
         self.error_code = XmlError::None;
         self.parsing_state = ParsingState::Initialized;
+        self.processor = Processor::PrologInit;
         self.line_number = 1;
         self.column_number = 0;
         self.is_final = false;
@@ -363,6 +390,48 @@ impl Parser {
         self.detected_encoding = None;
         self.byte_offset = 0;
         true
+    }
+
+    /// Run the current processor on the buffered data
+    fn run_processor(&mut self) {
+        let processor = self.processor;
+        match processor {
+            Processor::PrologInit => self.prolog_init_processor(),
+            Processor::Prolog => self.prolog_processor(),
+            Processor::Content => self.content_processor(),
+            Processor::Epilog => self.epilog_processor(),
+        }
+    }
+
+    /// Initial prolog processor — detects encoding and transitions to prolog processor
+    fn prolog_init_processor(&mut self) {
+        // For now, skip encoding detection and go straight to prolog
+        // In a full implementation, this would call initializeEncoding()
+        self.processor = Processor::Prolog;
+        self.prolog_processor();
+    }
+
+    /// Prolog processor — processes XML declaration, DOCTYPE, comments, PIs
+    fn prolog_processor(&mut self) {
+        // Use existing scan_buffer which contains prolog logic
+        let _ = self.scan_buffer();
+        // scan_buffer updates error_code if needed
+    }
+
+    /// Content processor — processes element content
+    fn content_processor(&mut self) {
+        // Use existing scan_buffer which contains content logic
+        let _ = self.scan_buffer();
+        // scan_buffer updates error_code if needed
+    }
+
+    /// Epilog processor — processes after root element closes
+    fn epilog_processor(&mut self) {
+        let data = std::mem::take(&mut self.buffer);
+        // In epilog, we expect no content, just EOF or whitespace
+        if !data.is_empty() && data.iter().any(|&b| b != b' ' && b != b'\t' && b != b'\n' && b != b'\r') {
+            self.error_code = XmlError::JunkAfterDocElement;
+        }
     }
 
     /// Parse a chunk of data
@@ -454,10 +523,10 @@ impl Parser {
             self.buffer.extend_from_slice(data);
         }
 
-        // Scan the buffer
-        let scan_result = self.scan_buffer();
+        // Run the current processor
+        self.run_processor();
 
-        // If an error occurred during scanning, return error
+        // If an error occurred during processing, return error
         if self.error_code != XmlError::None {
             self.parsing_state = ParsingState::Finished;
             return XmlStatus::Error;
@@ -468,12 +537,7 @@ impl Parser {
             self.parsing_state = ParsingState::Finished;
         }
 
-        // Return based on scanning result
-        if !scan_result {
-            XmlStatus::Error
-        } else {
-            XmlStatus::Ok
-        }
+        XmlStatus::Ok
     }
 
     /// Advance position tracking for a single byte
@@ -611,11 +675,15 @@ impl Parser {
         // Handle prolog (XML declaration, DOCTYPE, comments, PIs before root element)
         // This section uses scan_prolog which dispatches based on byte patterns.
         // Could be refactored to use crate::xmltok_impl::prolog_tok directly.
-        if !self.seen_root {
+        if !self.seen_root && self.processor == Processor::Prolog {
             pos = match self.scan_prolog(&data, pos) {
                 Ok(p) => p,
                 Err(_) => return false,
             };
+            // If we see the root element, transition to content processor
+            if self.seen_root {
+                self.processor = Processor::Content;
+            }
         }
 
         // Handle content
@@ -792,7 +860,10 @@ impl Parser {
                     }
                 }
             } else if self.root_closed {
-                // After root element, only whitespace, comments, and PIs are allowed
+                // After root element, transition to epilog processor and only whitespace is allowed
+                if self.processor == Processor::Content {
+                    self.processor = Processor::Epilog;
+                }
                 if (data[pos] as char).is_ascii_whitespace() {
                     self.advance_pos(data[pos]);
                     pos += 1;

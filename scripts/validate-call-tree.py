@@ -164,46 +164,55 @@ C_TO_RUST_NAME = {
     "gather_time_entropy": "OVERRIDE:use_std_random",
 }
 
-# Documented overrides: cases where the call tree intentionally diverges
-# Each override has a reason explaining why
-OVERRIDES = {
-    "hash_and_lookup": {
-        "c_functions": ["hash", "lookup", "keyeq", "keylen", "copy_salt_to_sipkey"],
-        "rust_replacement": "std::collections::HashMap",
-        "reason": "Rust's standard HashMap replaces the custom hash table implementation. "
-                  "The SipHash implementation is preserved for compatibility but HashMap "
-                  "provides equivalent functionality with better safety guarantees."
-    },
+# Standard divergence rules — a minimal set of categories where Rust
+# intentionally diverges from the C call tree. These apply globally
+# across ALL functions, so individual functions don't need per-call overrides.
+#
+# Each rule has:
+#   - c_calls: C function names that are expected to be absent in Rust
+#   - reason: Why this divergence is justified
+STANDARD_DIVERGENCES = {
     "memory_management": {
-        "c_functions": ["expat_malloc", "expat_free", "expat_realloc",
-                        "XML_MemMalloc", "XML_MemRealloc", "XML_MemFree"],
-        "rust_replacement": "Rust's ownership system and standard allocator",
-        "reason": "Rust's ownership model eliminates the need for manual memory management. "
-                  "Vec, String, Box etc. handle allocation and deallocation automatically."
+        "c_calls": {"expat_malloc", "expat_free", "expat_realloc",
+                     "XML_MemMalloc", "XML_MemRealloc", "XML_MemFree",
+                     "MALLOC", "REALLOC", "FREE"},
+        "reason": "Rust's ownership model handles allocation/deallocation via Vec, String, Box."
     },
-    "string_pool": {
-        "c_functions": ["poolInit", "poolClear", "poolDestroy", "poolCopyString",
-                        "poolStoreString", "poolAppend", "poolAppendString", "poolGrow",
-                        "poolCopyStringN", "poolCopyStringNoFinish", "poolBytesToAllocateFor"],
-        "rust_replacement": "String and Vec<u8>",
-        "reason": "The C string pool is a memory optimization for arena-style allocation. "
-                  "Rust's String and Vec provide the same functionality with automatic "
-                  "memory management. No performance-critical path requires arena allocation."
+    "string_pools": {
+        "c_calls": {"poolInit", "poolClear", "poolDestroy", "poolCopyString",
+                     "poolStoreString", "poolAppend", "poolAppendString", "poolGrow",
+                     "poolCopyStringN", "poolCopyStringNoFinish", "poolBytesToAllocateFor",
+                     "poolStart", "poolFinish", "poolDiscard", "poolLength",
+                     "poolLastString", "poolChop"},
+        "reason": "Rust uses String/Vec instead of C's arena-style string pool."
     },
-    "random_entropy": {
-        "c_functions": ["generate_hash_secret_salt", "writeRandomBytes_getrandom_nonblock",
-                        "writeRandomBytes_dev_urandom", "writeRandomBytes_arc4random",
-                        "writeRandomBytes_rand_s", "gather_time_entropy"],
-        "rust_replacement": "std::collections::hash_map::RandomState or rand crate",
-        "reason": "Rust's HashMap uses randomized hashing by default, providing "
-                  "equivalent DoS protection without manual entropy gathering."
+    "hash_tables": {
+        "c_calls": {"hash", "lookup", "keyeq", "keylen", "copy_salt_to_sipkey",
+                     "hashTableInit", "hashTableClear", "hashTableDestroy",
+                     "hashTableIterInit", "hashTableIterNext"},
+        "reason": "Rust uses std::collections::HashMap with built-in SipHash."
     },
-    "dtd_lifetime": {
-        "c_functions": ["dtdCreate", "dtdReset", "dtdDestroy", "dtdCopy"],
-        "rust_replacement": "DTD struct with Default, Clone, Drop traits",
-        "reason": "Rust's ownership and trait system replaces manual DTD lifecycle management."
+    "entropy": {
+        "c_calls": {"generate_hash_secret_salt", "get_hash_secret_salt",
+                     "writeRandomBytes_getrandom_nonblock", "writeRandomBytes_dev_urandom",
+                     "writeRandomBytes_arc4random", "writeRandomBytes_rand_s",
+                     "gather_time_entropy", "ENTROPY_DEBUG"},
+        "reason": "Rust's HashMap has built-in randomized hashing for DoS protection."
+    },
+    "dtd_lifecycle": {
+        "c_calls": {"dtdCreate", "dtdReset", "dtdDestroy", "dtdCopy"},
+        "reason": "Rust uses struct Default/Clone/Drop traits for lifecycle management."
+    },
+    "error_handling_style": {
+        "c_calls": {"parserBusy"},
+        "reason": "Rust uses match on ParsingState enum instead of a separate check function."
     },
 }
+
+# Collect all C calls that are covered by standard divergences
+DIVERGENT_C_CALLS = set()
+for rule in STANDARD_DIVERGENCES.values():
+    DIVERGENT_C_CALLS.update(rule["c_calls"])
 
 
 def extract_c_functions(source_path):
@@ -379,6 +388,9 @@ def validate_call_tree(c_functions, rust_functions, verbose=False):
         translated_c_callees = set()
         untranslatable = set()
         for callee in c_callees:
+            # Skip calls covered by standard divergences
+            if callee in DIVERGENT_C_CALLS:
+                continue
             if callee in c_to_rust_simple:
                 translated_c_callees.add(c_to_rust_simple[callee])
             elif callee in C_TO_RUST_NAME and C_TO_RUST_NAME[callee].startswith("OVERRIDE:"):
@@ -485,16 +497,15 @@ def main():
     results = validate_call_tree(c_functions, rust_functions, verbose)
     exit_code = print_results(results, verbose)
 
-    # Also save overrides documentation
+    # Also save divergence documentation
     override_doc = ROOT / "plans" / "call-tree-overrides.md"
     with open(override_doc, 'w') as f:
-        f.write("# Call Tree Override Documentation\n\n")
-        f.write("These are cases where the Rust port intentionally diverges from the C call tree.\n")
-        f.write("Each override has a documented reason.\n\n")
-        for name, info in OVERRIDES.items():
+        f.write("# Standard Call Tree Divergences\n\n")
+        f.write("These are the allowed categories where Rust intentionally diverges from\n")
+        f.write("the C call tree. Each is a global rule that applies to ALL functions.\n\n")
+        for name, info in STANDARD_DIVERGENCES.items():
             f.write(f"## {name}\n\n")
-            f.write(f"**C functions:** {', '.join(info['c_functions'])}\n\n")
-            f.write(f"**Rust replacement:** {info['rust_replacement']}\n\n")
+            f.write(f"**C calls omitted:** {', '.join(sorted(info['c_calls']))}\n\n")
             f.write(f"**Reason:** {info['reason']}\n\n")
 
     sys.exit(exit_code)

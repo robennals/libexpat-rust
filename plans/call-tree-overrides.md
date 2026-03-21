@@ -1,45 +1,41 @@
-# Call Tree Override Documentation
+# Standard Call Tree Divergences
 
-These are cases where the Rust port intentionally diverges from the C call tree.
-Each override has a documented reason.
-
-## hash_and_lookup
-
-**C functions:** hash, lookup, keyeq, keylen, copy_salt_to_sipkey
-
-**Rust replacement:** std::collections::HashMap
-
-**Reason:** Rust's standard HashMap replaces the custom hash table implementation. The SipHash implementation is preserved for compatibility but HashMap provides equivalent functionality with better safety guarantees.
+These are the allowed categories where Rust intentionally diverges from
+the C call tree. Each is a global rule that applies to ALL functions.
 
 ## memory_management
 
-**C functions:** expat_malloc, expat_free, expat_realloc, XML_MemMalloc, XML_MemRealloc, XML_MemFree
+**C calls omitted:** FREE, MALLOC, REALLOC, XML_MemFree, XML_MemMalloc, XML_MemRealloc, expat_free, expat_malloc, expat_realloc
 
-**Rust replacement:** Rust's ownership system and standard allocator
+**Reason:** Rust's ownership model handles allocation/deallocation via Vec, String, Box.
 
-**Reason:** Rust's ownership model eliminates the need for manual memory management. Vec, String, Box etc. handle allocation and deallocation automatically.
+## string_pools
 
-## string_pool
+**C calls omitted:** poolAppend, poolAppendString, poolBytesToAllocateFor, poolChop, poolClear, poolCopyString, poolCopyStringN, poolCopyStringNoFinish, poolDestroy, poolDiscard, poolFinish, poolGrow, poolInit, poolLastString, poolLength, poolStart, poolStoreString
 
-**C functions:** poolInit, poolClear, poolDestroy, poolCopyString, poolStoreString, poolAppend, poolAppendString, poolGrow, poolCopyStringN, poolCopyStringNoFinish, poolBytesToAllocateFor
+**Reason:** Rust uses String/Vec instead of C's arena-style string pool.
 
-**Rust replacement:** String and Vec<u8>
+## hash_tables
 
-**Reason:** The C string pool is a memory optimization for arena-style allocation. Rust's String and Vec provide the same functionality with automatic memory management. No performance-critical path requires arena allocation.
+**C calls omitted:** copy_salt_to_sipkey, hash, hashTableClear, hashTableDestroy, hashTableInit, hashTableIterInit, hashTableIterNext, keyeq, keylen, lookup
 
-## random_entropy
+**Reason:** Rust uses std::collections::HashMap with built-in SipHash.
 
-**C functions:** generate_hash_secret_salt, writeRandomBytes_getrandom_nonblock, writeRandomBytes_dev_urandom, writeRandomBytes_arc4random, writeRandomBytes_rand_s, gather_time_entropy
+## entropy
 
-**Rust replacement:** std::collections::hash_map::RandomState or rand crate
+**C calls omitted:** ENTROPY_DEBUG, gather_time_entropy, generate_hash_secret_salt, get_hash_secret_salt, writeRandomBytes_arc4random, writeRandomBytes_dev_urandom, writeRandomBytes_getrandom_nonblock, writeRandomBytes_rand_s
 
-**Reason:** Rust's HashMap uses randomized hashing by default, providing equivalent DoS protection without manual entropy gathering.
+**Reason:** Rust's HashMap has built-in randomized hashing for DoS protection.
 
-## dtd_lifetime
+## dtd_lifecycle
 
-**C functions:** dtdCreate, dtdReset, dtdDestroy, dtdCopy
+**C calls omitted:** dtdCopy, dtdCreate, dtdDestroy, dtdReset
 
-**Rust replacement:** DTD struct with Default, Clone, Drop traits
+**Reason:** Rust uses struct Default/Clone/Drop traits for lifecycle management.
 
-**Reason:** Rust's ownership and trait system replaces manual DTD lifecycle management.
+## error_handling_style
+
+**C calls omitted:** parserBusy
+
+**Reason:** Rust uses match on ParsingState enum instead of a separate check function.
 
