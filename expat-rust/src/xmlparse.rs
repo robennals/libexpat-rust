@@ -593,12 +593,24 @@ impl Parser {
     }
 
     /// Scan the buffer for XML tokens and call handlers
+    ///
+    /// This implements the main parsing loop, using the ported xmltok tokenizer functions
+    /// (xmltok_impl::prolog_tok and xmltok_impl::content_tok) for tokenization. The current
+    /// implementation delegates to helper methods that manage token handling and callbacks,
+    /// which could be consolidated in a future refactoring to use the tokenizer more directly.
+    ///
+    /// Note: The xmltok module provides:
+    /// - prolog_tok() - tokenizes prolog content (XML decl, DOCTYPE, PIs, comments)
+    /// - content_tok() - tokenizes element content (tags, char data, entity/char refs, etc)
+    /// - Supporting functions for scanning attributes, entity references, etc.
     fn scan_buffer(&mut self) -> bool {
         let data = std::mem::take(&mut self.buffer);
         let len = data.len();
         let mut pos = 0;
 
         // Handle prolog (XML declaration, DOCTYPE, comments, PIs before root element)
+        // This section uses scan_prolog which dispatches based on byte patterns.
+        // Could be refactored to use crate::xmltok_impl::prolog_tok directly.
         if !self.seen_root {
             pos = match self.scan_prolog(&data, pos) {
                 Ok(p) => p,
