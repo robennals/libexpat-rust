@@ -1332,7 +1332,12 @@ impl Parser {
         have_more: bool,
     ) -> (XmlError, usize) {
         let mut pos = start;
+        let mut iterations = 0;
         loop {
+            iterations += 1;
+            if iterations > 10_000_000 {
+                return (XmlError::UnexpectedState, pos);
+            }
             let result = xmltok_impl::cdata_section_tok(enc, data, pos, end);
             let (tok, next) = match result {
                 Ok(TokenResult { token, next_pos }) => (token, next_pos),
