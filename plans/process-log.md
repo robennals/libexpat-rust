@@ -78,8 +78,30 @@
 3. **For analysis**: "Read [files], return summary of [specific questions]. Do NOT write files."
 4. **Always include**: Exact file paths, verification commands, clear success criteria
 
+### Phase 2.2: Port xmlrole.c (Layer 1)
+**Method: Haiku subagent (background)**
+- Ported 1255 lines C → 1227 lines idiomatic Rust
+- State machine → Rust enum + match dispatch
+- **Model: Haiku worked** — clean state machine is a natural fit
+- **Key: Running as background agent** while other work proceeded in parallel
+
+### Phase 0.3: Test Translation Pipeline
+**Method: Scripts + Haiku subagents**
+- Built `scripts/extract-c-tests.py` — extracts all 391 tests to JSON descriptors
+- Built `scripts/prepare-test-translation-prompt.py` — generates prompts for AI agents
+- Generated Rust API facade (xmlparse.rs) with todo!() stubs — tests compile against this
+- Launched parallel haiku agents for misc_tests (22) and ns_tests (33) translation
+- **Pipeline**: extract JSON → generate prompt → haiku translates → cargo check validates
+
+### Phase 2.1: Tokenizer Analysis
+**Method: Haiku subagent (research-only)**
+- Analyzed xmltok_impl.c structure: 28 functions, template file included 3x
+- Identified trait-based Rust design (generic over encoding)
+- Currently testing Haiku on this — it's the complexity threshold test
+
 ### What to Try Next
 
-- **Phase 2**: Port xmlrole.c (state machine) with Haiku first, see if quality holds
-- **Phase 0.3**: Build test translation pipeline — this is the critical-path tool
-- Try Haiku for translating simple C tests (misc_tests.c first)
+- **Verify tokenizer port quality** — if Haiku fails, escalate to Sonnet
+- **Translate basic_tests.c** — 244 tests in batches
+- **Port xmltok.c** (front-end, depends on xmltok_impl)
+- **Start implementing actual parser logic** in xmlparse.rs (replace todo!() stubs)
