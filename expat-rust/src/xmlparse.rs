@@ -1,6 +1,5 @@
 // AI-generated port of xmlparse.c — 1:1 function correspondence with C
 
-use crate::xmlrole::{self, Role, XmlRoleState};
 use crate::xmltok;
 use crate::xmltok_impl::{self, Encoding, TokenResult, XmlTok};
 
@@ -251,8 +250,6 @@ pub struct Parser {
     detected_encoding: Option<String>,
     /// Total byte offset in input (for tracking position across parse calls)
     byte_offset: u64,
-    /// Prolog state machine — corresponds to C's m_prologState
-    prolog_state: XmlRoleState,
 
     // Handler fields
     start_element_handler: Option<StartElementHandler>,
@@ -310,7 +307,6 @@ impl Parser {
             seen_xml_decl: false,
             detected_encoding: None,
             byte_offset: 0,
-            prolog_state: XmlRoleState::default(),
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -366,7 +362,6 @@ impl Parser {
             seen_xml_decl: false,
             detected_encoding: None,
             byte_offset: 0,
-            prolog_state: XmlRoleState::default(),
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -415,7 +410,6 @@ impl Parser {
         self.seen_xml_decl = false;
         self.detected_encoding = None;
         self.byte_offset = 0;
-        self.prolog_state = XmlRoleState::default();
         true
     }
 
@@ -439,34 +433,10 @@ impl Parser {
     }
 
     /// Prolog processor — corresponds to C prologProcessor()
-    /// Uses prolog_tok + xml_token_role, matching C exactly.
+    /// Currently delegates to scan_buffer.
+    /// TODO: Replace with do_prolog using prolog_tok once validated.
     fn prolog_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            if self.is_final {
-                self.error_code = XmlError::NoElements;
-            }
-            return;
-        }
-        let have_more = !self.is_final;
-        let enc = xmltok::Utf8Encoding;
-
-        let (error, next_pos) = self.do_prolog(&enc, &data, 0, data.len(), have_more);
-
-        // Only update position if we didn't transition to content_processor
-        // (content_processor handles its own position tracking)
-        if self.processor == Processor::Prolog {
-            self.update_position_from_data(&enc, &data, 0, next_pos);
-        }
-        self.event_pos = next_pos;
-
-        if error != XmlError::None {
-            self.error_code = error;
-        }
-
-        if next_pos < data.len() && error == XmlError::None {
-            self.buffer = data[next_pos..].to_vec();
-        }
+        let _ = self.scan_buffer();
     }
 
     /// Content processor — corresponds to C contentProcessor()
@@ -484,9 +454,10 @@ impl Parser {
 
         let (error, next_pos) = self.do_content(0, &enc, &data, 0, data.len(), have_more);
 
-        // Update position tracking — corresponds to C's XmlUpdatePosition
-        self.update_position_from_data(&enc, &data, 0, next_pos);
-        self.event_pos = next_pos;
+        // Set event_pos for successful completion too (for position query after parse)
+        if error == XmlError::None {
+            self.event_pos = next_pos;
+        }
 
         if error != XmlError::None {
             self.error_code = error;
@@ -549,232 +520,6 @@ impl Parser {
                     return;
                 }
             }
-        }
-    }
-
-    /// Convert XmlTok to xmlrole::Token for the role state machine
-    fn xmltok_to_role_token(tok: XmlTok) -> xmlrole::Token {
-        match tok {
-            XmlTok::PrologS => xmlrole::Token::PrologS,
-            XmlTok::XmlDecl => xmlrole::Token::XmlDecl,
-            XmlTok::Pi => xmlrole::Token::Pi,
-            XmlTok::Comment => xmlrole::Token::Comment,
-            XmlTok::Bom => xmlrole::Token::Bom,
-            XmlTok::DeclOpen => xmlrole::Token::DeclOpen,
-            XmlTok::InstanceStart => xmlrole::Token::InstanceStart,
-            XmlTok::Name => xmlrole::Token::Name,
-            XmlTok::PrefixedName => xmlrole::Token::PrefixedName,
-            XmlTok::OpenBracket => xmlrole::Token::OpenBracket,
-            XmlTok::DeclClose => xmlrole::Token::DeclarationClose,
-            XmlTok::Literal => xmlrole::Token::Literal,
-            XmlTok::Percent => xmlrole::Token::Percent,
-            XmlTok::CloseBracket => xmlrole::Token::CloseBracket,
-            XmlTok::CondSectOpen => xmlrole::Token::CondSectOpen,
-            XmlTok::CondSectClose => xmlrole::Token::CondSectClose,
-            XmlTok::Nmtoken => xmlrole::Token::Nmtoken,
-            XmlTok::OpenParen => xmlrole::Token::OpenParen,
-            XmlTok::CloseParen => xmlrole::Token::CloseParen,
-            XmlTok::Or => xmlrole::Token::Or,
-            XmlTok::PoundName => xmlrole::Token::PoundName,
-            XmlTok::NameQuestion => xmlrole::Token::NameQuestion,
-            XmlTok::NameAsterisk => xmlrole::Token::NameAsterix,
-            XmlTok::NamePlus => xmlrole::Token::NamePlus,
-            XmlTok::CloseParenAsterisk => xmlrole::Token::CloseParenAsterix,
-            XmlTok::CloseParenQuestion => xmlrole::Token::CloseParenQuestion,
-            XmlTok::CloseParenPlus => xmlrole::Token::CloseParenPlus,
-            XmlTok::Comma => xmlrole::Token::Comma,
-            XmlTok::None => xmlrole::Token::None,
-            XmlTok::ParamEntityRef => xmlrole::Token::ParamEntityRef,
-            _ => xmlrole::Token::None,
-        }
-    }
-
-    /// Process XML declaration token — corresponds to C processXmlDecl()
-    /// Uses parse_xml_decl from xmltok module
-    fn process_xml_decl_token(&mut self, data: &[u8], pos: usize, next: usize) -> XmlError {
-        let decl_data = &data[pos..next];
-        match xmltok::parse_xml_decl(decl_data, false) {
-            Ok(info) => {
-                // Extract version
-                let version = if info.version_end > info.version_start {
-                    std::str::from_utf8(&decl_data[info.version_start..info.version_end]).ok()
-                } else {
-                    None
-                };
-
-                // Extract encoding
-                let encoding = if info.encoding_end > info.encoding_start {
-                    std::str::from_utf8(&decl_data[info.encoding_start..info.encoding_end]).ok()
-                } else {
-                    None
-                };
-
-                // Validate encoding if declared
-                if let Some(enc_name) = encoding {
-                    let enc_upper = enc_name.to_uppercase();
-                    if enc_upper == "UTF-16" && self.detected_encoding.is_none() {
-                        return XmlError::IncorrectEncoding;
-                    }
-                    if !is_known_encoding(&enc_upper) {
-                        // Try unknown encoding handler
-                        let mut handled = false;
-                        if let Some(handler) = &mut self.unknown_encoding_handler {
-                            handled = handler(enc_name);
-                        }
-                        if !handled {
-                            return XmlError::UnknownEncoding;
-                        }
-                    }
-                }
-
-                // Call XML declaration handler
-                let standalone_int = info.standalone.map(|b| if b { 1 } else { 0 });
-                if let Some(handler) = &mut self.xml_decl_handler {
-                    handler(version, encoding, standalone_int);
-                }
-
-                XmlError::None
-            }
-            Err(_) => XmlError::XmlDecl,
-        }
-    }
-
-    /// Prolog parsing loop — corresponds to C doProlog()
-    /// Uses prolog_tok from xmltok_impl + xml_token_role from xmlrole
-    fn do_prolog<E: Encoding>(
-        &mut self,
-        enc: &E,
-        data: &[u8],
-        start: usize,
-        end: usize,
-        have_more: bool,
-    ) -> (XmlError, usize) {
-        let mut pos = start;
-
-        loop {
-            let result = xmltok_impl::prolog_tok(enc, data, pos, end);
-            let (tok, mut next) = match result {
-                Ok(TokenResult { token, next_pos }) => (token, next_pos),
-                Err(err_pos) => {
-                    self.event_pos = err_pos;
-                    return (XmlError::InvalidToken, err_pos);
-                }
-            };
-
-            // Handle negative/error tokens (C: if (tok <= 0))
-            if (tok as i32) <= 0 {
-                if have_more && tok != XmlTok::Invalid {
-                    return (XmlError::None, pos);
-                }
-                match tok {
-                    XmlTok::Invalid => {
-                        self.event_pos = next;
-                        return (XmlError::InvalidToken, next);
-                    }
-                    XmlTok::Partial => {
-                        return (XmlError::UnclosedToken, pos);
-                    }
-                    XmlTok::PartialChar => {
-                        return (XmlError::PartialChar, pos);
-                    }
-                    XmlTok::None => {
-                        return (XmlError::NoElements, pos);
-                    }
-                    _ => {
-                        next = end;
-                    }
-                }
-            }
-
-            // Get prolog role
-            let role_tok = Self::xmltok_to_role_token(tok);
-            let tok_data = if pos < data.len() { &data[pos..] } else { &[] };
-            let next_data = if next <= data.len() { &data[..next] } else { &[] };
-            let role = xmlrole::xml_token_role(
-                &mut self.prolog_state,
-                role_tok,
-                tok_data,
-                next_data,
-            );
-
-            match role {
-                Role::XmlDecl => {
-                    let err = self.process_xml_decl_token(data, pos, next);
-                    if err != XmlError::None {
-                        self.event_pos = pos;
-                        return (err, pos);
-                    }
-                    self.seen_xml_decl = true;
-                }
-
-                Role::DoctypeName => {
-                    // Store for doctype handler
-                    if self.start_doctype_decl_handler.is_some() {
-                        // Temp store doctype name
-                    }
-                }
-
-                Role::DoctypeInternalSubset => {
-                    if let Some(handler) = &mut self.start_doctype_decl_handler {
-                        handler("", None, None, true);
-                    }
-                }
-
-                Role::DoctypeClose => {
-                    if let Some(handler) = &mut self.end_doctype_decl_handler {
-                        handler();
-                    }
-                }
-
-                Role::DoctypeNone => {
-                    if let Some(handler) = &mut self.start_doctype_decl_handler {
-                        handler("", None, None, false);
-                    }
-                }
-
-                Role::InstanceStart => {
-                    // Transition to content processor
-                    self.processor = Processor::Content;
-                    self.buffer = data[next..end].to_vec();
-                    self.content_processor();
-                    return (self.error_code, end);
-                }
-
-                Role::Pi => {
-                    self.report_processing_instruction(enc, data, pos, next);
-                    // Default handler fallback
-                    if self.processing_instruction_handler.is_none() {
-                        if let Some(handler) = &mut self.default_handler {
-                            handler(&data[pos..next]);
-                        }
-                    }
-                }
-
-                Role::Comment => {
-                    self.report_comment(enc, data, pos, next);
-                    if self.comment_handler.is_none() {
-                        if let Some(handler) = &mut self.default_handler {
-                            handler(&data[pos..next]);
-                        }
-                    }
-                }
-
-                Role::Error => {
-                    self.event_pos = pos;
-                    return (XmlError::Syntax, pos);
-                }
-
-                _ => {
-                    // All other prolog roles (entity decls, attlist decls, etc.)
-                    // Not yet implemented — skip silently
-                    // Call default handler if set
-                    if let Some(handler) = &mut self.default_handler {
-                        handler(&data[pos..next]);
-                    }
-                }
-            }
-
-            pos = next;
         }
     }
 
@@ -1108,17 +853,6 @@ impl Parser {
                 _ => {}
             }
             pos = next;
-        }
-    }
-
-    /// Update line/column tracking from data span — corresponds to C's XmlUpdatePosition
-    fn update_position_from_data<E: Encoding>(&mut self, enc: &E, data: &[u8], start: usize, end: usize) {
-        let pos = xmltok_impl::update_position(enc, data, start, end);
-        if pos.line_number > 0 {
-            self.line_number += pos.line_number as u64;
-            self.column_number = pos.column_number as u64;
-        } else {
-            self.column_number += pos.column_number as u64;
         }
     }
 
