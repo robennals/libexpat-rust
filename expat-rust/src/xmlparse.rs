@@ -656,13 +656,61 @@ impl Parser {
     ) -> XmlError {
         match role {
             Role::XmlDecl => {
-                // Process XML declaration
+                // Process XML declaration — matches C processXmlDecl()
                 if self.seen_xml_decl || self.byte_offset > 0 {
                     return XmlError::MisplacedXmlPi;
                 }
                 self.seen_xml_decl = true;
-                // TODO: parse the actual declaration using xmltok::parse_xml_decl
-                XmlError::None
+
+                let decl_data = &data[pos..next];
+                match xmltok::parse_xml_decl(decl_data, false) {
+                    Ok(info) => {
+                        // Extract version string
+                        let version_str = if info.version_end > info.version_start {
+                            Some(std::str::from_utf8(&decl_data[info.version_start..info.version_end])
+                                .unwrap_or("").to_string())
+                        } else {
+                            None
+                        };
+
+                        // Extract encoding string
+                        let encoding_str = if info.encoding_end > info.encoding_start {
+                            Some(std::str::from_utf8(&decl_data[info.encoding_start..info.encoding_end])
+                                .unwrap_or("").to_string())
+                        } else {
+                            None
+                        };
+
+                        // Handle standalone (C sets parser->m_dtd->standalone)
+                        // TODO: add DTD standalone field when DTD is fully implemented
+
+                        // Call xml_decl_handler if set
+                        if let Some(handler) = &mut self.xml_decl_handler {
+                            handler(
+                                version_str.as_deref(),
+                                encoding_str.as_deref(),
+                                info.standalone.map(|s| if s { 1 } else { 0 }),
+                            );
+                        }
+
+                        // Check encoding matches what we detected
+                        if let Some(ref enc_name) = encoding_str {
+                            let upper = enc_name.to_uppercase();
+                            if upper == "UTF-16" || upper == "UTF-16LE" || upper == "UTF-16BE" {
+                                // UTF-16 declared in what we're parsing as UTF-8 → error
+                                if self.detected_encoding.is_none() {
+                                    self.event_pos = pos;
+                                    return XmlError::IncorrectEncoding;
+                                }
+                            }
+                        }
+                        XmlError::None
+                    }
+                    Err(_err_pos) => {
+                        self.event_pos = pos;
+                        XmlError::XmlDecl
+                    }
+                }
             }
             Role::DoctypeName => {
                 // Store DOCTYPE name for subsequent roles
