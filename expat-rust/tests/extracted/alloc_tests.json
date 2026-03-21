@@ -1,0 +1,616 @@
+{
+  "source_file": "expat/tests/alloc_tests.c",
+  "test_count": 61,
+  "helper_count": 2,
+  "tests": [
+    {
+      "name": "test_alloc_parse_xdecl",
+      "body": "START_TEST(test_alloc_parse_xdecl) {\n  const char *text = \"<?xml version='1.0' encoding='utf-8'?>\\n\"\n                     \"<doc>Hello, world</doc>\";\n  int i;\n  const int max_alloc_count = 15;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetXmlDeclHandler(g_parser, dummy_xdecl_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* Resetting the parser is insufficient, because some memory\n     * allocations are cached within the parser.  Instead we use\n     * the teardown and setup routines to ensure that we have the\n     * right sort of parser back in our hands.\n     */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed with max allocations\");\n}\nEND_TEST",
+      "line_start": 83,
+      "line_end": 108,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_parse_xdecl_2",
+      "body": "START_TEST(test_alloc_parse_xdecl_2) {\n  const char *text\n      = \"<?xml version='1.0' encoding='\"\n        /* Each line is 64 characters */\n        \"ThisIsAStupidlyLongEncodingNameIntendedToTriggerPoolGrowth123456\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMN\"\n        \"'?>\"\n        \"<doc>Hello, world</doc>\";\n  int i;\n  const int max_alloc_count = 20;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetXmlDeclHandler(g_parser, dummy_xdecl_handler);\n    XML_SetUnknownEncodingHandler(g_parser, long_encoding_handler, NULL);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed with max allocations\");\n}\nEND_TEST",
+      "line_start": 113,
+      "line_end": 154,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_parse_pi",
+      "body": "START_TEST(test_alloc_parse_pi) {\n  const char *text = \"<?xml version='1.0' encoding='utf-8'?>\\n\"\n                     \"<?pi unknown?>\\n\"\n                     \"<doc>\"\n                     \"Hello, world\"\n                     \"</doc>\";\n  int i;\n  const int max_alloc_count = 15;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetProcessingInstructionHandler(g_parser, dummy_pi_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed with max allocations\");\n}\nEND_TEST",
+      "line_start": 157,
+      "line_end": 181,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_parse_pi_2",
+      "body": "START_TEST(test_alloc_parse_pi_2) {\n  const char *text = \"<?xml version='1.0' encoding='utf-8'?>\\n\"\n                     \"<doc>\"\n                     \"Hello, world\"\n                     \"<?pi unknown?>\\n\"\n                     \"</doc>\";\n  int i;\n  const int max_alloc_count = 15;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetProcessingInstructionHandler(g_parser, dummy_pi_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed with max allocations\");\n}\nEND_TEST",
+      "line_start": 183,
+      "line_end": 207,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_parse_pi_3",
+      "body": "START_TEST(test_alloc_parse_pi_3) {\n  const char *text\n      = \"<?\"\n        /* 64 characters per line */\n        \"This processing instruction should be long enough to ensure that\"\n        \"it triggers the growth of an internal string pool when the      \"\n        \"allocator fails at a cruicial moment FGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"Q?><doc/>\";\n  int i;\n  const int max_alloc_count = 20;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetProcessingInstructionHandler(g_parser, dummy_pi_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed with max allocations\");\n}\nEND_TEST",
+      "line_start": 209,
+      "line_end": 248,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_parse_comment",
+      "body": "START_TEST(test_alloc_parse_comment) {\n  const char *text = \"<?xml version='1.0' encoding='utf-8'?>\\n\"\n                     \"<!-- Test parsing this comment -->\"\n                     \"<doc>Hi</doc>\";\n  int i;\n  const int max_alloc_count = 15;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetCommentHandler(g_parser, dummy_comment_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed with max allocations\");\n}\nEND_TEST",
+      "line_start": 250,
+      "line_end": 272,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_parse_comment_2",
+      "body": "START_TEST(test_alloc_parse_comment_2) {\n  const char *text = \"<?xml version='1.0' encoding='utf-8'?>\\n\"\n                     \"<doc>\"\n                     \"Hello, world\"\n                     \"<!-- Parse this comment too -->\"\n                     \"</doc>\";\n  int i;\n  const int max_alloc_count = 15;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetCommentHandler(g_parser, dummy_comment_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed with max allocations\");\n}\nEND_TEST",
+      "line_start": 274,
+      "line_end": 298,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_create_external_parser",
+      "body": "START_TEST(test_alloc_create_external_parser) {\n  const char *text = \"<?xml version='1.0' encoding='us-ascii'?>\\n\"\n                     \"<!DOCTYPE doc SYSTEM 'foo'>\\n\"\n                     \"<doc>&entity;</doc>\";\n  char foo_text[] = \"<!ELEMENT doc (#PCDATA)*>\";\n\n  XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n  XML_SetUserData(g_parser, foo_text);\n  XML_SetExternalEntityRefHandler(g_parser, external_entity_duff_loader);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      != XML_STATUS_ERROR) {\n    fail(\"External parser allocator returned success incorrectly\");\n  }\n}\nEND_TEST",
+      "line_start": 303,
+      "line_end": 317,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_run_external_parser",
+      "body": "START_TEST(test_alloc_run_external_parser) {\n  const char *text = \"<?xml version='1.0' encoding='us-ascii'?>\\n\"\n                     \"<!DOCTYPE doc SYSTEM 'foo'>\\n\"\n                     \"<doc>&entity;</doc>\";\n  char foo_text[] = \"<!ELEMENT doc (#PCDATA)*>\";\n  unsigned int i;\n  const unsigned int max_alloc_count = 15;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    XML_SetUserData(g_parser, foo_text);\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_null_loader);\n    g_allocation_count = (int)i;\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parsing ignored failing allocator\");\n  else if (i == max_alloc_count)\n    fail(\"Parsing failed with allocation count 10\");\n}\nEND_TEST",
+      "line_start": 320,
+      "line_end": 345,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES",
+        "external_entity_null_loader"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_dtd_copy_default_atts",
+      "body": "START_TEST(test_alloc_dtd_copy_default_atts) {\n  const char *text = \"<?xml version='1.0'?>\\n\"\n                     \"<!DOCTYPE doc SYSTEM 'http://example.org/doc.dtd' [\\n\"\n                     \"  <!ENTITY en SYSTEM 'http://example.org/entity.ent'>\\n\"\n                     \"]>\\n\"\n                     \"<doc xmlns='http://example.org/ns1'>\\n\"\n                     \"&en;\\n\"\n                     \"</doc>\";\n  int callno = 0;\n\n  XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n  XML_SetExternalEntityRefHandler(g_parser, external_entity_dbl_handler);\n  XML_SetUserData(g_parser, &callno);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n}\nEND_TEST",
+      "line_start": 350,
+      "line_end": 367,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_external_entity",
+      "body": "START_TEST(test_alloc_external_entity) {\n  const char *text = \"<?xml version='1.0'?>\\n\"\n                     \"<!DOCTYPE doc SYSTEM 'http://example.org/doc.dtd' [\\n\"\n                     \"  <!ENTITY en SYSTEM 'http://example.org/entity.ent'>\\n\"\n                     \"]>\\n\"\n                     \"<doc xmlns='http://example.org/ns1'>\\n\"\n                     \"&en;\\n\"\n                     \"</doc>\";\n  int i;\n  const int alloc_test_max_repeats = 50;\n  int callno = 0;\n\n  for (i = 0; i < alloc_test_max_repeats; i++) {\n    g_allocation_count = -1;\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_dbl_handler_2);\n    callno = 0;\n    XML_SetUserData(g_parser, &callno);\n    g_allocation_count = i;\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        == XML_STATUS_OK)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  g_allocation_count = -1;\n  if (i == 0)\n    fail(\"External entity parsed despite duff allocator\");\n  if (i == alloc_test_max_repeats)\n    fail(\"External entity not parsed at max allocation count\");\n}\nEND_TEST",
+      "line_start": 370,
+      "line_end": 402,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_ext_entity_set_encoding",
+      "body": "START_TEST(test_alloc_ext_entity_set_encoding) {\n  const char *text = \"<!DOCTYPE doc [\\n\"\n                     \"  <!ENTITY en SYSTEM 'http://example.org/dummy.ent'>\\n\"\n                     \"]>\\n\"\n                     \"<doc>&en;</doc>\";\n  int i;\n  const int max_allocation_count = 30;\n\n  for (i = 0; i < max_allocation_count; i++) {\n    XML_SetExternalEntityRefHandler(g_parser,\n                                    external_entity_alloc_set_encoding);\n    g_allocation_count = i;\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        == XML_STATUS_OK)\n      break;\n    g_allocation_count = -1;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Encoding check succeeded despite failing allocator\");\n  if (i == max_allocation_count)\n    fail(\"Encoding failed at max allocation count\");\n}\nEND_TEST",
+      "line_start": 405,
+      "line_end": 430,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_internal_entity",
+      "body": "START_TEST(test_alloc_internal_entity) {\n  const char *text = \"<?xml version='1.0' encoding='unsupported-encoding'?>\\n\"\n                     \"<!DOCTYPE test [<!ENTITY foo 'bar'>]>\\n\"\n                     \"<test a='&foo;'/>\";\n  unsigned int i;\n  const unsigned int max_alloc_count = 20;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = (int)i;\n    XML_SetUnknownEncodingHandler(g_parser, unknown_released_encoding_handler,\n                                  NULL);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Internal entity worked despite failing allocations\");\n  else if (i == max_alloc_count)\n    fail(\"Internal entity failed at max allocation count\");\n}\nEND_TEST",
+      "line_start": 435,
+      "line_end": 458,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_parameter_entity",
+      "body": "START_TEST(test_alloc_parameter_entity) {\n  const char *text = \"<!DOCTYPE foo [\"\n                     \"<!ENTITY % param1 \\\"<!ENTITY internal 'some_text'>\\\">\"\n                     \"%param1;\"\n                     \"]> <foo>&internal;content</foo>\";\n  int i;\n  const int alloc_test_max_repeats = 30;\n\n  for (i = 0; i < alloc_test_max_repeats; i++) {\n    g_allocation_count = i;\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    alloc_teardown();\n    alloc_setup();\n  }\n  g_allocation_count = -1;\n  if (i == 0)\n    fail(\"Parameter entity processed despite duff allocator\");\n  if (i == alloc_test_max_repeats)\n    fail(\"Parameter entity not processed at max allocation count\");\n}\nEND_TEST",
+      "line_start": 460,
+      "line_end": 483,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_dtd_default_handling",
+      "body": "START_TEST(test_alloc_dtd_default_handling) {\n  const char *text = \"<!DOCTYPE doc [\\n\"\n                     \"<!ENTITY e SYSTEM 'http://example.org/e'>\\n\"\n                     \"<!NOTATION n SYSTEM 'http://example.org/n'>\\n\"\n                     \"<!ENTITY e1 SYSTEM 'http://example.org/e' NDATA n>\\n\"\n                     \"<!ELEMENT doc (#PCDATA)>\\n\"\n                     \"<!ATTLIST doc a CDATA #IMPLIED>\\n\"\n                     \"<?pi in dtd?>\\n\"\n                     \"<!--comment in dtd-->\\n\"\n                     \"]>\\n\"\n                     \"<doc><![CDATA[text in doc]]></doc>\";\n  const XML_Char *expected = XCS(\"\\n\\n\\n\\n\\n\\n\\n\\n\\n<doc>text in doc</doc>\");\n  CharData storage;\n  int i;\n  const int max_alloc_count = 25;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    init_dummy_handlers();\n    XML_SetDefaultHandler(g_parser, accumulate_characters);\n    XML_SetDoctypeDeclHandler(g_parser, dummy_start_doctype_handler,\n                              dummy_end_doctype_handler);\n    XML_SetEntityDeclHandler(g_parser, dummy_entity_decl_handler);\n    XML_SetNotationDeclHandler(g_parser, dummy_notation_decl_handler);\n    XML_SetElementDeclHandler(g_parser, dummy_element_decl_handler);\n    XML_SetAttlistDeclHandler(g_parser, dummy_attlist_decl_handler);\n    XML_SetProcessingInstructionHandler(g_parser, dummy_pi_handler);\n    XML_SetCommentHandler(g_parser, dummy_comment_handler);\n    XML_SetCdataSectionHandler(g_parser, dummy_start_cdata_handler,\n                               dummy_end_cdata_handler);\n    XML_SetUnparsedEntityDeclHandler(g_parser,\n                                     dummy_unparsed_entity_decl_handler);\n    CharData_Init(&storage);\n    XML_SetUserData(g_parser, &storage);\n    XML_SetCharacterDataHandler(g_parser, accumulate_characters);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Default DTD parsed despite allocation failures\");\n  if (i == max_alloc_count)\n    fail(\"Default DTD not parsed with maximum alloc count\");\n  CharData_CheckXMLChars(&storage, expected);\n  if (get_dummy_handler_flags()\n      != (DUMMY_START_DOCTYPE_HANDLER_FLAG | DUMMY_END_DOCTYPE_HANDLER_FLAG\n          | DUMMY_ENTITY_DECL_HANDLER_FLAG | DUMMY_NOTATION_DECL_HANDLER_FLAG\n          | DUMMY_ELEMENT_DECL_HANDLER_FLAG | DUMMY_ATTLIST_DECL_HANDLER_FLAG\n          | DUMMY_COMMENT_HANDLER_FLAG | DUMMY_PI_HANDLER_FLAG\n          | DUMMY_START_CDATA_HANDLER_FLAG | DUMMY_END_CDATA_HANDLER_FLAG\n          | DUMMY_UNPARSED_ENTITY_DECL_HANDLER_FLAG))\n    fail(\"Not all handlers were called\");\n}\nEND_TEST",
+      "line_start": 488,
+      "line_end": 544,
+      "external_refs": [
+        "CharData_CheckXMLChars",
+        "CharData_Init",
+        "_XML_Parse_SINGLE_BYTES",
+        "accumulate_characters"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_explicit_encoding",
+      "body": "START_TEST(test_alloc_explicit_encoding) {\n  int i;\n  const int max_alloc_count = 5;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    if (XML_SetEncoding(g_parser, XCS(\"us-ascii\")) == XML_STATUS_OK)\n      break;\n  }\n  if (i == 0)\n    fail(\"Encoding set despite failing allocator\");\n  else if (i == max_alloc_count)\n    fail(\"Encoding not set at max allocation count\");\n}\nEND_TEST",
+      "line_start": 547,
+      "line_end": 561,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_set_base",
+      "body": "START_TEST(test_alloc_set_base) {\n  const XML_Char *new_base = XCS(\"/local/file/name.xml\");\n  int i;\n  const int max_alloc_count = 5;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    if (XML_SetBase(g_parser, new_base) == XML_STATUS_OK)\n      break;\n  }\n  if (i == 0)\n    fail(\"Base set despite failing allocator\");\n  else if (i == max_alloc_count)\n    fail(\"Base not set with max allocation count\");\n}\nEND_TEST",
+      "line_start": 564,
+      "line_end": 579,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_realloc_buffer",
+      "body": "START_TEST(test_alloc_realloc_buffer) {\n  const char *text = get_buffer_test_text;\n  void *buffer;\n  int i;\n  const int max_realloc_count = 10;\n\n  /* Get a smallish buffer */\n  for (i = 0; i < max_realloc_count; i++) {\n    g_reallocation_count = i;\n    buffer = XML_GetBuffer(g_parser, 1536);\n    if (buffer == NULL)\n      fail(\"1.5K buffer reallocation failed\");\n    assert(buffer != NULL);\n    memcpy(buffer, text, strlen(text));\n    if (XML_ParseBuffer(g_parser, (int)strlen(text), XML_FALSE)\n        == XML_STATUS_OK)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  g_reallocation_count = -1;\n  if (i == 0)\n    fail(\"Parse succeeded with no reallocation\");\n  else if (i == max_realloc_count)\n    fail(\"Parse failed with max reallocation count\");\n}\nEND_TEST",
+      "line_start": 582,
+      "line_end": 609,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_ext_entity_realloc_buffer",
+      "body": "START_TEST(test_alloc_ext_entity_realloc_buffer) {\n  const char *text = \"<!DOCTYPE doc [\\n\"\n                     \"  <!ENTITY en SYSTEM 'http://example.org/dummy.ent'>\\n\"\n                     \"]>\\n\"\n                     \"<doc>&en;</doc>\";\n  int i;\n  const int max_realloc_count = 10;\n\n  for (i = 0; i < max_realloc_count; i++) {\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_reallocator);\n    XML_SetUserData(g_parser, &i);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        == XML_STATUS_OK)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Succeeded with no reallocations\");\n  if (i == max_realloc_count)\n    fail(\"Failed with max reallocations\");\n}\nEND_TEST",
+      "line_start": 612,
+      "line_end": 635,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_alloc_realloc_many_attributes",
+      "body": "START_TEST(test_alloc_realloc_many_attributes) {\n  const char *text = \"<!DOCTYPE doc [\\n\"\n                     \"<!ATTLIST doc za CDATA 'default'>\\n\"\n                     \"<!ATTLIST doc zb CDATA 'def2'>\\n\"\n                     \"<!ATTLIST doc zc CDATA 'def3'>\\n\"\n                     \"]>\\n\"\n                     \"<doc a='1'\"\n                     \"     b='2'\"\n                     \"     c='3'\"\n                     \"     d='4'\"\n                     \"     e='5'\"\n                     \"     f='6'\"\n                     \"     g='7'\"\n                     \"     h='8'\"\n                     \"     i='9'\"\n                     \"     j='10'\"\n                     \"     k='11'\"\n                     \"     l='12'\"\n                     \"     m='13'\"\n                     \"     n='14'\"\n                     \"     p='15'\"\n                     \"     q='16'\"\n                     \"     r='17'\"\n                     \"     s='18'>\"\n                     \"</doc>\";\n  int i;\n  const int max_realloc_count = 10;\n\n  for (i = 0; i < max_realloc_count; i++) {\n    g_reallocation_count = i;\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite no reallocations\");\n  if (i == max_realloc_count)\n    fail(\"Parse failed at max reallocations\");\n}\nEND_TEST",
+      "line_start": 638,
+      "line_end": 680,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_public_entity_value",
+      "body": "START_TEST(test_alloc_public_entity_value) {\n  const char *text = \"<!DOCTYPE doc SYSTEM 'http://example.org/'>\\n\"\n                     \"<doc></doc>\\n\";\n  char dtd_text[]\n      = \"<!ELEMENT doc EMPTY>\\n\"\n        \"<!ENTITY % e1 PUBLIC 'foo' 'bar.ent'>\\n\"\n        \"<!ENTITY % \"\n        /* Each line is 64 characters */\n        \"ThisIsAStupidlyLongParameterNameIntendedToTriggerPoolGrowth12345\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \" '%e1;'>\\n\"\n        \"%e1;\\n\";\n  int i;\n  const int max_alloc_count = 50;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    init_dummy_handlers();\n    XML_SetUserData(g_parser, dtd_text);\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_public);\n    /* Provoke a particular code path */\n    XML_SetEntityDeclHandler(g_parser, dummy_entity_decl_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parsing worked despite failing allocation\");\n  if (i == max_alloc_count)\n    fail(\"Parsing failed at max allocation count\");\n  if (get_dummy_handler_flags() != DUMMY_ENTITY_DECL_HANDLER_FLAG)\n    fail(\"Entity declaration handler not called\");\n}\nEND_TEST",
+      "line_start": 683,
+      "line_end": 734,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_realloc_subst_public_entity_value",
+      "body": "START_TEST(test_alloc_realloc_subst_public_entity_value) {\n  const char *text = \"<!DOCTYPE doc SYSTEM 'http://example.org/'>\\n\"\n                     \"<doc></doc>\\n\";\n  char dtd_text[]\n      = \"<!ELEMENT doc EMPTY>\\n\"\n        \"<!ENTITY % \"\n        /* Each line is 64 characters */\n        \"ThisIsAStupidlyLongParameterNameIntendedToTriggerPoolGrowth12345\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \" PUBLIC 'foo' 'bar.ent'>\\n\"\n        \"%ThisIsAStupidlyLongParameterNameIntendedToTriggerPoolGrowth12345\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP;\";\n  int i;\n  const int max_realloc_count = 10;\n\n  for (i = 0; i < max_realloc_count; i++) {\n    g_reallocation_count = i;\n    XML_SetUserData(g_parser, dtd_text);\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_public);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parsing worked despite failing reallocation\");\n  if (i == max_realloc_count)\n    fail(\"Parsing failed at max reallocation count\");\n}\nEND_TEST",
+      "line_start": 736,
+      "line_end": 796,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_parse_public_doctype",
+      "body": "START_TEST(test_alloc_parse_public_doctype) {\n  const char *text\n      = \"<?xml version='1.0' encoding='utf-8'?>\\n\"\n        \"<!DOCTYPE doc PUBLIC '\"\n        /* 64 characters per line */\n        \"http://example.com/a/long/enough/name/to/trigger/pool/growth/zz/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"' 'test'>\\n\"\n        \"<doc></doc>\";\n  int i;\n  const int max_alloc_count = 25;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    init_dummy_handlers();\n    XML_SetDoctypeDeclHandler(g_parser, dummy_start_doctype_decl_handler,\n                              dummy_end_doctype_decl_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n  if (get_dummy_handler_flags()\n      != (DUMMY_START_DOCTYPE_DECL_HANDLER_FLAG\n          | DUMMY_END_DOCTYPE_DECL_HANDLER_FLAG))\n    fail(\"Doctype handler functions not called\");\n}\nEND_TEST",
+      "line_start": 798,
+      "line_end": 845,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_parse_public_doctype_long_name",
+      "body": "START_TEST(test_alloc_parse_public_doctype_long_name) {\n  const char *text\n      = \"<?xml version='1.0' encoding='utf-8'?>\\n\"\n        \"<!DOCTYPE doc PUBLIC 'http://example.com/foo' '\"\n        /* 64 characters per line */\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNOP\"\n        \"'>\\n\"\n        \"<doc></doc>\";\n  int i;\n  const int max_alloc_count = 25;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetDoctypeDeclHandler(g_parser, dummy_start_doctype_decl_handler,\n                              dummy_end_doctype_decl_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n}\nEND_TEST",
+      "line_start": 847,
+      "line_end": 889,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_set_foreign_dtd",
+      "body": "START_TEST(test_alloc_set_foreign_dtd) {\n  const char *text1 = \"<?xml version='1.0' encoding='us-ascii'?>\\n\"\n                      \"<doc>&entity;</doc>\";\n  char text2[] = \"<!ELEMENT doc (#PCDATA)*>\";\n  int i;\n  const int max_alloc_count = 25;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    XML_SetUserData(g_parser, &text2);\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_alloc);\n    if (XML_UseForeignDTD(g_parser, XML_TRUE) != XML_ERROR_NONE)\n      fail(\"Could not set foreign DTD\");\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text1, (int)strlen(text1), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n}\nEND_TEST",
+      "line_start": 892,
+      "line_end": 918,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_attribute_enum_value",
+      "body": "START_TEST(test_alloc_attribute_enum_value) {\n  const char *text = \"<?xml version='1.0' standalone='no'?>\\n\"\n                     \"<!DOCTYPE animal SYSTEM 'test.dtd'>\\n\"\n                     \"<animal>This is a \\n    <a/>  \\n\\nyellow tiger</animal>\";\n  char dtd_text[] = \"<!ELEMENT animal (#PCDATA|a)*>\\n\"\n                    \"<!ELEMENT a EMPTY>\\n\"\n                    \"<!ATTLIST animal xml:space (default|preserve) 'preserve'>\";\n  int i;\n  const int max_alloc_count = 30;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_alloc);\n    XML_SetUserData(g_parser, dtd_text);\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    /* An attribute list handler provokes a different code path */\n    XML_SetAttlistDeclHandler(g_parser, dummy_attlist_decl_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n}\nEND_TEST",
+      "line_start": 921,
+      "line_end": 950,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_realloc_attribute_enum_value",
+      "body": "START_TEST(test_alloc_realloc_attribute_enum_value) {\n  const char *text = \"<?xml version='1.0' standalone='no'?>\\n\"\n                     \"<!DOCTYPE animal SYSTEM 'test.dtd'>\\n\"\n                     \"<animal>This is a yellow tiger</animal>\";\n  /* We wish to define a collection of attribute enums that will\n   * cause the string pool storing them to have to expand.  This\n   * means more than 1024 bytes, including the parentheses and\n   * separator bars.\n   */\n  char dtd_text[]\n      = \"<!ELEMENT animal (#PCDATA)*>\\n\"\n        \"<!ATTLIST animal thing \"\n        \"(default\"\n        /* Each line is 64 characters */\n        \"|ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|BBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|CBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|DBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|EBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|FBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|GBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|HBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|IBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|JBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|KBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|LBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|MBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|NBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|OBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|PBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO)\"\n        \" 'default'>\";\n  int i;\n  const int max_realloc_count = 10;\n\n  for (i = 0; i < max_realloc_count; i++) {\n    g_reallocation_count = i;\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_alloc);\n    XML_SetUserData(g_parser, dtd_text);\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    /* An attribute list handler provokes a different code path */\n    XML_SetAttlistDeclHandler(g_parser, dummy_attlist_decl_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing reallocator\");\n  if (i == max_realloc_count)\n    fail(\"Parse failed at maximum reallocation count\");\n}\nEND_TEST",
+      "line_start": 953,
+      "line_end": 1006,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_realloc_implied_attribute",
+      "body": "START_TEST(test_alloc_realloc_implied_attribute) {\n  /* Forcing this particular code path is a balancing act.  The\n   * addition of the closing parenthesis and terminal NUL must be\n   * what pushes the string of enums over the 1024-byte limit,\n   * otherwise a different code path will pick up the realloc.\n   */\n  const char *text\n      = \"<!DOCTYPE doc [\\n\"\n        \"<!ELEMENT doc EMPTY>\\n\"\n        \"<!ATTLIST doc a \"\n        /* Each line is 64 characters */\n        \"(ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|BBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|CBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|DBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|EBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|FBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|GBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|HBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|IBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|JBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|KBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|LBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|MBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|NBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|OBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|PBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMN)\"\n        \" #IMPLIED>\\n\"\n        \"]><doc/>\";\n  int i;\n  const int max_realloc_count = 10;\n\n  for (i = 0; i < max_realloc_count; i++) {\n    g_reallocation_count = i;\n    XML_SetAttlistDeclHandler(g_parser, dummy_attlist_decl_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing reallocator\");\n  if (i == max_realloc_count)\n    fail(\"Parse failed at maximum reallocation count\");\n}\nEND_TEST",
+      "line_start": 1009,
+      "line_end": 1056,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_realloc_default_attribute",
+      "body": "START_TEST(test_alloc_realloc_default_attribute) {\n  /* Forcing this particular code path is a balancing act.  The\n   * addition of the closing parenthesis and terminal NUL must be\n   * what pushes the string of enums over the 1024-byte limit,\n   * otherwise a different code path will pick up the realloc.\n   */\n  const char *text\n      = \"<!DOCTYPE doc [\\n\"\n        \"<!ELEMENT doc EMPTY>\\n\"\n        \"<!ATTLIST doc a \"\n        /* Each line is 64 characters */\n        \"(ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|BBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|CBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|DBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|EBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|FBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|GBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|HBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|IBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|JBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|KBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|LBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|MBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|NBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|OBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO\"\n        \"|PBCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMN)\"\n        \" 'ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNO'\"\n        \">\\n]><doc/>\";\n  int i;\n  const int max_realloc_count = 10;\n\n  for (i = 0; i < max_realloc_count; i++) {\n    g_reallocation_count = i;\n    XML_SetAttlistDeclHandler(g_parser, dummy_attlist_decl_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing reallocator\");\n  if (i == max_realloc_count)\n    fail(\"Parse failed at maximum reallocation count\");\n}\nEND_TEST",
+      "line_start": 1059,
+      "line_end": 1106,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_notation",
+      "body": "START_TEST(test_alloc_notation) {\n  const char *text\n      = \"<!DOCTYPE doc [\\n\"\n        \"<!NOTATION \"\n        /* Each line is 64 characters */\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \" SYSTEM 'http://example.org/n'>\\n\"\n        \"<!ENTITY e SYSTEM 'http://example.org/e' NDATA \"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \">\\n\"\n        \"<!ELEMENT doc EMPTY>\\n\"\n        \"]>\\n<doc/>\";\n  int i;\n  const int max_alloc_count = 20;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    init_dummy_handlers();\n    XML_SetNotationDeclHandler(g_parser, dummy_notation_decl_handler);\n    XML_SetEntityDeclHandler(g_parser, dummy_entity_decl_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite allocation failures\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n  if (get_dummy_handler_flags()\n      != (DUMMY_ENTITY_DECL_HANDLER_FLAG | DUMMY_NOTATION_DECL_HANDLER_FLAG))\n    fail(\"Entity declaration handler not called\");\n}\nEND_TEST",
+      "line_start": 1109,
+      "line_end": 1174,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_alloc_public_notation",
+      "body": "START_TEST(test_alloc_public_notation) {\n  const char *text\n      = \"<!DOCTYPE doc [\\n\"\n        \"<!NOTATION note PUBLIC '\"\n        /* 64 characters per line */\n        \"http://example.com/a/long/enough/name/to/trigger/pool/growth/zz/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"' 'foo'>\\n\"\n        \"<!ENTITY e SYSTEM 'http://example.com/e' NDATA note>\\n\"\n        \"<!ELEMENT doc EMPTY>\\n\"\n        \"]>\\n<doc/>\";\n  int i;\n  const int max_alloc_count = 20;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    init_dummy_handlers();\n    XML_SetNotationDeclHandler(g_parser, dummy_notation_decl_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite allocation failures\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n  if (get_dummy_handler_flags() != DUMMY_NOTATION_DECL_HANDLER_FLAG)\n    fail(\"Notation handler not called\");\n}\nEND_TEST",
+      "line_start": 1177,
+      "line_end": 1223,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_system_notation",
+      "body": "START_TEST(test_alloc_system_notation) {\n  const char *text\n      = \"<!DOCTYPE doc [\\n\"\n        \"<!NOTATION note SYSTEM '\"\n        /* 64 characters per line */\n        \"http://example.com/a/long/enough/name/to/trigger/pool/growth/zz/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/ABCDEFGHIJKLMNO/\"\n        \"'>\\n\"\n        \"<!ENTITY e SYSTEM 'http://example.com/e' NDATA note>\\n\"\n        \"<!ELEMENT doc EMPTY>\\n\"\n        \"]>\\n<doc/>\";\n  int i;\n  const int max_alloc_count = 20;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    init_dummy_handlers();\n    XML_SetNotationDeclHandler(g_parser, dummy_notation_decl_handler);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite allocation failures\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n  if (get_dummy_handler_flags() != DUMMY_NOTATION_DECL_HANDLER_FLAG)\n    fail(\"Notation handler not called\");\n}\nEND_TEST",
+      "line_start": 1226,
+      "line_end": 1272,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_nested_groups",
+      "body": "START_TEST(test_alloc_nested_groups) {\n  const char *text\n      = \"<!DOCTYPE doc [\\n\"\n        \"<!ELEMENT doc \"\n        /* Sixteen elements per line */\n        \"(e,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,\"\n        \"(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?\"\n        \"))))))))))))))))))))))))))))))))>\\n\"\n        \"<!ELEMENT e EMPTY>\"\n        \"]>\\n\"\n        \"<doc><e/></doc>\";\n  CharData storage;\n  int i;\n  const int max_alloc_count = 20;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    CharData_Init(&storage);\n    XML_SetElementDeclHandler(g_parser, dummy_element_decl_handler);\n    XML_SetStartElementHandler(g_parser, record_element_start_handler);\n    XML_SetUserData(g_parser, &storage);\n    init_dummy_handlers();\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n\n  if (i == 0)\n    fail(\"Parse succeeded despite failing reallocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum reallocation count\");\n  CharData_CheckXMLChars(&storage, XCS(\"doce\"));\n  if (get_dummy_handler_flags() != DUMMY_ELEMENT_DECL_HANDLER_FLAG)\n    fail(\"Element handler not fired\");\n}\nEND_TEST",
+      "line_start": 1274,
+      "line_end": 1312,
+      "external_refs": [
+        "CharData_CheckXMLChars",
+        "CharData_Init",
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_realloc_nested_groups",
+      "body": "START_TEST(test_alloc_realloc_nested_groups) {\n  const char *text\n      = \"<!DOCTYPE doc [\\n\"\n        \"<!ELEMENT doc \"\n        /* Sixteen elements per line */\n        \"(e,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,\"\n        \"(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?,(e?\"\n        \"))))))))))))))))))))))))))))))))>\\n\"\n        \"<!ELEMENT e EMPTY>\"\n        \"]>\\n\"\n        \"<doc><e/></doc>\";\n  CharData storage;\n  int i;\n  const int max_realloc_count = 10;\n\n  for (i = 0; i < max_realloc_count; i++) {\n    g_reallocation_count = i;\n    CharData_Init(&storage);\n    XML_SetElementDeclHandler(g_parser, dummy_element_decl_handler);\n    XML_SetStartElementHandler(g_parser, record_element_start_handler);\n    XML_SetUserData(g_parser, &storage);\n    init_dummy_handlers();\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n\n  if (i == 0)\n    fail(\"Parse succeeded despite failing reallocator\");\n  if (i == max_realloc_count)\n    fail(\"Parse failed at maximum reallocation count\");\n  CharData_CheckXMLChars(&storage, XCS(\"doce\"));\n  if (get_dummy_handler_flags() != DUMMY_ELEMENT_DECL_HANDLER_FLAG)\n    fail(\"Element handler not fired\");\n}\nEND_TEST",
+      "line_start": 1314,
+      "line_end": 1352,
+      "external_refs": [
+        "CharData_CheckXMLChars",
+        "CharData_Init",
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_large_group",
+      "body": "START_TEST(test_alloc_large_group) {\n  const char *text = \"<!DOCTYPE doc [\\n\"\n                     \"<!ELEMENT doc (\"\n                     \"a1|a2|a3|a4|a5|a6|a7|a8|\"\n                     \"b1|b2|b3|b4|b5|b6|b7|b8|\"\n                     \"c1|c2|c3|c4|c5|c6|c7|c8|\"\n                     \"d1|d2|d3|d4|d5|d6|d7|d8|\"\n                     \"e1\"\n                     \")+>\\n\"\n                     \"]>\\n\"\n                     \"<doc>\\n\"\n                     \"<a1/>\\n\"\n                     \"</doc>\\n\";\n  int i;\n  const int max_alloc_count = 50;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetElementDeclHandler(g_parser, dummy_element_decl_handler);\n    init_dummy_handlers();\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n  if (get_dummy_handler_flags() != DUMMY_ELEMENT_DECL_HANDLER_FLAG)\n    fail(\"Element handler flag not raised\");\n}\nEND_TEST",
+      "line_start": 1354,
+      "line_end": 1388,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_realloc_group_choice",
+      "body": "START_TEST(test_alloc_realloc_group_choice) {\n  const char *text = \"<!DOCTYPE doc [\\n\"\n                     \"<!ELEMENT doc (\"\n                     \"a1|a2|a3|a4|a5|a6|a7|a8|\"\n                     \"b1|b2|b3|b4|b5|b6|b7|b8|\"\n                     \"c1|c2|c3|c4|c5|c6|c7|c8|\"\n                     \"d1|d2|d3|d4|d5|d6|d7|d8|\"\n                     \"e1\"\n                     \")+>\\n\"\n                     \"]>\\n\"\n                     \"<doc>\\n\"\n                     \"<a1/>\\n\"\n                     \"<b2 attr='foo'>This is a foo</b2>\\n\"\n                     \"<c3></c3>\\n\"\n                     \"</doc>\\n\";\n  int i;\n  const int max_realloc_count = 10;\n\n  for (i = 0; i < max_realloc_count; i++) {\n    g_reallocation_count = i;\n    XML_SetElementDeclHandler(g_parser, dummy_element_decl_handler);\n    init_dummy_handlers();\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing reallocator\");\n  if (i == max_realloc_count)\n    fail(\"Parse failed at maximum reallocation count\");\n  if (get_dummy_handler_flags() != DUMMY_ELEMENT_DECL_HANDLER_FLAG)\n    fail(\"Element handler flag not raised\");\n}\nEND_TEST",
+      "line_start": 1390,
+      "line_end": 1426,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_pi_in_epilog",
+      "body": "START_TEST(test_alloc_pi_in_epilog) {\n  const char *text = \"<doc></doc>\\n\"\n                     \"<?pi in epilog?>\";\n  int i;\n  const int max_alloc_count = 15;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetProcessingInstructionHandler(g_parser, dummy_pi_handler);\n    init_dummy_handlers();\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse completed despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n  if (get_dummy_handler_flags() != DUMMY_PI_HANDLER_FLAG)\n    fail(\"Processing instruction handler not invoked\");\n}\nEND_TEST",
+      "line_start": 1428,
+      "line_end": 1452,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_comment_in_epilog",
+      "body": "START_TEST(test_alloc_comment_in_epilog) {\n  const char *text = \"<doc></doc>\\n\"\n                     \"<!-- comment in epilog -->\";\n  int i;\n  const int max_alloc_count = 15;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetCommentHandler(g_parser, dummy_comment_handler);\n    init_dummy_handlers();\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse completed despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n  if (get_dummy_handler_flags() != DUMMY_COMMENT_HANDLER_FLAG)\n    fail(\"Processing instruction handler not invoked\");\n}\nEND_TEST",
+      "line_start": 1454,
+      "line_end": 1478,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_realloc_long_attribute_value",
+      "body": "START_TEST(test_alloc_realloc_long_attribute_value) {\n  const char *text\n      = \"<!DOCTYPE doc [<!ENTITY foo '\"\n        /* Each line is 64 characters */\n        \"This entity will be substituted as an attribute value, and is   \"\n        \"calculated to be exactly long enough that the terminating NUL   \"\n        \"that the library adds internally will trigger the string pool to\"\n        \"grow. GHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"'>]>\\n\"\n        \"<doc a='&foo;'></doc>\";\n  int i;\n  const int max_realloc_count = 10;\n\n  for (i = 0; i < max_realloc_count; i++) {\n    g_reallocation_count = i;\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing reallocator\");\n  if (i == max_realloc_count)\n    fail(\"Parse failed at maximum reallocation count\");\n}\nEND_TEST",
+      "line_start": 1480,
+      "line_end": 1519,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_attribute_whitespace",
+      "body": "START_TEST(test_alloc_attribute_whitespace) {\n  const char *text = \"<doc a=' '></doc>\";\n  int i;\n  const int max_alloc_count = 15;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n}\nEND_TEST",
+      "line_start": 1521,
+      "line_end": 1540,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_attribute_predefined_entity",
+      "body": "START_TEST(test_alloc_attribute_predefined_entity) {\n  const char *text = \"<doc a='&amp;'></doc>\";\n  int i;\n  const int max_alloc_count = 15;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n}\nEND_TEST",
+      "line_start": 1542,
+      "line_end": 1561,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_long_attr_default_with_char_ref",
+      "body": "START_TEST(test_alloc_long_attr_default_with_char_ref) {\n  const char *text\n      = \"<!DOCTYPE doc [<!ATTLIST doc a CDATA '\"\n        /* 64 characters per line */\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHI\"\n        \"&#x31;'>]>\\n\"\n        \"<doc/>\";\n  int i;\n  const int max_alloc_count = 20;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n}\nEND_TEST",
+      "line_start": 1567,
+      "line_end": 1606,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_long_attr_value",
+      "body": "START_TEST(test_alloc_long_attr_value) {\n  const char *text\n      = \"<!DOCTYPE test [<!ENTITY foo '\\n\"\n        /* 64 characters per line */\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"'>]>\\n\"\n        \"<test a='&foo;'/>\";\n  int i;\n  const int max_alloc_count = 25;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing allocator\");\n  if (i == max_alloc_count)\n    fail(\"Parse failed at maximum allocation count\");\n}\nEND_TEST",
+      "line_start": 1611,
+      "line_end": 1650,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_alloc_nested_entities",
+      "body": "START_TEST(test_alloc_nested_entities) {\n  const char *text = \"<!DOCTYPE doc SYSTEM 'http://example.org/one.ent'>\\n\"\n                     \"<doc />\";\n  ExtFaults test_data\n      = {\"<!ENTITY % pe1 '\"\n         /* 64 characters per line */\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n         \"'>\\n\"\n         \"<!ENTITY % pe2 '%pe1;'>\\n\"\n         \"<!ENTITY % pe3 '%pe2;'>\",\n         \"Memory Fail not faulted\", NULL, XML_ERROR_NO_MEMORY};\n\n  /* Causes an allocation error in a nested storeEntityValue() */\n  g_allocation_count = 12;\n  XML_SetUserData(g_parser, &test_data);\n  XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n  XML_SetExternalEntityRefHandler(g_parser, external_entity_faulter);\n  expect_failure(text, XML_ERROR_EXTERNAL_ENTITY_HANDLING,\n                 \"Entity allocation failure not noted\");\n}\nEND_TEST",
+      "line_start": 1657,
+      "line_end": 1692,
+      "external_refs": [],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_realloc_param_entity_newline",
+      "body": "START_TEST(test_alloc_realloc_param_entity_newline) {\n  const char *text = \"<!DOCTYPE doc SYSTEM 'http://example.org/'>\\n\"\n                     \"<doc/>\";\n  char dtd_text[]\n      = \"<!ENTITY % pe '<!ATTLIST doc att CDATA \\\"\"\n        /* 64 characters per line */\n        \"This default value is carefully crafted so that the carriage    \"\n        \"return right at the end of the entity string causes an internal \"\n        \"string pool to have to grow.  This allows us to test the alloc  \"\n        \"failure path from that point. OPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDE\"\n        \"\\\">\\n'>\"\n        \"%pe;\\n\";\n  int i;\n  const int max_realloc_count = 5;\n\n  for (i = 0; i < max_realloc_count; i++) {\n    g_reallocation_count = i;\n    XML_SetUserData(g_parser, dtd_text);\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_alloc);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing reallocator\");\n  if (i == max_realloc_count)\n    fail(\"Parse failed at maximum reallocation count\");\n}\nEND_TEST",
+      "line_start": 1694,
+      "line_end": 1738,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_realloc_ce_extends_pe",
+      "body": "START_TEST(test_alloc_realloc_ce_extends_pe) {\n  const char *text = \"<!DOCTYPE doc SYSTEM 'http://example.org/'>\\n\"\n                     \"<doc/>\";\n  char dtd_text[]\n      = \"<!ENTITY % pe '<!ATTLIST doc att CDATA \\\"\"\n        /* 64 characters per line */\n        \"This default value is carefully crafted so that the character   \"\n        \"entity at the end causes an internal string pool to have to     \"\n        \"grow.  This allows us to test the allocation failure path from  \"\n        \"that point onwards. EFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFG&#x51;\"\n        \"\\\">\\n'>\"\n        \"%pe;\\n\";\n  int i;\n  const int max_realloc_count = 5;\n\n  for (i = 0; i < max_realloc_count; i++) {\n    g_reallocation_count = i;\n    XML_SetUserData(g_parser, dtd_text);\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_alloc);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parse succeeded despite failing reallocator\");\n  if (i == max_realloc_count)\n    fail(\"Parse failed at maximum reallocation count\");\n}\nEND_TEST",
+      "line_start": 1740,
+      "line_end": 1784,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_realloc_attributes",
+      "body": "START_TEST(test_alloc_realloc_attributes) {\n  const char *text = \"<!DOCTYPE doc [\\n\"\n                     \"  <!ATTLIST doc\\n\"\n                     \"    a1  (a|b|c)   'a'\\n\"\n                     \"    a2  (foo|bar) #IMPLIED\\n\"\n                     \"    a3  NMTOKEN   #IMPLIED\\n\"\n                     \"    a4  NMTOKENS  #IMPLIED\\n\"\n                     \"    a5  ID        #IMPLIED\\n\"\n                     \"    a6  IDREF     #IMPLIED\\n\"\n                     \"    a7  IDREFS    #IMPLIED\\n\"\n                     \"    a8  ENTITY    #IMPLIED\\n\"\n                     \"    a9  ENTITIES  #IMPLIED\\n\"\n                     \"    a10 CDATA     #IMPLIED\\n\"\n                     \"  >]>\\n\"\n                     \"<doc>wombat</doc>\\n\";\n  int i;\n  const int max_realloc_count = 5;\n\n  for (i = 0; i < max_realloc_count; i++) {\n    g_reallocation_count = i;\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n\n  if (i == 0)\n    fail(\"Parse succeeded despite failing reallocator\");\n  if (i == max_realloc_count)\n    fail(\"Parse failed at maximum reallocation count\");\n}\nEND_TEST",
+      "line_start": 1786,
+      "line_end": 1819,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_long_doc_name",
+      "body": "START_TEST(test_alloc_long_doc_name) {\n  const char *text =\n      /* 64 characters per line */\n      \"<LongRootElementNameThatWillCauseTheNextAllocationToExpandTheStr\"\n      \"ingPoolForTheDTDQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AZ\"\n      \" a='1'/>\";\n  int i;\n  const int max_alloc_count = 20;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parsing worked despite failing reallocations\");\n  else if (i == max_alloc_count)\n    fail(\"Parsing failed even at max reallocation count\");\n}\nEND_TEST",
+      "line_start": 1821,
+      "line_end": 1858,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_alloc_long_base",
+      "body": "START_TEST(test_alloc_long_base) {\n  const char *text = \"<!DOCTYPE doc [\\n\"\n                     \"  <!ENTITY e SYSTEM 'foo'>\\n\"\n                     \"]>\\n\"\n                     \"<doc>&e;</doc>\";\n  char entity_text[] = \"Hello world\";\n  const XML_Char *base =\n      /* 64 characters per line */\n      /* clang-format off */\n        XCS(\"LongBaseURI/that/will/overflow/an/internal/buffer/and/cause/it/t\")\n        XCS(\"o/have/to/grow/PQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\")\n        XCS(\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789A/\");\n  /* clang-format on */\n  int i;\n  const int max_alloc_count = 25;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetUserData(g_parser, entity_text);\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_alloc);\n    if (XML_SetBase(g_parser, base) == XML_STATUS_ERROR) {\n      XML_ParserReset(g_parser, NULL);\n      continue;\n    }\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parsing worked despite failing allocations\");\n  else if (i == max_alloc_count)\n    fail(\"Parsing failed even at max allocation count\");\n}\nEND_TEST",
+      "line_start": 1860,
+      "line_end": 1910,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_alloc_long_public_id",
+      "body": "START_TEST(test_alloc_long_public_id) {\n  const char *text\n      = \"<!DOCTYPE doc [\\n\"\n        \"  <!ENTITY e PUBLIC '\"\n        /* 64 characters per line */\n        \"LongPublicIDThatShouldResultInAnInternalStringPoolGrowingAtASpec\"\n        \"ificMomentKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"' 'bar'>\\n\"\n        \"]>\\n\"\n        \"<doc>&e;</doc>\";\n  char entity_text[] = \"Hello world\";\n  int i;\n  const int max_alloc_count = 40;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetUserData(g_parser, entity_text);\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_alloc);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parsing worked despite failing allocations\");\n  else if (i == max_alloc_count)\n    fail(\"Parsing failed even at max allocation count\");\n}\nEND_TEST",
+      "line_start": 1912,
+      "line_end": 1957,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_alloc_long_entity_value",
+      "body": "START_TEST(test_alloc_long_entity_value) {\n  const char *text\n      = \"<!DOCTYPE doc [\\n\"\n        \"  <!ENTITY e1 '\"\n        /* 64 characters per line */\n        \"Long entity value that should provoke a string pool to grow whil\"\n        \"e setting up to parse the external entity below. xyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"'>\\n\"\n        \"  <!ENTITY e2 SYSTEM 'bar'>\\n\"\n        \"]>\\n\"\n        \"<doc>&e2;</doc>\";\n  char entity_text[] = \"Hello world\";\n  int i;\n  const int max_alloc_count = 40;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetUserData(g_parser, entity_text);\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_alloc);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parsing worked despite failing allocations\");\n  else if (i == max_alloc_count)\n    fail(\"Parsing failed even at max allocation count\");\n}\nEND_TEST",
+      "line_start": 1959,
+      "line_end": 2005,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_alloc_long_notation",
+      "body": "START_TEST(test_alloc_long_notation) {\n  const char *text\n      = \"<!DOCTYPE doc [\\n\"\n        \"  <!NOTATION note SYSTEM '\"\n        /* 64 characters per line */\n        \"ALongNotationNameThatShouldProvokeStringPoolGrowthWhileCallingAn\"\n        \"ExternalEntityParserUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"'>\\n\"\n        \"  <!ENTITY e1 SYSTEM 'foo' NDATA \"\n        /* 64 characters per line */\n        \"ALongNotationNameThatShouldProvokeStringPoolGrowthWhileCallingAn\"\n        \"ExternalEntityParserUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB\"\n        \">\\n\"\n        \"  <!ENTITY e2 SYSTEM 'bar'>\\n\"\n        \"]>\\n\"\n        \"<doc>&e2;</doc>\";\n  ExtOption options[]\n      = {{XCS(\"foo\"), \"Entity Foo\"}, {XCS(\"bar\"), \"Entity Bar\"}, {NULL, NULL}};\n  int i;\n  const int max_alloc_count = 40;\n\n  for (i = 0; i < max_alloc_count; i++) {\n    g_allocation_count = i;\n    XML_SetUserData(g_parser, options);\n    XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n    XML_SetExternalEntityRefHandler(g_parser, external_entity_optioner);\n    if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n        != XML_STATUS_ERROR)\n      break;\n\n    /* See comment in test_alloc_parse_xdecl() */\n    alloc_teardown();\n    alloc_setup();\n  }\n  if (i == 0)\n    fail(\"Parsing worked despite failing allocations\");\n  else if (i == max_alloc_count)\n    fail(\"Parsing failed even at max allocation count\");\n}\nEND_TEST",
+      "line_start": 2007,
+      "line_end": 2074,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES",
+        "external_entity_optioner"
+      ],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_alloc_reset_after_external_entity_parser_create_fail",
+      "body": "START_TEST(test_alloc_reset_after_external_entity_parser_create_fail) {\n  const char *const text = \"<!DOCTYPE doc SYSTEM 'foo'><doc/>\";\n\n  XML_SetExternalEntityRefHandler(\n      g_parser, external_entity_parser_create_alloc_fail_handler);\n  XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      != XML_STATUS_ERROR)\n    fail(\"Call to parse was expected to fail\");\n\n  if (XML_GetErrorCode(g_parser) != XML_ERROR_EXTERNAL_ENTITY_HANDLING)\n    fail(\"Call to parse was expected to fail from the external entity handler\");\n\n  XML_ParserReset(g_parser, NULL);\n}\nEND_TEST",
+      "line_start": 2076,
+      "line_end": 2092,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_alloc_tracker_size_recorded",
+      "body": "START_TEST(test_alloc_tracker_size_recorded) {\n  XML_Memory_Handling_Suite memsuite = {malloc, realloc, free};\n\n  bool values[] = {true, false};\n  for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {\n    const bool useMemSuite = values[i];\n    set_subtest(\"useMemSuite=%d\", (int)useMemSuite);\n    XML_Parser parser = useMemSuite\n                            ? XML_ParserCreate_MM(NULL, &memsuite, XCS(\"|\"))\n                            : XML_ParserCreate(NULL);\n\n#if XML_GE == 1\n    void *ptr = expat_malloc(parser, 10, -1);\n\n    assert_true(ptr != NULL);\n    assert_true(sizeRecordedFor(ptr) == 10);\n\n    assert_true(expat_realloc(parser, ptr, SIZE_MAX / 2, -1) == NULL);\n\n    assert_true(sizeRecordedFor(ptr) == 10); // i.e. unchanged\n\n    ptr = expat_realloc(parser, ptr, 20, -1);\n\n    assert_true(ptr != NULL);\n    assert_true(sizeRecordedFor(ptr) == 20);\n\n    expat_free(parser, ptr, -1);\n#endif\n\n    XML_ParserFree(parser);\n  }\n}\nEND_TEST",
+      "line_start": 2101,
+      "line_end": 2133,
+      "external_refs": [],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_alloc_tracker_pointer_alignment",
+      "body": "START_TEST(test_alloc_tracker_pointer_alignment) {\n  XML_Parser parser = XML_ParserCreate(NULL);\n#if XML_GE == 1\n  assert_true(sizeof(long long) >= sizeof(size_t)); // self-test\n  long long *const ptr\n      = (long long *)expat_malloc(parser, 4 * sizeof(long long), -1);\n  ptr[0] = 0LL;\n  ptr[1] = 1LL;\n  ptr[2] = 2LL;\n  ptr[3] = 3LL;\n  expat_free(parser, ptr, -1);\n#endif\n  XML_ParserFree(parser);\n}\nEND_TEST",
+      "line_start": 2135,
+      "line_end": 2149,
+      "external_refs": [],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_alloc_tracker_maximum_amplification",
+      "body": "START_TEST(test_alloc_tracker_maximum_amplification) {\n  if (g_reparseDeferralEnabledDefault == XML_TRUE) {\n    return;\n  }\n\n  XML_Parser parser = XML_ParserCreate(NULL);\n\n  // Get .m_accounting.countBytesDirect from 0 to 3\n  const char *const chunk = \"<e>\";\n  assert_true(_XML_Parse_SINGLE_BYTES(parser, chunk, (int)strlen(chunk),\n                                      /*isFinal=*/XML_FALSE)\n              == XML_STATUS_OK);\n\n#if XML_GE == 1\n  // Stop activation threshold from interfering\n  assert_true(XML_SetAllocTrackerActivationThreshold(parser, 0) == XML_TRUE);\n\n  // Exceed maximum amplification: should be rejected.\n  assert_true(expat_malloc(parser, 1000, -1) == NULL);\n\n  // Increase maximum amplification, and try the same amount once more: should\n  // work.\n  assert_true(XML_SetAllocTrackerMaximumAmplification(parser, 3000.0f)\n              == XML_TRUE);\n\n  void *const ptr = expat_malloc(parser, 1000, -1);\n  assert_true(ptr != NULL);\n  expat_free(parser, ptr, -1);\n#endif\n\n  XML_ParserFree(parser);\n}\nEND_TEST",
+      "line_start": 2151,
+      "line_end": 2183,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_alloc_tracker_threshold",
+      "body": "START_TEST(test_alloc_tracker_threshold) {\n  XML_Parser parser = XML_ParserCreate(NULL);\n\n#if XML_GE == 1\n  // Exceed maximum amplification *before* (default) threshold: should work.\n  void *const ptr = expat_malloc(parser, 1000, -1);\n  assert_true(ptr != NULL);\n  expat_free(parser, ptr, -1);\n\n  // Exceed maximum amplification *after* threshold: should be rejected.\n  assert_true(XML_SetAllocTrackerActivationThreshold(parser, 999) == XML_TRUE);\n  assert_true(expat_malloc(parser, 1000, -1) == NULL);\n#endif\n\n  XML_ParserFree(parser);\n}\nEND_TEST",
+      "line_start": 2185,
+      "line_end": 2201,
+      "external_refs": [],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_alloc_tracker_getbuffer_unlimited",
+      "body": "START_TEST(test_alloc_tracker_getbuffer_unlimited) {\n  XML_Parser parser = XML_ParserCreate(NULL);\n\n#if XML_GE == 1\n  // Artificially lower threshold\n  assert_true(XML_SetAllocTrackerActivationThreshold(parser, 0) == XML_TRUE);\n\n  // Self-test: Prove that threshold is as rejecting as expected\n  assert_true(expat_malloc(parser, 1000, -1) == NULL);\n#endif\n  // XML_GetBuffer should be allowed to pass, though\n  assert_true(XML_GetBuffer(parser, 1000) != NULL);\n\n  XML_ParserFree(parser);\n}\nEND_TEST",
+      "line_start": 2203,
+      "line_end": 2218,
+      "external_refs": [],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_alloc_tracker_api",
+      "body": "START_TEST(test_alloc_tracker_api) {\n  XML_Parser parserWithoutParent = XML_ParserCreate(NULL);\n  XML_Parser parserWithParent = XML_ExternalEntityParserCreate(\n      parserWithoutParent, XCS(\"entity123\"), NULL);\n  if (parserWithoutParent == NULL)\n    fail(\"parserWithoutParent is NULL\");\n  if (parserWithParent == NULL)\n    fail(\"parserWithParent is NULL\");\n\n#if XML_GE == 1\n  // XML_SetAllocTrackerMaximumAmplification, error cases\n  if (XML_SetAllocTrackerMaximumAmplification(NULL, 123.0f) == XML_TRUE)\n    fail(\"Call with NULL parser is NOT supposed to succeed\");\n  if (XML_SetAllocTrackerMaximumAmplification(parserWithParent, 123.0f)\n      == XML_TRUE)\n    fail(\"Call with non-root parser is NOT supposed to succeed\");\n  if (XML_SetAllocTrackerMaximumAmplification(parserWithoutParent, NAN)\n      == XML_TRUE)\n    fail(\"Call with NaN limit is NOT supposed to succeed\");\n  if (XML_SetAllocTrackerMaximumAmplification(parserWithoutParent, -1.0f)\n      == XML_TRUE)\n    fail(\"Call with negative limit is NOT supposed to succeed\");\n  if (XML_SetAllocTrackerMaximumAmplification(parserWithoutParent, 0.9f)\n      == XML_TRUE)\n    fail(\"Call with positive limit <1.0 is NOT supposed to succeed\");\n\n  // XML_SetAllocTrackerMaximumAmplification, success cases\n  if (XML_SetAllocTrackerMaximumAmplification(parserWithoutParent, 1.0f)\n      == XML_FALSE)\n    fail(\"Call with positive limit >=1.0 is supposed to succeed\");\n  if (XML_SetAllocTrackerMaximumAmplification(parserWithoutParent, 123456.789f)\n      == XML_FALSE)\n    fail(\"Call with positive limit >=1.0 is supposed to succeed\");\n  if (XML_SetAllocTrackerMaximumAmplification(parserWithoutParent, INFINITY)\n      == XML_FALSE)\n    fail(\"Call with positive limit >=1.0 is supposed to succeed\");\n\n  // XML_SetAllocTrackerActivationThreshold, error cases\n  if (XML_SetAllocTrackerActivationThreshold(NULL, 123) == XML_TRUE)\n    fail(\"Call with NULL parser is NOT supposed to succeed\");\n  if (XML_SetAllocTrackerActivationThreshold(parserWithParent, 123) == XML_TRUE)\n    fail(\"Call with non-root parser is NOT supposed to succeed\");\n\n  // XML_SetAllocTrackerActivationThreshold, success cases\n  if (XML_SetAllocTrackerActivationThreshold(parserWithoutParent, 123)\n      == XML_FALSE)\n    fail(\"Call with non-NULL parentless parser is supposed to succeed\");\n#endif // XML_GE == 1\n\n  XML_ParserFree(parserWithParent);\n  XML_ParserFree(parserWithoutParent);\n}\nEND_TEST",
+      "line_start": 2220,
+      "line_end": 2272,
+      "external_refs": [],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_mem_api_cycle",
+      "body": "START_TEST(test_mem_api_cycle) {\n  XML_Parser parser = XML_ParserCreate(NULL);\n\n  void *ptr = XML_MemMalloc(parser, 10);\n\n  assert_true(ptr != NULL);\n  memset(ptr, 'x', 10); // assert writability, with ASan in mind\n\n  ptr = XML_MemRealloc(parser, ptr, 20);\n\n  assert_true(ptr != NULL);\n  memset(ptr, 'y', 20); // assert writability, with ASan in mind\n\n  XML_MemFree(parser, ptr);\n\n  XML_ParserFree(parser);\n}\nEND_TEST",
+      "line_start": 2274,
+      "line_end": 2291,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_mem_api_unlimited",
+      "body": "START_TEST(test_mem_api_unlimited) {\n  XML_Parser parser = XML_ParserCreate(NULL);\n\n#if XML_GE == 1\n  assert_true(XML_SetAllocTrackerActivationThreshold(parser, 0) == XML_TRUE);\n#endif\n\n  void *ptr = XML_MemMalloc(parser, 1000);\n\n  assert_true(ptr != NULL);\n\n  ptr = XML_MemRealloc(parser, ptr, 2000);\n\n  assert_true(ptr != NULL);\n\n  XML_MemFree(parser, ptr);\n\n  XML_ParserFree(parser);\n}\nEND_TEST",
+      "line_start": 2293,
+      "line_end": 2312,
+      "external_refs": [],
+      "registration": "if_xml_ge"
+    }
+  ],
+  "helpers": [
+    {
+      "name": "alloc_setup",
+      "body": "static void\nalloc_setup(void) {\n  XML_Memory_Handling_Suite memsuite = {duff_allocator, duff_reallocator, free};\n\n  /* Ensure the parser creation will go through */\n  g_allocation_count = ALLOC_ALWAYS_SUCCEED;\n  g_reallocation_count = REALLOC_ALWAYS_SUCCEED;\n  g_parser = XML_ParserCreate_MM(NULL, &memsuite, NULL);\n  if (g_parser == NULL)\n    fail(\"Parser not created\");\n}",
+      "line": 65
+    },
+    {
+      "name": "alloc_teardown",
+      "body": "static void\nalloc_teardown(void) {\n  basic_teardown();\n}",
+      "line": 77
+    }
+  ]
+}

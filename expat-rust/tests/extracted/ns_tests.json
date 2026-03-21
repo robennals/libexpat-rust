@@ -1,0 +1,333 @@
+{
+  "source_file": "expat/tests/ns_tests.c",
+  "test_count": 33,
+  "helper_count": 3,
+  "tests": [
+    {
+      "name": "test_return_ns_triplet",
+      "body": "START_TEST(test_return_ns_triplet) {\n  const char *text = \"<foo:e xmlns:foo='http://example.org/' bar:a='12'\\n\"\n                     \"       xmlns:bar='http://example.org/'>\";\n  const char *epilog = \"</foo:e>\";\n  const XML_Char *elemstr[]\n      = {XCS(\"http://example.org/ e foo\"), XCS(\"http://example.org/ a bar\")};\n  XML_SetReturnNSTriplet(g_parser, XML_TRUE);\n  XML_SetUserData(g_parser, (void *)elemstr);\n  XML_SetElementHandler(g_parser, triplet_start_checker, triplet_end_checker);\n  XML_SetNamespaceDeclHandler(g_parser, dummy_start_namespace_decl_handler,\n                              dummy_end_namespace_decl_handler);\n  g_triplet_start_flag = XML_FALSE;\n  g_triplet_end_flag = XML_FALSE;\n  init_dummy_handlers();\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_FALSE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n  /* Check that unsetting \"return triplets\" fails while still parsing */\n  XML_SetReturnNSTriplet(g_parser, XML_FALSE);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, epilog, (int)strlen(epilog), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n  if (! g_triplet_start_flag)\n    fail(\"triplet_start_checker not invoked\");\n  if (! g_triplet_end_flag)\n    fail(\"triplet_end_checker not invoked\");\n  if (get_dummy_handler_flags()\n      != (DUMMY_START_NS_DECL_HANDLER_FLAG | DUMMY_END_NS_DECL_HANDLER_FLAG))\n    fail(\"Namespace handlers not called\");\n}\nEND_TEST",
+      "line_start": 68,
+      "line_end": 98,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_parser_reset",
+      "body": "START_TEST(test_ns_parser_reset) {\n  XML_ParsingStatus status;\n\n  XML_GetParsingStatus(g_parser, &status);\n  if (status.parsing != XML_INITIALIZED)\n    fail(\"parsing status doesn't start INITIALIZED\");\n  test_return_ns_triplet();\n  XML_GetParsingStatus(g_parser, &status);\n  if (status.parsing != XML_FINISHED)\n    fail(\"parsing status doesn't end FINISHED\");\n  XML_ParserReset(g_parser, NULL);\n  XML_GetParsingStatus(g_parser, &status);\n  if (status.parsing != XML_INITIALIZED)\n    fail(\"parsing status doesn't reset to INITIALIZED\");\n}\nEND_TEST",
+      "line_start": 104,
+      "line_end": 119,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_tagname_overwrite",
+      "body": "START_TEST(test_ns_tagname_overwrite) {\n  const char *text = \"<n:e xmlns:n='http://example.org/'>\\n\"\n                     \"  <n:f n:attr='foo'/>\\n\"\n                     \"  <n:g n:attr2='bar'/>\\n\"\n                     \"</n:e>\";\n  const XML_Char *result = XCS(\"start http://example.org/ e\\n\")\n      XCS(\"start http://example.org/ f\\n\")\n          XCS(\"attribute http://example.org/ attr\\n\")\n              XCS(\"end http://example.org/ f\\n\")\n                  XCS(\"start http://example.org/ g\\n\")\n                      XCS(\"attribute http://example.org/ attr2\\n\")\n                          XCS(\"end http://example.org/ g\\n\")\n                              XCS(\"end http://example.org/ e\\n\");\n  run_ns_tagname_overwrite_test(text, result);\n}\nEND_TEST",
+      "line_start": 135,
+      "line_end": 150,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_tagname_overwrite_triplet",
+      "body": "START_TEST(test_ns_tagname_overwrite_triplet) {\n  const char *text = \"<n:e xmlns:n='http://example.org/'>\\n\"\n                     \"  <n:f n:attr='foo'/>\\n\"\n                     \"  <n:g n:attr2='bar'/>\\n\"\n                     \"</n:e>\";\n  const XML_Char *result = XCS(\"start http://example.org/ e n\\n\")\n      XCS(\"start http://example.org/ f n\\n\")\n          XCS(\"attribute http://example.org/ attr n\\n\")\n              XCS(\"end http://example.org/ f n\\n\")\n                  XCS(\"start http://example.org/ g n\\n\")\n                      XCS(\"attribute http://example.org/ attr2 n\\n\")\n                          XCS(\"end http://example.org/ g n\\n\")\n                              XCS(\"end http://example.org/ e n\\n\");\n  XML_SetReturnNSTriplet(g_parser, XML_TRUE);\n  run_ns_tagname_overwrite_test(text, result);\n}\nEND_TEST",
+      "line_start": 153,
+      "line_end": 169,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_start_ns_clears_start_element",
+      "body": "START_TEST(test_start_ns_clears_start_element) {\n  /* This needs to use separate start/end tags; using the empty tag\n     syntax doesn't cause the problematic path through Expat to be\n     taken.\n  */\n  const char *text = \"<e xmlns='http://example.org/'></e>\";\n\n  XML_SetStartElementHandler(g_parser, start_element_fail);\n  XML_SetStartNamespaceDeclHandler(g_parser, start_ns_clearing_start_element);\n  XML_SetEndNamespaceDeclHandler(g_parser, dummy_end_namespace_decl_handler);\n  XML_UseParserAsHandlerArg(g_parser);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n}\nEND_TEST",
+      "line_start": 172,
+      "line_end": 187,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_default_ns_from_ext_subset_and_ext_ge",
+      "body": "START_TEST(test_default_ns_from_ext_subset_and_ext_ge) {\n  const char *text = \"<?xml version='1.0'?>\\n\"\n                     \"<!DOCTYPE doc SYSTEM 'http://example.org/doc.dtd' [\\n\"\n                     \"  <!ENTITY en SYSTEM 'http://example.org/entity.ent'>\\n\"\n                     \"]>\\n\"\n                     \"<doc xmlns='http://example.org/ns1'>\\n\"\n                     \"&en;\\n\"\n                     \"</doc>\";\n\n  XML_SetParamEntityParsing(g_parser, XML_PARAM_ENTITY_PARSING_ALWAYS);\n  XML_SetExternalEntityRefHandler(g_parser, external_entity_handler);\n  /* We actually need to set this handler to tickle this bug. */\n  XML_SetStartElementHandler(g_parser, dummy_start_element);\n  XML_SetUserData(g_parser, NULL);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n}\nEND_TEST",
+      "line_start": 190,
+      "line_end": 208,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "ifdef_xml_dtd"
+    },
+    {
+      "name": "test_ns_prefix_with_empty_uri_1",
+      "body": "START_TEST(test_ns_prefix_with_empty_uri_1) {\n  const char *text = \"<doc xmlns:prefix='http://example.org/'>\\n\"\n                     \"  <e xmlns:prefix=''/>\\n\"\n                     \"</doc>\";\n\n  expect_failure(text, XML_ERROR_UNDECLARING_PREFIX,\n                 \"Did not report re-setting namespace\"\n                 \" URI with prefix to ''.\");\n}\nEND_TEST",
+      "line_start": 211,
+      "line_end": 220,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_prefix_with_empty_uri_2",
+      "body": "START_TEST(test_ns_prefix_with_empty_uri_2) {\n  const char *text = \"<?xml version='1.0'?>\\n\"\n                     \"<docelem xmlns:pre=''/>\";\n\n  expect_failure(text, XML_ERROR_UNDECLARING_PREFIX,\n                 \"Did not report setting namespace URI with prefix to ''.\");\n}\nEND_TEST",
+      "line_start": 223,
+      "line_end": 230,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_prefix_with_empty_uri_3",
+      "body": "START_TEST(test_ns_prefix_with_empty_uri_3) {\n  const char *text = \"<!DOCTYPE doc [\\n\"\n                     \"  <!ELEMENT doc EMPTY>\\n\"\n                     \"  <!ATTLIST doc\\n\"\n                     \"    xmlns:prefix CDATA ''>\\n\"\n                     \"]>\\n\"\n                     \"<doc/>\";\n\n  expect_failure(text, XML_ERROR_UNDECLARING_PREFIX,\n                 \"Didn't report attr default setting NS w/ prefix to ''.\");\n}\nEND_TEST",
+      "line_start": 233,
+      "line_end": 244,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_prefix_with_empty_uri_4",
+      "body": "START_TEST(test_ns_prefix_with_empty_uri_4) {\n  const char *text = \"<!DOCTYPE doc [\\n\"\n                     \"  <!ELEMENT prefix:doc EMPTY>\\n\"\n                     \"  <!ATTLIST prefix:doc\\n\"\n                     \"    xmlns:prefix CDATA 'http://example.org/'>\\n\"\n                     \"]>\\n\"\n                     \"<prefix:doc/>\";\n  /* Packaged info expected by the end element handler;\n     the weird structuring lets us reuse the triplet_end_checker()\n     function also used for another test. */\n  const XML_Char *elemstr[] = {XCS(\"http://example.org/ doc prefix\")};\n  XML_SetReturnNSTriplet(g_parser, XML_TRUE);\n  XML_SetUserData(g_parser, (void *)elemstr);\n  XML_SetEndElementHandler(g_parser, triplet_end_checker);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n}\nEND_TEST",
+      "line_start": 247,
+      "line_end": 265,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_unbound_prefix",
+      "body": "START_TEST(test_ns_unbound_prefix) {\n  const char *text = \"<!DOCTYPE doc [\\n\"\n                     \"  <!ELEMENT prefix:doc EMPTY>\\n\"\n                     \"  <!ATTLIST prefix:doc\\n\"\n                     \"    notxmlns:prefix CDATA 'http://example.org/'>\\n\"\n                     \"]>\\n\"\n                     \"<prefix:doc/>\";\n\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      != XML_STATUS_ERROR)\n    fail(\"Unbound prefix incorrectly passed\");\n  if (XML_GetErrorCode(g_parser) != XML_ERROR_UNBOUND_PREFIX)\n    xml_failure(g_parser);\n}\nEND_TEST",
+      "line_start": 268,
+      "line_end": 282,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_default_with_empty_uri",
+      "body": "START_TEST(test_ns_default_with_empty_uri) {\n  const char *text = \"<doc xmlns='http://example.org/'>\\n\"\n                     \"  <e xmlns=''/>\\n\"\n                     \"</doc>\";\n  /* Add some handlers to exercise extra code paths */\n  XML_SetStartNamespaceDeclHandler(g_parser,\n                                   dummy_start_namespace_decl_handler);\n  XML_SetEndNamespaceDeclHandler(g_parser, dummy_end_namespace_decl_handler);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n}\nEND_TEST",
+      "line_start": 284,
+      "line_end": 296,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_duplicate_attrs_diff_prefixes",
+      "body": "START_TEST(test_ns_duplicate_attrs_diff_prefixes) {\n  const char *text = \"<doc xmlns:a='http://example.org/a'\\n\"\n                     \"     xmlns:b='http://example.org/a'\\n\"\n                     \"     a:a='v' b:a='v' />\";\n  expect_failure(text, XML_ERROR_DUPLICATE_ATTRIBUTE,\n                 \"did not report multiple attributes with same URI+name\");\n}\nEND_TEST",
+      "line_start": 299,
+      "line_end": 306,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_duplicate_hashes",
+      "body": "START_TEST(test_ns_duplicate_hashes) {\n  /* The hash of an attribute is calculated as the hash of its URI\n   * concatenated with a space followed by its name (after the\n   * colon).  We wish to generate attributes with the same hash\n   * value modulo the attribute table size so that we can check that\n   * the attribute hash table works correctly.  The attribute hash\n   * table size will be the smallest power of two greater than the\n   * number of attributes, but at least eight.  There is\n   * unfortunately no programmatic way of getting the hash or the\n   * table size at user level, but the test code coverage percentage\n   * will drop if the hashes cease to point to the same row.\n   *\n   * The cunning plan is to have few enough attributes to have a\n   * reliable table size of 8, and have the single letter attribute\n   * names be 8 characters apart, producing a hash which will be the\n   * same modulo 8.\n   */\n  const char *text = \"<doc xmlns:a='http://example.org/a'\\n\"\n                     \"     a:a='v' a:i='w' />\";\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n}\nEND_TEST",
+      "line_start": 308,
+      "line_end": 331,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_unbound_prefix_on_attribute",
+      "body": "START_TEST(test_ns_unbound_prefix_on_attribute) {\n  const char *text = \"<doc a:attr=''/>\";\n  expect_failure(text, XML_ERROR_UNBOUND_PREFIX,\n                 \"did not report unbound prefix on attribute\");\n}\nEND_TEST",
+      "line_start": 334,
+      "line_end": 339,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_unbound_prefix_on_element",
+      "body": "START_TEST(test_ns_unbound_prefix_on_element) {\n  const char *text = \"<a:doc/>\";\n  expect_failure(text, XML_ERROR_UNBOUND_PREFIX,\n                 \"did not report unbound prefix on element\");\n}\nEND_TEST",
+      "line_start": 342,
+      "line_end": 347,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_long_element",
+      "body": "START_TEST(test_ns_long_element) {\n  const char *text\n      = \"<foo:thisisalongenoughelementnametotriggerareallocation\\n\"\n        \" xmlns:foo='http://example.org/' bar:a='12'\\n\"\n        \" xmlns:bar='http://example.org/'>\"\n        \"</foo:thisisalongenoughelementnametotriggerareallocation>\";\n  const XML_Char *elemstr[]\n      = {XCS(\"http://example.org/\")\n             XCS(\" thisisalongenoughelementnametotriggerareallocation foo\"),\n         XCS(\"http://example.org/ a bar\")};\n\n  XML_SetReturnNSTriplet(g_parser, XML_TRUE);\n  XML_SetUserData(g_parser, (void *)elemstr);\n  XML_SetElementHandler(g_parser, triplet_start_checker, triplet_end_checker);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n}\nEND_TEST",
+      "line_start": 350,
+      "line_end": 368,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_mixed_prefix_atts",
+      "body": "START_TEST(test_ns_mixed_prefix_atts) {\n  const char *text = \"<e a='12' bar:b='13'\\n\"\n                     \" xmlns:bar='http://example.org/'>\"\n                     \"</e>\";\n\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n}\nEND_TEST",
+      "line_start": 371,
+      "line_end": 380,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_extend_uri_buffer",
+      "body": "START_TEST(test_ns_extend_uri_buffer) {\n  const char *text = \"<foo:e xmlns:foo='http://example.org/'>\"\n                     \" <foo:thisisalongenoughnametotriggerallocationaction\"\n                     \"   foo:a='12' />\"\n                     \"</foo:e>\";\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n}\nEND_TEST",
+      "line_start": 386,
+      "line_end": 395,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_reserved_attributes",
+      "body": "START_TEST(test_ns_reserved_attributes) {\n  const char *text1\n      = \"<foo:e xmlns:foo='http://example.org/' xmlns:xmlns='12' />\";\n  const char *text2\n      = \"<foo:e xmlns:foo='http://example.org/' foo:xmlns='12' />\";\n  expect_failure(text1, XML_ERROR_RESERVED_PREFIX_XMLNS,\n                 \"xmlns not rejected as an attribute\");\n  XML_ParserReset(g_parser, NULL);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text2, (int)strlen(text2), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n}\nEND_TEST",
+      "line_start": 400,
+      "line_end": 412,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_reserved_attributes_2",
+      "body": "START_TEST(test_ns_reserved_attributes_2) {\n  const char *text1 = \"<foo:e xmlns:foo='http://example.org/'\"\n                      \"  xmlns:xml='http://example.org/' />\";\n  const char *text2\n      = \"<foo:e xmlns:foo='http://www.w3.org/XML/1998/namespace' />\";\n  const char *text3 = \"<foo:e xmlns:foo='http://www.w3.org/2000/xmlns/' />\";\n\n  expect_failure(text1, XML_ERROR_RESERVED_PREFIX_XML,\n                 \"xml not rejected as an attribute\");\n  XML_ParserReset(g_parser, NULL);\n  expect_failure(text2, XML_ERROR_RESERVED_NAMESPACE_URI,\n                 \"Use of w3.org URL not faulted\");\n  XML_ParserReset(g_parser, NULL);\n  expect_failure(text3, XML_ERROR_RESERVED_NAMESPACE_URI,\n                 \"Use of w3.org xmlns URL not faulted\");\n}\nEND_TEST",
+      "line_start": 415,
+      "line_end": 431,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_extremely_long_prefix",
+      "body": "START_TEST(test_ns_extremely_long_prefix) {\n  /* C99 compilers are only required to support 4095-character\n   * strings, so the following needs to be split in two to be safe\n   * for all compilers.\n   */\n  const char *text1\n      = \"<doc \"\n        /* 64 character on each line */\n        /* ...gives a total length of 2048 */\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \":a='12'\";\n  const char *text2\n      = \" xmlns:\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\"\n        \"='foo'\\n>\"\n        \"</doc>\";\n\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text1, (int)strlen(text1), XML_FALSE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text2, (int)strlen(text2), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n}\nEND_TEST",
+      "line_start": 435,
+      "line_end": 521,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_unknown_encoding_success",
+      "body": "START_TEST(test_ns_unknown_encoding_success) {\n  const char *text = \"<?xml version='1.0' encoding='prefix-conv'?>\\n\"\n                     \"<foo:e xmlns:foo='http://example.org/'>Hi</foo:e>\";\n\n  XML_SetUnknownEncodingHandler(g_parser, MiscEncodingHandler, NULL);\n  run_character_check(text, XCS(\"Hi\"));\n}\nEND_TEST",
+      "line_start": 524,
+      "line_end": 531,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_double_colon",
+      "body": "START_TEST(test_ns_double_colon) {\n  const char *text = \"<foo:e xmlns:foo='http://example.org/' foo:a:b='bar' />\";\n  const enum XML_Status status\n      = _XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE);\n#ifdef XML_NS\n  if ((status == XML_STATUS_OK)\n      || (XML_GetErrorCode(g_parser) != XML_ERROR_INVALID_TOKEN)) {\n    fail(\"Double colon in attribute name not faulted\"\n         \" (despite active namespace support)\");\n  }\n#else\n  if (status != XML_STATUS_OK) {\n    fail(\"Double colon in attribute name faulted\"\n         \" (despite inactive namespace support\");\n  }\n#endif\n}\nEND_TEST",
+      "line_start": 534,
+      "line_end": 551,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_double_colon_element",
+      "body": "START_TEST(test_ns_double_colon_element) {\n  const char *text = \"<foo:bar:e xmlns:foo='http://example.org/' />\";\n  const enum XML_Status status\n      = _XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE);\n#ifdef XML_NS\n  if ((status == XML_STATUS_OK)\n      || (XML_GetErrorCode(g_parser) != XML_ERROR_INVALID_TOKEN)) {\n    fail(\"Double colon in element name not faulted\"\n         \" (despite active namespace support)\");\n  }\n#else\n  if (status != XML_STATUS_OK) {\n    fail(\"Double colon in element name faulted\"\n         \" (despite inactive namespace support\");\n  }\n#endif\n}\nEND_TEST",
+      "line_start": 553,
+      "line_end": 570,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_bad_attr_leafname",
+      "body": "START_TEST(test_ns_bad_attr_leafname) {\n  const char *text = \"<foo:e xmlns:foo='http://example.org/' foo:?ar='baz' />\";\n\n  expect_failure(text, XML_ERROR_INVALID_TOKEN,\n                 \"Invalid character in leafname not faulted\");\n}\nEND_TEST",
+      "line_start": 573,
+      "line_end": 579,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_bad_element_leafname",
+      "body": "START_TEST(test_ns_bad_element_leafname) {\n  const char *text = \"<foo:?oc xmlns:foo='http://example.org/' />\";\n\n  expect_failure(text, XML_ERROR_INVALID_TOKEN,\n                 \"Invalid character in element leafname not faulted\");\n}\nEND_TEST",
+      "line_start": 581,
+      "line_end": 587,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_utf16_leafname",
+      "body": "START_TEST(test_ns_utf16_leafname) {\n  const char text[] =\n      /* <n:e xmlns:n='URI' n:{KHO KHWAI}='a' />\n       * where {KHO KHWAI} = U+0E04 = 0xe0 0xb8 0x84 in UTF-8\n       */\n      \"<\\0n\\0:\\0e\\0 \\0x\\0m\\0l\\0n\\0s\\0:\\0n\\0=\\0'\\0U\\0R\\0I\\0'\\0 \\0\"\n      \"n\\0:\\0\\x04\\x0e=\\0'\\0a\\0'\\0 \\0/\\0>\\0\";\n  const XML_Char *expected = XCS(\"a\");\n  CharData storage;\n\n  CharData_Init(&storage);\n  XML_SetStartElementHandler(g_parser, accumulate_attribute);\n  XML_SetUserData(g_parser, &storage);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)sizeof(text) - 1, XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n  CharData_CheckXMLChars(&storage, expected);\n}\nEND_TEST",
+      "line_start": 590,
+      "line_end": 608,
+      "external_refs": [
+        "CharData_CheckXMLChars",
+        "CharData_Init",
+        "_XML_Parse_SINGLE_BYTES",
+        "accumulate_attribute"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_utf16_element_leafname",
+      "body": "START_TEST(test_ns_utf16_element_leafname) {\n  const char text[] =\n      /* <n:{KHO KHWAI} xmlns:n='URI'/>\n       * where {KHO KHWAI} = U+0E04 = 0xe0 0xb8 0x84 in UTF-8\n       */\n      \"\\0<\\0n\\0:\\x0e\\x04\\0 \\0x\\0m\\0l\\0n\\0s\\0:\\0n\\0=\\0'\\0U\\0R\\0I\\0'\\0/\\0>\";\n#ifdef XML_UNICODE\n  const XML_Char *expected = XCS(\"URI \\x0e04\");\n#else\n  const XML_Char *expected = XCS(\"URI \\xe0\\xb8\\x84\");\n#endif\n  CharData storage;\n\n  CharData_Init(&storage);\n  XML_SetStartElementHandler(g_parser, start_element_event_handler);\n  XML_SetUserData(g_parser, &storage);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)sizeof(text) - 1, XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n  CharData_CheckXMLChars(&storage, expected);\n}\nEND_TEST",
+      "line_start": 610,
+      "line_end": 631,
+      "external_refs": [
+        "CharData_CheckXMLChars",
+        "CharData_Init",
+        "_XML_Parse_SINGLE_BYTES",
+        "start_element_event_handler"
+      ],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_utf16_doctype",
+      "body": "START_TEST(test_ns_utf16_doctype) {\n  const char text[] =\n      /* <!DOCTYPE foo:{KHO KHWAI} [ <!ENTITY bar 'baz'> ]>\\n\n       * where {KHO KHWAI} = U+0E04 = 0xe0 0xb8 0x84 in UTF-8\n       */\n      \"\\0<\\0!\\0D\\0O\\0C\\0T\\0Y\\0P\\0E\\0 \\0f\\0o\\0o\\0:\\x0e\\x04\\0 \"\n      \"\\0[\\0 \\0<\\0!\\0E\\0N\\0T\\0I\\0T\\0Y\\0 \\0b\\0a\\0r\\0 \\0'\\0b\\0a\\0z\\0'\\0>\\0 \"\n      \"\\0]\\0>\\0\\n\"\n      /* <foo:{KHO KHWAI} xmlns:foo='URI'>&bar;</foo:{KHO KHWAI}> */\n      \"\\0<\\0f\\0o\\0o\\0:\\x0e\\x04\\0 \"\n      \"\\0x\\0m\\0l\\0n\\0s\\0:\\0f\\0o\\0o\\0=\\0'\\0U\\0R\\0I\\0'\\0>\"\n      \"\\0&\\0b\\0a\\0r\\0;\"\n      \"\\0<\\0/\\0f\\0o\\0o\\0:\\x0e\\x04\\0>\";\n#ifdef XML_UNICODE\n  const XML_Char *expected = XCS(\"URI \\x0e04\");\n#else\n  const XML_Char *expected = XCS(\"URI \\xe0\\xb8\\x84\");\n#endif\n  CharData storage;\n\n  CharData_Init(&storage);\n  XML_SetUserData(g_parser, &storage);\n  XML_SetStartElementHandler(g_parser, start_element_event_handler);\n  XML_SetUnknownEncodingHandler(g_parser, MiscEncodingHandler, NULL);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)sizeof(text) - 1, XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n  CharData_CheckXMLChars(&storage, expected);\n}\nEND_TEST",
+      "line_start": 633,
+      "line_end": 662,
+      "external_refs": [
+        "CharData_CheckXMLChars",
+        "CharData_Init",
+        "_XML_Parse_SINGLE_BYTES",
+        "start_element_event_handler"
+      ],
+      "registration": "if_xml_ge"
+    },
+    {
+      "name": "test_ns_invalid_doctype",
+      "body": "START_TEST(test_ns_invalid_doctype) {\n  const char *text = \"<!DOCTYPE foo:!bad [ <!ENTITY bar 'baz' ]>\\n\"\n                     \"<foo:!bad>&bar;</foo:!bad>\";\n\n  expect_failure(text, XML_ERROR_INVALID_TOKEN,\n                 \"Invalid character in document local name not faulted\");\n}\nEND_TEST",
+      "line_start": 664,
+      "line_end": 671,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_double_colon_doctype",
+      "body": "START_TEST(test_ns_double_colon_doctype) {\n  const char *text = \"<!DOCTYPE foo:a:doc [ <!ENTITY bar 'baz' ]>\\n\"\n                     \"<foo:a:doc>&bar;</foo:a:doc>\";\n\n  expect_failure(text, XML_ERROR_SYNTAX,\n                 \"Double colon in document name not faulted\");\n}\nEND_TEST",
+      "line_start": 673,
+      "line_end": 680,
+      "external_refs": [],
+      "registration": "normal"
+    },
+    {
+      "name": "test_ns_separator_in_uri",
+      "body": "START_TEST(test_ns_separator_in_uri) {\n  struct test_case {\n    enum XML_Status expectedStatus;\n    const char *doc;\n    XML_Char namesep;\n  };\n  struct test_case cases[] = {\n      {XML_STATUS_OK, \"<doc xmlns='one_two' />\", XCS('\\n')},\n      {XML_STATUS_ERROR, \"<doc xmlns='one&#x0A;two' />\", XCS('\\n')},\n      {XML_STATUS_OK, \"<doc xmlns='one:two' />\", XCS(':')},\n  };\n\n  size_t i = 0;\n  size_t failCount = 0;\n  for (; i < sizeof(cases) / sizeof(cases[0]); i++) {\n    set_subtest(\"%s\", cases[i].doc);\n    XML_Parser parser = XML_ParserCreateNS(NULL, cases[i].namesep);\n    XML_SetElementHandler(parser, dummy_start_element, dummy_end_element);\n    if (_XML_Parse_SINGLE_BYTES(parser, cases[i].doc, (int)strlen(cases[i].doc),\n                                /*isFinal*/ XML_TRUE)\n        != cases[i].expectedStatus) {\n      failCount++;\n    }\n    XML_ParserFree(parser);\n  }\n\n  if (failCount) {\n    fail(\"Namespace separator handling is broken\");\n  }\n}\nEND_TEST",
+      "line_start": 682,
+      "line_end": 712,
+      "external_refs": [
+        "_XML_Parse_SINGLE_BYTES"
+      ],
+      "registration": "normal"
+    }
+  ],
+  "helpers": [
+    {
+      "name": "namespace_setup",
+      "body": "static void\nnamespace_setup(void) {\n  g_parser = XML_ParserCreateNS(NULL, XCS(' '));\n  if (g_parser == NULL)\n    fail(\"Parser not created.\");\n}",
+      "line": 56
+    },
+    {
+      "name": "namespace_teardown",
+      "body": "static void\nnamespace_teardown(void) {\n  basic_teardown();\n}",
+      "line": 63
+    },
+    {
+      "name": "run_ns_tagname_overwrite_test",
+      "body": "static void\nrun_ns_tagname_overwrite_test(const char *text, const XML_Char *result) {\n  CharData storage;\n  CharData_Init(&storage);\n  XML_SetUserData(g_parser, &storage);\n  XML_SetElementHandler(g_parser, overwrite_start_checker,\n                        overwrite_end_checker);\n  if (_XML_Parse_SINGLE_BYTES(g_parser, text, (int)strlen(text), XML_TRUE)\n      == XML_STATUS_ERROR)\n    xml_failure(g_parser);\n  CharData_CheckXMLChars(&storage, result);\n}",
+      "line": 121
+    }
+  ]
+}
