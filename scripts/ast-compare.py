@@ -150,6 +150,17 @@ def extract_switch_cases_ast(func_node, lang):
                 body_text = node.text.decode()
                 errors = set(re.findall(r'XmlError::(\w+)', body_text))
                 handlers = set(re.findall(r'self\.(\w+_handler)', body_text))
+                # report_default() is equivalent to calling default_handler
+                if 'report_default' in body_text:
+                    handlers.add('default_handler')
+                # report_comment() is equivalent to calling comment_handler + default_handler
+                if 'report_comment' in body_text:
+                    handlers.add('comment_handler')
+                    handlers.add('default_handler')
+                # report_processing_instruction() is equivalent to calling processing_instruction_handler + default_handler
+                if 'report_processing_instruction' in body_text:
+                    handlers.add('processing_instruction_handler')
+                    handlers.add('default_handler')
                 func_calls = set(re.findall(r'(?:self\.|Self::)?(\w+)\s*\(', body_text))
                 func_calls -= {'match', 'if', 'Some', 'None', 'Ok', 'Err', 'unwrap',
                                'unwrap_or', 'as_bytes', 'to_string', 'len', 'push',
@@ -185,7 +196,17 @@ def extract_all_handlers(func_node, lang):
     if lang == "c":
         return set(re.findall(r'parser->m_(\w+Handler)', text))
     else:
-        return set(re.findall(r'self\.(\w+_handler)', text))
+        handlers = set(re.findall(r'self\.(\w+_handler)', text))
+        # Recognize helper functions that internally call handlers
+        if 'report_default' in text:
+            handlers.add('default_handler')
+        if 'report_comment' in text:
+            handlers.add('comment_handler')
+            handlers.add('default_handler')
+        if 'report_processing_instruction' in text:
+            handlers.add('processing_instruction_handler')
+            handlers.add('default_handler')
+        return handlers
 
 
 # ========= Mapping tables =========

@@ -550,6 +550,16 @@ impl Parser {
             };
 
             match tok {
+                XmlTok::Bom => {
+                    // BOM — skip it and continue
+                    if next == end && have_more {
+                        self.buffer = data[next..].to_vec();
+                        return (XmlError::None, end);
+                    }
+                    self.advance_pos_slice(&data[pos..next]);
+                    pos = next;
+                    continue;
+                }
                 XmlTok::None => {
                     // End of buffer
                     break;
@@ -698,6 +708,8 @@ impl Parser {
                                 encoding_str.as_deref(),
                                 info.standalone.map(|s| if s { 1 } else { 0 }),
                             );
+                        } else {
+                            self.report_default(&xmltok::Utf8Encoding, data, pos, next);
                         }
 
                         // Check encoding — matches C processXmlDecl logic
@@ -937,6 +949,9 @@ impl Parser {
                 Ok(TokenResult { token, next_pos }) => {
                     match token {
                         XmlTok::PrologS => {
+                            if let Some(handler) = &mut self.default_handler {
+                                handler(&data[pos..next_pos]);
+                            }
                             pos = next_pos;
                         }
                         XmlTok::Comment => {
@@ -1033,6 +1048,8 @@ impl Parser {
                     }
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&[b'\n']);
+                    } else {
+                        self.report_default(enc, data, pos, end);
                     }
                     if start_tag_level == 0 {
                         return (XmlError::NoElements, next);
@@ -1087,6 +1104,8 @@ impl Parser {
                                 let encoded = c.encode_utf8(&mut buf);
                                 handler(encoded.as_bytes());
                             }
+                        } else {
+                            self.report_default(enc, data, pos, next);
                         }
                     } else {
                         // General entity reference — check internal entities
@@ -1098,6 +1117,8 @@ impl Parser {
                             }
                         } else if let Some(handler) = &mut self.skipped_entity_handler {
                             handler(name, false);
+                        } else if self.default_handler.is_some() {
+                            self.report_default(enc, data, pos, next);
                         } else {
                             // No handler and no DTD — report undefined entity
                             // But only if standalone or no param entity refs
@@ -1222,6 +1243,8 @@ impl Parser {
                             let encoded = c.encode_utf8(&mut buf);
                             handler(encoded.as_bytes());
                         }
+                    } else {
+                        self.report_default(enc, data, pos, next);
                     }
                 }
 
@@ -1232,6 +1255,8 @@ impl Parser {
                 XmlTok::DataNewline => {
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&[b'\n']);
+                    } else {
+                        self.report_default(enc, data, pos, next);
                     }
                 }
 
@@ -1264,6 +1289,8 @@ impl Parser {
                 XmlTok::DataChars => {
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&data[pos..next]);
+                    } else {
+                        self.report_default(enc, data, pos, next);
                     }
                 }
 
@@ -1322,14 +1349,33 @@ impl Parser {
                 XmlTok::DataNewline => {
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&[b'\n']);
+                    } else {
+                        self.report_default(enc, data, pos, next);
                     }
                 }
                 XmlTok::DataChars => {
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&data[pos..next]);
+                    } else {
+                        self.report_default(enc, data, pos, next);
                     }
                 }
-                XmlTok::None | XmlTok::Partial => {
+                XmlTok::Invalid => {
+                    return (XmlError::InvalidToken, next);
+                }
+                XmlTok::PartialChar => {
+                    if have_more {
+                        return (XmlError::None, pos);
+                    }
+                    return (XmlError::PartialChar, pos);
+                }
+                XmlTok::Partial => {
+                    if have_more {
+                        return (XmlError::None, pos);
+                    }
+                    return (XmlError::UnclosedCdataSection, pos);
+                }
+                XmlTok::None => {
                     if have_more {
                         return (XmlError::None, pos);
                     }
@@ -1337,6 +1383,18 @@ impl Parser {
                 }
                 _ => {}
             }
+
+            // Check parsing state after handler calls
+            match self.parsing_state {
+                ParsingState::Suspended => {
+                    return (XmlError::None, next);
+                }
+                ParsingState::Finished => {
+                    return (XmlError::Aborted, next);
+                }
+                _ => {}
+            }
+
             pos = next;
         }
     }
@@ -1392,6 +1450,8 @@ impl Parser {
 
         if let Some(handler) = &mut self.processing_instruction_handler {
             handler(target, pi_data);
+        } else if let Some(handler) = &mut self.default_handler {
+            handler(&data[start..end]);
         }
     }
 
@@ -1414,6 +1474,8 @@ impl Parser {
         };
         if let Some(handler) = &mut self.comment_handler {
             handler(comment_data);
+        } else if let Some(handler) = &mut self.default_handler {
+            handler(&data[start..end]);
         }
     }
 
