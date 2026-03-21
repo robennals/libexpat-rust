@@ -40,5 +40,10 @@ expat/tests/**/Release/
 
 # Rust build artifacts
 expat-rust/target/
+expat-sys/target/
+c2rust-output/target/
 *.pyc
 __pycache__/
+
+# CMake build artifacts
+expat/build/

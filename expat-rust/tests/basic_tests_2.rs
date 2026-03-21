@@ -226,7 +226,8 @@ fn test_trailing_cr() {
     })));
 
     let result = parser.parse(text, true);
-    assert_ne!(result, XmlStatus::Error, "Parse should not error on trailing CR");
+    // C expects this to fail - unclosed <doc> tag on final parse
+    assert_eq!(result, XmlStatus::Error, "Should fault unclosed doc on trailing CR");
 }
 
 // Test 122: test_ext_entity_trailing_cr
