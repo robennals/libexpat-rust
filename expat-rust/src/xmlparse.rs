@@ -772,8 +772,13 @@ impl Parser {
                 // Store DOCTYPE name for subsequent roles
                 XmlError::None
             }
-            Role::DoctypePublicId => {
-                // Store public ID
+            Role::DoctypePublicId | Role::EntityPublicId | Role::NotationPublicId => {
+                // Validate public ID characters (matches C normalizePublicId)
+                // tok_text has quotes stripped
+                if !is_valid_public_id(tok_text) {
+                    self.event_pos = pos;
+                    return XmlError::Publicid;
+                }
                 XmlError::None
             }
             Role::DoctypeSystemId => {
@@ -2634,6 +2639,22 @@ fn transcode_latin1_to_utf8(data: &[u8]) -> Vec<u8> {
         }
     }
     result
+}
+
+/// Validate public ID characters per XML spec
+/// PubidChar ::= #x20 | #xD | #xA | [a-zA-Z0-9] | [-'()+,./:=?;!*#@$_%]
+fn is_valid_public_id(data: &[u8]) -> bool {
+    for &b in data {
+        match b {
+            0x20 | 0x0D | 0x0A => {} // whitespace
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => {} // alphanumeric
+            b'-' | b'\'' | b'(' | b')' | b'+' | b',' | b'.' | b'/' | b':'
+            | b'=' | b'?' | b';' | b'!' | b'*' | b'#' | b'@' | b'$' | b'_'
+            | b'%' => {} // special chars
+            _ => return false,
+        }
+    }
+    true
 }
 
 fn is_known_encoding(name: &str) -> bool {
