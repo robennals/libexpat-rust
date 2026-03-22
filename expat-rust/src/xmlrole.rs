@@ -1009,6 +1009,11 @@ fn element3(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> R
 fn element4(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> Role {
     match tok {
         Token::PrologS => Role::ElementNone,
+        Token::Name | Token::PrefixedName => {
+            // Element name in mixed content model (#PCDATA|name)*
+            state.state = PrologState::Element5;
+            Role::ContentElement
+        }
         Token::PoundName => {
             if keyword_matches(_ptr, "PCDATA") {
                 state.state = PrologState::Element3;
@@ -1021,57 +1026,20 @@ fn element4(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> R
     }
 }
 
+/// element5: after element name in mixed content (#PCDATA|name)
+/// Matches C element5 — only accepts CloseParenAsterisk and Or
 fn element5(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> Role {
     match tok {
         Token::PrologS => Role::ElementNone,
-        Token::CloseParen => {
-            state.level -= 1;
-            if state.level == 0 {
-                state.state = PrologState::DeclClose;
-                state.role_none = Role::ElementNone;
-            } else {
-                state.state = PrologState::Element7;
-            }
-            Role::GroupClose
-        }
         Token::CloseParenAsterix => {
-            state.level -= 1;
-            if state.level == 0 {
-                state.state = PrologState::DeclClose;
-                state.role_none = Role::ElementNone;
-            } else {
-                state.state = PrologState::Element7;
-            }
+            state.state = PrologState::DeclClose;
+            state.role_none = Role::ElementNone;
             Role::GroupCloseRep
         }
-        Token::CloseParenQuestion => {
-            state.level -= 1;
-            if state.level == 0 {
-                state.state = PrologState::DeclClose;
-                state.role_none = Role::ElementNone;
-            } else {
-                state.state = PrologState::Element7;
-            }
-            Role::GroupCloseOpt
-        }
-        Token::CloseParenPlus => {
-            state.level -= 1;
-            if state.level == 0 {
-                state.state = PrologState::DeclClose;
-                state.role_none = Role::ElementNone;
-            } else {
-                state.state = PrologState::Element7;
-            }
-            Role::GroupClosePlus
-        }
-        Token::Or | Token::Comma => {
-            if tok == Token::Or {
-                state.state = PrologState::Element6;
-                Role::GroupChoice
-            } else {
-                state.state = PrologState::Element6;
-                Role::GroupSequence
-            }
+        Token::Or => {
+            // Return to element4 for more element names in mixed content
+            state.state = PrologState::Element4;
+            Role::ElementNone
         }
         _ => common(state, tok),
     }
@@ -1119,7 +1087,7 @@ fn element7(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> R
                 state.state = PrologState::DeclClose;
                 state.role_none = Role::ElementNone;
             } else {
-                state.state = PrologState::Element5;
+                state.state = PrologState::Element7;
             }
             Role::GroupClose
         }
@@ -1129,7 +1097,7 @@ fn element7(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> R
                 state.state = PrologState::DeclClose;
                 state.role_none = Role::ElementNone;
             } else {
-                state.state = PrologState::Element5;
+                state.state = PrologState::Element7;
             }
             Role::GroupCloseRep
         }
@@ -1139,7 +1107,7 @@ fn element7(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> R
                 state.state = PrologState::DeclClose;
                 state.role_none = Role::ElementNone;
             } else {
-                state.state = PrologState::Element5;
+                state.state = PrologState::Element7;
             }
             Role::GroupCloseOpt
         }
@@ -1149,7 +1117,7 @@ fn element7(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> R
                 state.state = PrologState::DeclClose;
                 state.role_none = Role::ElementNone;
             } else {
-                state.state = PrologState::Element5;
+                state.state = PrologState::Element7;
             }
             Role::GroupClosePlus
         }

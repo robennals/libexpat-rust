@@ -852,6 +852,19 @@ pub fn scan_atts<E: Encoding>(
     // Outer loop: scan attribute name characters
     while enc.has_char(data, pos, end) {
         match enc.byte_type(data, pos) {
+            // Multi-byte name characters (LEAD2/3/4)
+            ByteType::LEAD2 => {
+                if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                pos += 2;
+            }
+            ByteType::LEAD3 => {
+                if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                pos += 3;
+            }
+            ByteType::LEAD4 => {
+                if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                pos += 4;
+            }
             // Name characters — continue scanning attr name
             _ if is_name_char(enc.byte_type(data, pos))
                 && !matches!(enc.byte_type(data, pos), ByteType::S | ByteType::CR | ByteType::LF
