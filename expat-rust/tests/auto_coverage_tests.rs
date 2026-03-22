@@ -319,6 +319,33 @@ fn valid_xml_corpus() -> Vec<(Vec<u8>, &'static str)> {
         (b"<!DOCTYPE r [\n  \n]><r/>".to_vec(), "DTD whitespace"),
         // Unparsed entity with NDATA
         (b"<!DOCTYPE r [<!NOTATION n SYSTEM \"x\"><!ENTITY e SYSTEM \"f\" NDATA n>]><r/>".to_vec(), "unparsed entity"),
+        // Entity with char ref in value
+        (b"<!DOCTYPE r [<!ENTITY e '&#65;&#x42;'>]><r>&e;</r>".to_vec(), "entity with char refs"),
+        // Entity expanded in attribute
+        (b"<!DOCTYPE r [<!ENTITY e 'val'>]><r a=\"&e;\"/>".to_vec(), "entity in attr"),
+        // Multiple entities expanded
+        (b"<!DOCTYPE r [<!ENTITY e 'x'>]><r>&e;&e;&e;</r>".to_vec(), "entity multi expand"),
+        // Empty entity
+        (b"<!DOCTYPE r [<!ENTITY e ''>]><r>&e;</r>".to_vec(), "empty entity"),
+        // All handlers test
+        (br#"<?xml version="1.0"?>
+<!DOCTYPE doc SYSTEM "t.dtd" [
+  <!ELEMENT doc (#PCDATA|a)*>
+  <!ELEMENT a EMPTY>
+  <!ATTLIST doc id CDATA #IMPLIED>
+  <!ENTITY e "hello">
+  <!NOTATION n SYSTEM "x">
+  <!-- DTD comment -->
+  <?dtd-pi data?>
+]>
+<doc id="1">
+  text &amp; &e;
+  <!-- comment -->
+  <?pi data?>
+  <a/>
+  <![CDATA[cdata]]>
+</doc>
+<!-- epilog -->"#.to_vec(), "all features combined"),
         // UTF-8 multi-byte
         ("<!DOCTYPE r [<!ENTITY e 'ñ'>]><r>&e;</r>".as_bytes().to_vec(), "entity 2-byte UTF-8"),
         ("<r>日本語</r>".as_bytes().to_vec(), "CJK content"),
