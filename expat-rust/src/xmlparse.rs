@@ -263,10 +263,16 @@ pub struct Parser {
     utf16_pending_byte: Option<u8>,
     /// Internal entity definitions — maps entity name to replacement text
     internal_entities: HashMap<String, String>,
+    /// External entity definitions — maps entity name to (system_id, public_id)
+    external_entities: HashMap<String, (Option<String>, Option<String>)>,
     /// Set of currently open (being expanded) entities for recursion detection
     open_entities: std::collections::HashSet<String>,
     /// Current entity name being declared in DTD (for GeneralEntityName → EntityValue flow)
     current_entity_name: Option<String>,
+    /// Current entity's system ID (for external entities)
+    current_entity_system_id: Option<String>,
+    /// Current entity's public ID (for external entities)
+    current_entity_public_id: Option<String>,
     /// XML role state machine for prolog parsing
     prolog_state: XmlRoleState,
 
@@ -330,8 +336,11 @@ impl Parser {
             byte_offset: 0,
             utf16_pending_byte: None,
             internal_entities: HashMap::new(),
+            external_entities: HashMap::new(),
             open_entities: std::collections::HashSet::new(),
             current_entity_name: None,
+            current_entity_system_id: None,
+            current_entity_public_id: None,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
@@ -392,8 +401,11 @@ impl Parser {
             byte_offset: 0,
             utf16_pending_byte: None,
             internal_entities: HashMap::new(),
+            external_entities: HashMap::new(),
             open_entities: std::collections::HashSet::new(),
             current_entity_name: None,
+            current_entity_system_id: None,
+            current_entity_public_id: None,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
@@ -795,11 +807,15 @@ impl Parser {
                 }
                 XmlError::None
             }
-            Role::DoctypeSystemId | Role::EntitySystemId => {
-                // System ID implies external subset reference
-                if matches!(role, Role::DoctypeSystemId) {
-                    self.has_param_entity_refs = true;
-                }
+            Role::DoctypeSystemId => {
+                // DOCTYPE SYSTEM — implies external subset
+                self.has_param_entity_refs = true;
+                XmlError::None
+            }
+            Role::EntitySystemId => {
+                // Entity SYSTEM ID — store for current entity
+                let sys_id = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.current_entity_system_id = Some(sys_id);
                 XmlError::None
             }
             Role::DoctypeInternalSubset => {
@@ -851,7 +867,16 @@ impl Parser {
             }
             Role::EntityComplete => {
                 // End of entity declaration
+                // If entity has a system ID, store as external entity
+                if let (Some(ref name), Some(_)) = (&self.current_entity_name, &self.current_entity_system_id) {
+                    self.external_entities.insert(
+                        name.clone(),
+                        (self.current_entity_system_id.take(), self.current_entity_public_id.take()),
+                    );
+                }
                 self.current_entity_name = None;
+                self.current_entity_system_id = None;
+                self.current_entity_public_id = None;
                 XmlError::None
             }
             Role::NotationName => {
@@ -1222,47 +1247,62 @@ impl Parser {
                             self.report_default(enc, data, pos, next);
                         }
                     } else {
-                        // General entity reference — check internal entities
-                        // Matches C doContent XML_TOK_ENTITY_REF case
+                        // General entity reference — matches C doContent entity handling
                         let name = std::str::from_utf8(&data[name_start..name_end]).unwrap_or("");
+
+                        // 1. Check internal entities
                         if let Some(value) = self.internal_entities.get(name).cloned() {
-                            // Check for recursive entity reference
                             if self.open_entities.contains(name) {
                                 return (XmlError::RecursiveEntityRef, pos);
                             }
-                            // Parse entity value through content processing
-                            // (matches C processEntity → internalEntityProcessor → doContent)
+                            // Expand through do_content (matches C processEntity → internalEntityProcessor)
                             let entity_name = name.to_string();
                             self.open_entities.insert(entity_name.clone());
                             let entity_bytes = value.as_bytes().to_vec();
                             let (entity_err, _) = self.do_content(
                                 self.tag_level,
                                 &xmltok::Utf8Encoding,
-                                &entity_bytes,
-                                0,
-                                entity_bytes.len(),
-                                false, // entity value is complete
+                                &entity_bytes, 0, entity_bytes.len(), false,
                             );
                             self.open_entities.remove(&entity_name);
                             if entity_err != XmlError::None {
                                 return (entity_err, pos);
                             }
-                        } else {
-                            // Entity not found in internal entities
-                            // Matches C doContent entity lookup logic:
-                            // If no external subset refs or standalone, undefined = error
-                            // If has external subset refs and not standalone, skip silently
+                        }
+                        // 2. Check external entities (have system ID)
+                        else if self.external_entities.contains_key(name) {
+                            let entity_name = name.to_string();
+                            let (sys_id, pub_id) = self.external_entities.get(&entity_name)
+                                .cloned().unwrap_or((None, None));
+                            // Call external entity ref handler if set
+                            if let Some(handler) = &mut self.external_entity_ref_handler {
+                                let base = self.base_uri.clone();
+                                let ok = handler(
+                                    &entity_name,
+                                    base.as_deref(),
+                                    sys_id.as_deref(),
+                                    pub_id.as_deref(),
+                                );
+                                if !ok {
+                                    return (XmlError::ExternalEntityHandling, pos);
+                                }
+                            } else if self.default_handler.is_some() {
+                                self.report_default(enc, data, pos, next);
+                            }
+                            // If no handler, silently skip (entity can't be expanded)
+                        }
+                        // 3. Entity not found at all
+                        else {
+                            // WFC: Entity Declared
                             if !self.has_param_entity_refs || self.dtd_standalone {
                                 return (XmlError::UndefinedEntity, pos);
                             }
-                            // Has external subset refs — entity might be defined there
-                            // Skip it (call skipped handler or default handler)
+                            // External subset might define it — skip
                             if let Some(handler) = &mut self.skipped_entity_handler {
                                 handler(name, false);
                             } else if self.default_handler.is_some() {
                                 self.report_default(enc, data, pos, next);
                             }
-                            // Otherwise silently skip
                         }
                     }
                 }

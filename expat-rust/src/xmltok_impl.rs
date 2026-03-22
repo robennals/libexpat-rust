@@ -1781,7 +1781,8 @@ pub fn prolog_tok<E: Encoding>(
                 pos += minbpc;
             }
             ByteType::DIGIT | ByteType::NAME | ByteType::MINUS => {
-                is_name = false;
+                // Note: C CHECK_NAME_CASES does NOT downgrade tok from NAME to NMTOKEN
+                // in the continuation loop. is_name was set by the initial character only.
                 pos += minbpc;
             }
             ByteType::COLON => {
