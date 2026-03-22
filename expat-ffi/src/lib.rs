@@ -373,8 +373,8 @@ pub unsafe extern "C" fn XML_ParseBuffer(
         (*parser).parser.set_error(XmlError::InvalidArgument);
         return XML_STATUS_ERROR;
     }
-    // parse_buffer is a stub in the Rust parser — return error
-    XML_STATUS_ERROR
+    let handle = &mut *parser;
+    status_to_c(handle.parser.parse_buffer(len as usize, _is_final != 0))
 }
 
 #[no_mangle]

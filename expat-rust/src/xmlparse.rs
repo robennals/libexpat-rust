@@ -224,6 +224,8 @@ pub struct AttrInfo {
 pub struct Parser {
     /// Parse buffer for incremental parsing
     buffer: Vec<u8>,
+    /// Buffer for XML_GetBuffer/XML_ParseBuffer two-phase API
+    get_buffer_data: Vec<u8>,
     /// Current error code
     error_code: XmlError,
     /// Parsing state machine
@@ -338,6 +340,7 @@ impl Parser {
     pub fn new(encoding: Option<&str>) -> Option<Parser> {
         Some(Parser {
             buffer: Vec::new(),
+            get_buffer_data: Vec::new(),
             error_code: XmlError::None,
             parsing_state: ParsingState::Initialized,
             processor: Processor::PrologInit,
@@ -407,6 +410,7 @@ impl Parser {
     pub fn new_ns(encoding: Option<&str>, separator: char) -> Option<Parser> {
         Some(Parser {
             buffer: Vec::new(),
+            get_buffer_data: Vec::new(),
             error_code: XmlError::None,
             parsing_state: ParsingState::Initialized,
             processor: Processor::PrologInit,
@@ -2289,21 +2293,24 @@ impl Parser {
     ///
     /// Equivalent to XML_GetBuffer(parser, len) in C
     pub fn get_buffer(&mut self, len: usize) -> Option<&mut [u8]> {
-        // Ensure buffer has enough capacity
-        if self.buffer.capacity() < len {
-            self.buffer.reserve(len - self.buffer.capacity());
-        }
-        // Return a mutable slice for writing
-        Some(&mut self.buffer)
+        // Resize the get_buffer storage to the requested length
+        self.get_buffer_data.resize(len, 0);
+        Some(&mut self.get_buffer_data)
     }
 
-    /// Parse data from the internal buffer
+    /// Parse data from the internal buffer (populated by get_buffer)
     ///
     /// Equivalent to XML_ParseBuffer(parser, len, isFinal) in C
-    pub fn parse_buffer(&mut self, _len: usize, _is_final: bool) -> XmlStatus {
-        // Stub: parse_buffer not yet implemented
-        self.error_code = XmlError::NoBuffer;
-        XmlStatus::Error
+    pub fn parse_buffer(&mut self, len: usize, is_final: bool) -> XmlStatus {
+        if len == 0 {
+            return self.parse(&[], is_final);
+        }
+        if len > self.get_buffer_data.len() {
+            self.error_code = XmlError::NoBuffer;
+            return XmlStatus::Error;
+        }
+        let data = self.get_buffer_data[..len].to_vec();
+        self.parse(&data, is_final)
     }
 
     /// Stop parsing (suspendable or abort)
