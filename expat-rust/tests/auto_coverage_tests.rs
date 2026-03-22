@@ -1096,6 +1096,135 @@ fn auto_prolog_incremental_edges() {
 }
 
 // ============================================================================
+// Tests: UTF-16 with surrogate pairs (characters above U+FFFF)
+// ============================================================================
+
+#[test]
+fn auto_utf16_surrogate_pairs() {
+    // 😀 = U+1F600, requires surrogate pair in UTF-16
+    fn utf16le_with_emoji(s: &str) -> Vec<u8> {
+        let mut out = vec![0xFF, 0xFE];
+        for c in s.encode_utf16() {
+            out.push(c as u8);
+            out.push((c >> 8) as u8);
+        }
+        out
+    }
+    fn utf16be_with_emoji(s: &str) -> Vec<u8> {
+        let mut out = vec![0xFE, 0xFF];
+        for c in s.encode_utf16() {
+            out.push((c >> 8) as u8);
+            out.push(c as u8);
+        }
+        out
+    }
+
+    let cases = [
+        (utf16le_with_emoji("<r>😀</r>"), "UTF-16LE emoji"),
+        (utf16be_with_emoji("<r>😀</r>"), "UTF-16BE emoji"),
+        (utf16le_with_emoji("<r>𝕳𝖊𝖑𝖑𝖔</r>"), "UTF-16LE math bold"),
+    ];
+
+    for (xml, desc) in &cases {
+        assert_status_equivalent(xml, desc);
+    }
+}
+
+// ============================================================================
+// Tests: stop/resume API
+// ============================================================================
+
+#[test]
+fn auto_stop_resume() {
+    // stop before parsing
+    let mut p = Parser::new(None).unwrap();
+    let s = p.stop(false);
+    assert_eq!(s, XmlStatus::Error);
+
+    // resume without suspend
+    let mut p = Parser::new(None).unwrap();
+    let s = p.resume();
+    assert_eq!(s, XmlStatus::Error);
+
+    // get_buffer
+    let mut p = Parser::new(None).unwrap();
+    let buf = p.get_buffer(100);
+    assert!(buf.is_some());
+}
+
+// ============================================================================
+// Tests: prolog BOM handling edge cases
+// ============================================================================
+
+#[test]
+fn auto_prolog_bom_at_buffer_end() {
+    // BOM where next == end and have_more
+    let xml = b"\xEF\xBB\xBF<r/>";
+    // Split right after BOM
+    let mut r = Parser::new(None).unwrap();
+    let _ = r.parse(&xml[..3], false);
+    let rs = r.parse(&xml[3..], true) as u32;
+    let re = r.error_code() as u32;
+    let c = CParser::new(None).unwrap();
+    let _ = c.parse(&xml[..3], false);
+    let (cs, ce) = c.parse(&xml[3..], true);
+    assert_eq!(rs, cs, "BOM split status");
+    assert_eq!(re, ce, "BOM split error");
+}
+
+// ============================================================================
+// Tests: epilog partial/invalid edge cases
+// ============================================================================
+
+#[test]
+fn auto_epilog_edges() {
+    let cases: &[(&[u8], &str)] = &[
+        (b"<r/> <", "epilog trailing <"),
+        (b"<r/>\xC3", "epilog partial utf8"),
+    ];
+    for (xml, desc) in cases {
+        assert_status_equivalent(xml, desc);
+    }
+}
+
+// ============================================================================
+// Tests: CDATA section processor (resumed across parse calls)
+// ============================================================================
+
+#[test]
+fn auto_cdata_cross_boundary() {
+    let xml = b"<r><![CDATA[hello world this is a longer cdata section]]></r>";
+    // Split in various positions to exercise cdata_section_processor
+    for split in (10..xml.len()-5).step_by(7) {
+        let mut r = Parser::new(None).unwrap();
+        let _ = r.parse(&xml[..split], false);
+        let rs = r.parse(&xml[split..], true) as u32;
+        let re = r.error_code() as u32;
+        let c = CParser::new(None).unwrap();
+        let _ = c.parse(&xml[..split], false);
+        let (cs, ce) = c.parse(&xml[split..], true);
+        assert_eq!(rs, cs, "CDATA cross @{split} status");
+        assert_eq!(re, ce, "CDATA cross @{split} error");
+    }
+}
+
+// ============================================================================
+// Tests: handler setter coverage (all remaining)
+// ============================================================================
+
+#[test]
+fn auto_handler_setters_combined() {
+    let mut p = Parser::new(None).unwrap();
+    p.set_element_handlers(Some(Box::new(|_, _| {})), Some(Box::new(|_| {})));
+    p.set_cdata_section_handlers(Some(Box::new(|| {})), Some(Box::new(|| {})));
+    p.set_doctype_decl_handlers(Some(Box::new(|_, _, _, _| {})), Some(Box::new(|| {})));
+    p.set_namespace_decl_handlers(Some(Box::new(|_: Option<&str>, _: &str| {})), Some(Box::new(|_: Option<&str>| {})));
+    p.set_default_handler_expand(Some(Box::new(|_: &[u8]| {})));
+    let s = p.parse(b"<!DOCTYPE r [<!ELEMENT r EMPTY>]><r/>", true);
+    assert_eq!(s, XmlStatus::Ok);
+}
+
+// ============================================================================
 // Tests: namespace-aware parser (new_ns)
 // ============================================================================
 
