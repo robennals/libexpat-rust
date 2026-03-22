@@ -19,7 +19,9 @@ fn medium_document() -> Vec<u8> {
     for i in 0..200 {
         xml.push_str(&format!(
             "  <item id=\"{}\" name=\"item{}\" category=\"cat{}\" status=\"active\">\n",
-            i, i, i % 10
+            i,
+            i,
+            i % 10
         ));
         xml.push_str(&format!(
             "    <description>This is the description for item number {}</description>\n",
@@ -123,11 +125,7 @@ unsafe extern "C" fn c_start_handler(
 ) {
 }
 
-unsafe extern "C" fn c_end_handler(
-    _user_data: *mut std::ffi::c_void,
-    _name: *const c_char,
-) {
-}
+unsafe extern "C" fn c_end_handler(_user_data: *mut std::ffi::c_void, _name: *const c_char) {}
 
 unsafe extern "C" fn c_chardata_handler(
     _user_data: *mut std::ffi::c_void,

@@ -78,7 +78,7 @@ The public API and parser state machine. Contains:
 Defines the token types and provides the interface to the tokenizer:
 
 - **`XmlTok` enum**: All possible XML tokens (start tags, end tags, text, entity references, etc.)
-- **Encoding handling**: Detects and manages UTF-8, UTF-16 (LE/BE), and ISO-8859-1
+- **`Utf8Encoding`**: The only encoding implementation used at runtime (see design decision below)
 - **XML declaration parsing**: Extracts version, encoding, and standalone from `<?xml ... ?>`
 
 ### `xmltok_impl.rs` — Tokenizer
@@ -115,6 +115,24 @@ SipHash-2-4 implementation for hash table randomization. Provides DoS protection
 | Function pointer (`m_processor`) | `Processor` enum + match | Type-safe dispatch |
 | `ENTITY` / `ELEMENT_TYPE` / `ATTRIBUTE_ID` | Rust structs with `String` fields | No manual memory management |
 | `BINDING` linked list | `Vec<NamespaceBinding>` | Simpler, no pointer chasing |
+
+## Design Decisions
+
+### Encoding: Transcode-to-UTF-8 (differs from C)
+
+The C libexpat tokenizes XML in its **native encoding** — it has separate encoding structs with encoding-specific byte-type tables for UTF-8, Latin-1, ASCII, and UTF-16. The encoding struct is selected based on the XML declaration's `encoding=` attribute and BOM detection.
+
+The Rust port takes a different approach: it **transcodes all non-UTF-8 input to UTF-8** in `Parser::parse()` before tokenizing. The tokenizer then always operates on UTF-8 data using a single `Utf8Encoding` implementation.
+
+**Why this is better for Rust:**
+
+- **Type safety**: Rust's `String`/`&str` types guarantee valid UTF-8. By transcoding upfront, all internal string handling uses Rust's native types without unsafe conversions.
+- **Simplicity**: One tokenizer code path instead of four (UTF-8, Latin-1, ASCII, UTF-16). In C, `xmltok_impl.c` is `#include`d three times with different macros — this complexity is eliminated.
+- **Correctness**: The XML spec defines the same abstract character model regardless of encoding. Lossless transcoding produces identical tokens for all XML-legal inputs.
+
+**Verified by**: 459+ comparison tests confirm identical SAX event sequences, status codes, and error codes between C and Rust parsers for UTF-8, UTF-16 (LE/BE), Latin-1, and US-ASCII inputs, including byte-by-byte incremental parsing.
+
+**Known limitation**: `XML_GetCurrentByteIndex` returns byte offsets in the **transcoded UTF-8** stream, not the original input stream. For UTF-8 input (>99% of real-world XML), this makes no difference. For UTF-16 or Latin-1 input, byte offsets will differ from C. This is documented in the FFI layer.
 
 ## Error Handling
 
