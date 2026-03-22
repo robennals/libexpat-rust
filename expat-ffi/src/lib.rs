@@ -227,6 +227,18 @@ const XML_FALSE: XML_Bool = 0;
 
 // --- Helper conversions ---
 
+/// Check if an ASCII byte has XML significance (not BT_OTHER/BT_NONXML in C terms)
+/// Matches the check in C's XmlInitUnknownEncoding
+fn is_significant_ascii(b: u8) -> bool {
+    // XML-significant characters: letters, digits, whitespace, punctuation used in XML
+    matches!(b,
+        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' |
+        b' ' | b'\t' | b'\n' | b'\r' |
+        b'<' | b'>' | b'&' | b'\'' | b'"' | b'=' | b'/' | b'?' | b'!' |
+        b'-' | b'.' | b'_' | b':' | b';' | b'[' | b']' | b'#' | b'%'
+    )
+}
+
 fn status_to_c(s: XmlStatus) -> XML_Status_t {
     match s {
         XmlStatus::Error => XML_STATUS_ERROR,
@@ -1905,9 +1917,8 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
                 for i in 0..256 {
                     let c = enc.map[i];
                     if c == -1 {
-                        if i >= 0x80 && !has_converter {
-                            return false; // High bytes need converter
-                        }
+                        // Unmapped byte — will be treated as malformed during parsing
+                        // This is OK — C marks these as BT_MALFORM and continues
                     } else if c < -4 {
                         return false; // Invalid multi-byte indicator
                     } else if c < 0 {
@@ -1916,10 +1927,12 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
                         }
                     } else if c > 0xFFFF {
                         return false; // Out of Unicode range
-                    } else if c as u32 >= 0xD800 && c as u32 <= 0xDFFF {
-                        return false; // Surrogates invalid
-                    } else if i < 128 && c != i as i32 {
-                        return false; // ASCII must be identity mapped
+                    } else if c < 0x80 && is_significant_ascii(c as u8) && c != i as i32 {
+                        // ASCII character with XML significance mapped to wrong position
+                        return false;
+                    } else if i < 128 && is_significant_ascii(i as u8) && c != i as i32 {
+                        // Significant ASCII byte mapped to different value
+                        return false;
                     }
                 }
                 true
