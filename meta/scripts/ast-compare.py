@@ -601,8 +601,18 @@ def extract_c_case_source(c_func_name, case_label):
     for node in walk_all(c_node):
         if node.type == "case_statement":
             value_node = node.child_by_field_name("value") or (node.children[1] if len(node.children) > 1 else None)
-            if value_node and value_node.text.decode() == case_label:
+            if value_node and value_node.text.decode().strip() == case_label.strip():
                 return node.text.decode()
+    # Fallback: search by substring in case AST label differs
+    c_text = c_node.text.decode()
+    marker = f"case {case_label}:"
+    idx = c_text.find(marker)
+    if idx >= 0:
+        # Extract until next "case " or "break;" or "}" at same indent
+        end = c_text.find("\n    case ", idx + 1)
+        if end < 0:
+            end = min(idx + 500, len(c_text))
+        return c_text[idx:end].strip()
     return None
 
 
@@ -641,14 +651,14 @@ def generate_prompt(c_func_name, r_func_name, extra_rust_funcs=None):
     for sev, desc, details in results["divergences"]:
         if "missing_match_arms" in desc:
             missing_arms = details
-        elif desc.startswith("case ") and "missing errors" in desc:
-            case_fixes.append(("error", desc, details))
-        elif desc.startswith("case ") and "missing handlers" in desc:
-            case_fixes.append(("handler", desc, details))
+        elif desc.startswith("case ") and ("missing errors" in desc or "missing handlers" in desc or "missing calls" in desc):
+            case_fixes.append((desc.split(": ")[1].split()[1] if ": " in desc else "fix", desc, details))
         elif desc == "missing_errors":
             missing_errors_overall = details
         elif desc == "missing_handlers":
             missing_handlers_overall = details
+        elif desc == "missing_function_calls":
+            pass  # Will include in overall section
 
     lines = []
     lines.append(f"# Task: Fix divergences in {r_func_name} (Rust) to match {c_func_name} (C)")
@@ -701,8 +711,11 @@ def generate_prompt(c_func_name, r_func_name, extra_rust_funcs=None):
         lines.append("## Existing cases that need fixes")
         lines.append("")
         for fix_type, desc, details in case_fixes:
-            rust_label = desc.split(":")[0].replace("case ", "")
-            # Find C label
+            # Extract Rust label from "case XmlTok::Foo: missing ..." or "case Role::Bar: missing ..."
+            # Can't split on ":" because labels contain "::"
+            m = re.match(r'case ([\w:]+): missing', desc)
+            rust_label = m.group(1) if m else desc.split(":")[0].replace("case ", "")
+            # Find C label via reverse mapping
             c_label = None
             for cl in c_case_by_label:
                 mapped = TOKEN_MAP.get(cl) or ROLE_MAP.get(cl)
@@ -720,7 +733,7 @@ def generate_prompt(c_func_name, r_func_name, extra_rust_funcs=None):
             lines.append(f"Missing: {details}")
             lines.append("")
 
-    # Overall missing errors/handlers
+    # Overall missing errors/handlers/calls
     if missing_errors_overall:
         lines.append(f"## Overall missing error codes: {missing_errors_overall}")
         lines.append("These errors appear in C but not in Rust. Add them to the appropriate cases.")
@@ -729,6 +742,21 @@ def generate_prompt(c_func_name, r_func_name, extra_rust_funcs=None):
         lines.append(f"## Overall missing handlers: {missing_handlers_overall}")
         lines.append("These handler calls appear in C but not in Rust.")
         lines.append("")
+
+    # Missing function calls
+    missing_calls = [d for s, d, det in results["divergences"] if d == "missing_function_calls"]
+    if missing_calls:
+        for det_list in [d for s, d, det in results["divergences"] if d == "missing_function_calls"]:
+            pass
+        all_missing_calls = []
+        for s, d, det in results["divergences"]:
+            if d == "missing_function_calls":
+                all_missing_calls = det
+        if all_missing_calls:
+            lines.append(f"## Overall missing function calls: {all_missing_calls}")
+            lines.append("These C functions are called but have no Rust equivalent call.")
+            lines.append("Each needs to be implemented or the logic inlined.")
+            lines.append("")
 
     # Rules
     lines.append("## Rules")
