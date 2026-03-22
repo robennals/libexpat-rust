@@ -2214,3 +2214,106 @@ fn cov90_errors_more_incremental() {
         );
     }
 }
+
+// ============================================================================
+// 79. Deep content model nesting (exercises element7 role state)
+// ============================================================================
+
+#[test]
+fn cov90_deep_content_model() {
+    let cases: &[&[u8]] = &[
+        // Deeply nested groups exercise element7 at level > 0
+        b"<!DOCTYPE r [<!ELEMENT r ((a|b),(c|d))><!ELEMENT a EMPTY><!ELEMENT b EMPTY><!ELEMENT c EMPTY><!ELEMENT d EMPTY>]><r><a/><c/></r>",
+        b"<!DOCTYPE r [<!ELEMENT r (((a)))><!ELEMENT a EMPTY>]><r><a/></r>",
+        b"<!DOCTYPE r [<!ELEMENT r ((a,b)|(c,d))><!ELEMENT a EMPTY><!ELEMENT b EMPTY><!ELEMENT c EMPTY><!ELEMENT d EMPTY>]><r><a/><b/></r>",
+        // Groups with quantifiers at nested level
+        b"<!DOCTYPE r [<!ELEMENT r ((a|b)*,(c|d)+)><!ELEMENT a EMPTY><!ELEMENT b EMPTY><!ELEMENT c EMPTY><!ELEMENT d EMPTY>]><r><c/></r>",
+        b"<!DOCTYPE r [<!ELEMENT r ((a)?)><!ELEMENT a EMPTY>]><r/>",
+        b"<!DOCTYPE r [<!ELEMENT r ((a)+)><!ELEMENT a EMPTY>]><r><a/></r>",
+        // Multiple levels of nesting
+        b"<!DOCTYPE r [<!ELEMENT r (((a|b)|(c|d)),(e|f))><!ELEMENT a EMPTY><!ELEMENT b EMPTY><!ELEMENT c EMPTY><!ELEMENT d EMPTY><!ELEMENT e EMPTY><!ELEMENT f EMPTY>]><r><a/><e/></r>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("deep_model {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 80. ATTLIST type variants (exercises attlist2-9 states)
+// ============================================================================
+
+#[test]
+fn cov90_attlist_type_variants() {
+    let cases: &[&[u8]] = &[
+        // Enumeration with multiple values
+        b"<!DOCTYPE r [<!ATTLIST r a (x|y|z|w) #IMPLIED>]><r a='x'/>",
+        // NOTATION type with multiple notations
+        b"<!DOCTYPE r [<!NOTATION n1 SYSTEM 'x'><!NOTATION n2 SYSTEM 'y'><!ATTLIST r a NOTATION (n1|n2) #IMPLIED>]><r a='n1'/>",
+        // Multiple attributes with defaults
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA 'def1' b CDATA 'def2' c CDATA #FIXED 'fix'>]><r/>",
+        // ID + IDREF combination
+        b"<!DOCTYPE r [<!ATTLIST r a ID #REQUIRED b IDREF #IMPLIED>]><r a='id1' b='id1'/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("attlist_var {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 81. Entity declaration states (exercises entity0-10)
+// ============================================================================
+
+#[test]
+fn cov90_entity_decl_states() {
+    let cases: &[&[u8]] = &[
+        // General entity with value
+        b"<!DOCTYPE r [<!ENTITY e 'val'>]><r>&e;</r>",
+        // General entity with SYSTEM
+        b"<!DOCTYPE r [<!ENTITY e SYSTEM 'file.xml'>]><r/>",
+        // General entity with PUBLIC
+        b"<!DOCTYPE r [<!ENTITY e PUBLIC '-//T//EN' 'file.xml'>]><r/>",
+        // Parameter entity with value
+        b"<!DOCTYPE r [<!ENTITY % pe 'val'>]><r/>",
+        // Parameter entity with SYSTEM
+        b"<!DOCTYPE r [<!ENTITY % pe SYSTEM 'file.dtd'>]><r/>",
+        // Parameter entity with PUBLIC
+        b"<!DOCTYPE r [<!ENTITY % pe PUBLIC '-//T//EN' 'file.dtd'>]><r/>",
+        // Unparsed entity with NDATA
+        b"<!DOCTYPE r [<!NOTATION n SYSTEM 'x'><!ENTITY e SYSTEM 'file' NDATA n>]><r/>",
+        // Multiple entity declarations
+        b"<!DOCTYPE r [<!ENTITY a 'A'><!ENTITY b SYSTEM 'B'><!ENTITY % c 'C'>]><r>&a;</r>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("entity_state {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 82. Notation declaration states
+// ============================================================================
+
+#[test]
+fn cov90_notation_states() {
+    let cases: &[&[u8]] = &[
+        b"<!DOCTYPE r [<!NOTATION n1 SYSTEM 'viewer'>]><r/>",
+        b"<!DOCTYPE r [<!NOTATION n2 PUBLIC '-//T//EN'>]><r/>",
+        b"<!DOCTYPE r [<!NOTATION n3 PUBLIC '-//T//EN' 'viewer'>]><r/>",
+        // Multiple notations
+        b"<!DOCTYPE r [<!NOTATION a SYSTEM 'x'><!NOTATION b PUBLIC '-//T//EN'><!NOTATION c PUBLIC '-//T//EN' 'y'>]><r/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("notation {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
