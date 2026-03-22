@@ -1682,6 +1682,10 @@ impl Parser {
                     if start_tag_level == 0 && !self.seen_root {
                         return (XmlError::NoElements, end);
                     }
+                    if self.tag_level > 0 {
+                        // Document ended with open elements — unclosed token
+                        return (XmlError::NoElements, end);
+                    }
                     return (XmlError::None, end);
                 }
 

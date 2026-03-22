@@ -419,6 +419,9 @@ fn cov90_content_trailing_rsqb() {
     compare_events(b"<r>text]]</r>", "double ]] in content");
     compare_events(b"<r>]</r>", "bare ] in content");
     compare_events(b"<r>]]</r>", "bare ]] in content");
+    // Unclosed document with trailing ] — both C and Rust should error
+    compare(b"<r>text]", "trailing ] unclosed");
+    compare(b"<r>text]]", "trailing ]] unclosed");
 }
 
 #[test]
