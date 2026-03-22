@@ -3088,8 +3088,3 @@ static FEATURE_LIST: &[Feature] = &[
 pub fn get_feature_list() -> &'static [Feature] {
     FEATURE_LIST
 }
-
-/// Free a content model (for element declaration handlers)
-pub fn free_content_model(_parser: &mut Parser, _model: *mut ()) {
-    // Rust's ownership model handles cleanup automatically
-}
