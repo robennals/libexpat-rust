@@ -2131,3 +2131,86 @@ fn cov90_bom_then_xmldecl() {
     let xml = b"\xEF\xBB\xBF<?xml version='1.0'?><r/>";
     compare_incr(xml, "BOM+xmldecl incremental");
 }
+
+// ============================================================================
+// 75. Exercise remaining uncovered handler setters
+// ============================================================================
+
+#[test]
+fn cov90_remaining_handler_setters() {
+    let mut p = Parser::new(None).unwrap();
+    p.set_entity_decl_handler(Some(Box::new(
+        |_: &str, _: bool, _: Option<&str>, _: Option<&str>, _: Option<&str>| {},
+    )));
+    p.set_not_standalone_handler(Some(Box::new(|| true)));
+    // Parse a document that triggers entity declarations
+    let xml = b"<!DOCTYPE r [<!ENTITY e 'v'>]><r>&e;</r>";
+    let rs = p.parse(xml, true) as u32;
+    let c = CParser::new(None).unwrap();
+    let (cs, _) = c.parse(xml, true);
+    assert_eq!(rs, cs, "handler setters status");
+}
+
+// ============================================================================
+// 76. Parser reset — cover all field resets
+// ============================================================================
+
+#[test]
+fn cov90_reset_all_fields() {
+    let mut p = Parser::new(None).unwrap();
+    // Set up lots of state
+    p.set_start_element_handler(Some(Box::new(|_, _| {})));
+    p.set_end_element_handler(Some(Box::new(|_| {})));
+    p.set_character_data_handler(Some(Box::new(|_: &[u8]| {})));
+    p.set_base("http://example.com/");
+    // Parse a complex document
+    p.parse(
+        b"<!DOCTYPE r [<!ENTITY e 'v'><!ATTLIST r a CDATA 'def'>]><r a='x'>&e;</r>",
+        true,
+    );
+    // Reset
+    p.reset(None);
+    // Parse again — should work cleanly
+    let rs = p.parse(b"<s/>", true) as u32;
+    let c = CParser::new(None).unwrap();
+    let (cs, _) = c.parse(b"<s/>", true);
+    assert_eq!(rs, cs, "after reset status");
+}
+
+// ============================================================================
+// 77. Scan function LEAD4 in more contexts
+// ============================================================================
+
+#[test]
+fn cov90_lead4_scan_contexts() {
+    // 4-byte char in declaration contexts
+    let cases = [
+        "<!DOCTYPE r [<!ENTITY e '😀test'>]><r>&e;</r>",
+        "<r>text😀more</r>",
+        "<r a=\"😀test\"/>",
+        "<r a='😀test'/>",
+    ];
+    for case in &cases {
+        compare_incr(case.as_bytes(), &format!("lead4_ctx {:?}", case));
+    }
+}
+
+// ============================================================================
+// 78. Various error cases with incremental parsing
+// ============================================================================
+
+#[test]
+fn cov90_errors_more_incremental() {
+    let cases: &[&[u8]] = &[
+        b"<r a=\"<\"/>", // < in attr
+        b"<r>&;",        // empty entity ref
+        b"<r>&#;</r>",   // empty char ref
+        b"<r>&#x;</r>",  // empty hex char ref
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("err_incr {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
