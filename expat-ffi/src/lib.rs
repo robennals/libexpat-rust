@@ -10,13 +10,13 @@
 //!
 //! This produces `libexpat.so` (Linux), `libexpat.dylib` (macOS), or `expat.dll` (Windows).
 //!
-//! ## Known limitations
+//! ## Implementation notes
 //!
-//! - **`XML_GetCurrentByteIndex` / `XML_GetCurrentByteCount`**: For non-UTF-8 input
-//!   (UTF-16, ISO-8859-1), byte offsets refer to the internally transcoded UTF-8 stream,
-//!   not the original input bytes. The Rust parser transcodes all input to UTF-8 before
-//!   tokenizing (see `docs/architecture.md` for rationale). For UTF-8 input (>99% of
-//!   real-world XML), byte offsets are identical to C libexpat.
+//! - **`XML_GetCurrentByteIndex`**: Returns byte offsets in the original input encoding,
+//!   matching C libexpat behavior. For non-UTF-8 input, this requires a re-scan of the
+//!   current parse chunk (O(chunk_size)) to convert internal UTF-8 positions back to
+//!   original byte offsets. This only happens when the function is actually called.
+//!   For UTF-8 input (>99% of real-world XML), the conversion is O(1).
 
 #![allow(non_camel_case_types, non_snake_case, dead_code, private_interfaces)]
 

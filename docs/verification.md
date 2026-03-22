@@ -188,6 +188,9 @@ Every fix was verified by the comparison test that discovered it — the test pa
 
 One deliberate architectural difference from C: the Rust parser transcodes all non-UTF-8 input (UTF-16, Latin-1) to UTF-8 before tokenizing. C libexpat tokenizes in the native encoding using encoding-specific byte-type tables.
 
-Both approaches produce identical SAX events for all XML-legal inputs (confirmed by the comparison tests). The only theoretical difference is that `XML_GetCurrentByteIndex` returns byte offsets in the transcoded UTF-8 stream rather than the original input. For UTF-8 input (>99% of real-world XML), there is no difference.
+Both approaches produce identical results:
+- SAX events are identical for all XML-legal inputs (confirmed by comparison tests)
+- `XML_GetCurrentByteIndex` returns byte offsets in the **original** input encoding — for non-UTF-8 input, the parser re-scans the current chunk to convert internal UTF-8 positions back to original byte offsets (O(chunk_size) per call, no per-byte overhead during normal parsing)
+- Line and column numbers are encoding-independent and always match
 
-See [architecture.md](architecture.md) for the full rationale.
+See [architecture.md](architecture.md) and [design-decisions.md](design-decisions.md) for the full rationale.

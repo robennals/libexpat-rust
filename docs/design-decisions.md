@@ -60,9 +60,7 @@ The Rust parser takes a different approach: **transcode all non-UTF-8 input to U
 - **Simplicity**: One tokenizer code path instead of four. The C technique of `#include`-ing `xmltok_impl.c` three times with different macros is eliminated.
 - **Correctness**: The XML spec defines the same abstract character model regardless of encoding. Lossless transcoding produces identical tokens, confirmed by 463 comparison tests across UTF-8, UTF-16 LE/BE, Latin-1, and ASCII inputs.
 
-**Known limitation — byte offsets**: `XML_GetCurrentByteIndex` / `XML_GetCurrentByteCount` return byte offsets in the transcoded UTF-8 stream, not the original input. For UTF-8 input (>99% of real-world XML), offsets are identical. For UTF-16 or Latin-1 input, offsets will differ from C libexpat.
-
-This could be addressed in the future by maintaining an offset mapping table during transcoding (mapping UTF-8 positions back to original byte positions), but this has not been needed in practice. If a caller requires exact original-byte-offset reporting for non-UTF-8 input, this limitation should be considered.
+**Byte offset handling**: `XML_GetCurrentByteIndex` returns byte offsets in the **original** input encoding, matching C behavior. For non-UTF-8 input, this requires a re-scan of the current parse chunk to convert the internal UTF-8 event position back to the original encoding's byte offset. This is O(chunk_size) per call but only happens when `XML_GetCurrentByteIndex` is actually called and only for non-UTF-8 input. No per-byte overhead during normal parsing, and no O(N) data structures in stream size — just a running `u64` counter of original bytes consumed by previous `parse()` calls.
 
 ## 6. No `unsafe` Code
 
