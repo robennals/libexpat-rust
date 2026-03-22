@@ -709,6 +709,18 @@ impl Parser {
                         return (error, pos);
                     }
 
+                    // Forward to default handler if no specific handler handled this token
+                    // In C libexpat, reportDefault() is called for every prolog token
+                    // unless a specific handler consumed it.
+                    // PI and Comment roles already call report_default internally via
+                    // report_processing_instruction/report_comment, so skip those.
+                    // XmlDecl is also handled by handle_prolog_role.
+                    if self.default_handler.is_some()
+                        && !matches!(role, Role::Pi | Role::Comment | Role::XmlDecl)
+                    {
+                        self.report_default(&xmltok::Utf8Encoding, data, pos, next);
+                    }
+
                     // If processor changed to Content, break out — remaining data
                     // will be processed by content_processor
                     if self.processor == Processor::Content {
