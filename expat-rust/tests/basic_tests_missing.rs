@@ -88,7 +88,11 @@ fn test_bad_doctype() {
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
     let result = parser.parse(text, true);
-    assert_ne!(result, XmlStatus::Ok, "Parse should fail for invalid bytes in DOCTYPE");
+    assert_ne!(
+        result,
+        XmlStatus::Ok,
+        "Parse should fail for invalid bytes in DOCTYPE"
+    );
 }
 
 // Test that '+' in document name is rejected
@@ -351,13 +355,21 @@ fn test_partial_char_in_epilog() {
 
     // First parse without final flag should succeed
     let result1 = parser.parse(text, false);
-    assert_ne!(result1, XmlStatus::Error, "Non-final parse should not error");
+    assert_ne!(
+        result1,
+        XmlStatus::Error,
+        "Non-final parse should not error"
+    );
 
     // Finalizing should fail with partial char error
     let result2 = parser.parse(b"", true);
     match result2 {
         XmlStatus::Error => {
-            assert_eq!(parser.error_code(), XmlError::PartialChar, "Expected PARTIAL_CHAR error");
+            assert_eq!(
+                parser.error_code(),
+                XmlError::PartialChar,
+                "Expected PARTIAL_CHAR error"
+            );
         }
         _ => {
             // Some implementations may not detect this at the point of finalization

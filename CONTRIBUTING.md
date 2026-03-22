@@ -1,102 +1,67 @@
-# Hi! :wave:
+# Contributing to expat-rust
 
-Thanks for your interest in contributing to the libexpat project or "Expat"! :+1:
+Thanks for your interest in contributing!
 
-> [!TIP]
-> TL;DR: **The best move before creating a pull request**
-> that is big, complex, and/or controversial
-> is to [open a new issue](https://github.com/libexpat/libexpat/issues)
-> and discuss options moving forward :pray: :beers:
+## Getting Started
 
-Below, I'll document what Expat needs and does not need, at this time.
+```bash
+# Clone with submodules
+git clone --recurse-submodules https://github.com/robennals/libexpat-rust.git
+cd libexpat-rust
 
+# Build
+cargo build -p expat-rust
 
-# What Expat needs (and does not need) in general
+# Run tests
+RUST_TEST_THREADS=1 cargo test -p expat-rust
+```
 
-Expat is:
+The `expat/` directory is a git submodule pointing to upstream libexpat. If you cloned without `--recurse-submodules`, run:
 
-- in maintenance mode,
-- unfunded,
-- understaffed,
-- complex,
-- 25+ years old in some regards,
-- meant to support parsing of XML files that exceed available RAM,
-- written in the memory-unsafe language C99,
-- is [used in many places](https://libexpat.github.io/doc/users/),
-  both in [hardware](https://libexpat.github.io/doc/users/#hardware)
-  and in [software](https://libexpat.github.io/doc/users/),
-- implementing [XML 1.0 *Fourth* Edition](https://www.w3.org/TR/2006/REC-xml-20060816/),
-- targeting environments that are relevant today
-  and/or up to 5 years into the past.
+```bash
+git submodule update --init
+```
 
+## Running Tests
 
-## What kinds of pull requests will be welcome
+```bash
+# Pure Rust tests (no C compiler needed)
+RUST_TEST_THREADS=1 cargo test -p expat-rust
 
-Pull requests will be most welcome when they:
+# FFI comparison tests (requires C compiler)
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test c_comparison_tests
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test comprehensive_comparison
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test generated_comparison_tests
 
-- are small,
-- are easy to review,
-- have low risk,
-- have had GitHub Actions CI run and all-green already
-  in your public fork repository,
-- help both you and the libexpat project :tada:
+# All tests
+RUST_TEST_THREADS=1 cargo test --workspace
+```
 
-The need for additional tests or CI will depend on the specific pull request.
+Always use `RUST_TEST_THREADS=1` — some tests share state and will fail with parallel execution.
 
+## Code Quality
 
-## What kinds of pull requests will *not* be welcome
+Before submitting a PR, ensure:
 
-Pull requests will *not* be welcome when:
+```bash
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo doc -p expat-rust --no-deps
+```
 
-- the changes are big, complex, high risk, controversial
-  and/or hard to review,
-- the exact change has been said "no" to in the past,
-- the changes break API or ABI backwards compatibility,
-- it fixes an issue for an unsupported
-  (or no-longer supported) environment, and/or
-- it introduces new features
-  (without prior discussion and agreement
-  in a dedicated issue).
+## Key Principles
 
-Specific examples of things known to *not* be welcome:
+1. **Zero `unsafe`**: No `unsafe` blocks. If you think you need one, there's a safe alternative.
+2. **Behavioral compatibility**: The parser must produce identical output to libexpat for all inputs. When in doubt, write a comparison test.
+3. **Use Rust idioms**: `String`/`Vec`/`HashMap` instead of C-style data structures. Enums instead of function pointers. Pattern matching instead of switch/goto.
 
-- Mass-changing things.
-- Fixing things for some stone age version of Visual Studio.
-- Adding support to ignore or recover from malformed XML.
-- Adding support for XML streaming.
-- Making the C code compile with a C++ compiler.
-- Adding support for XML 1.0r5 without prior discussion.
-- Adding support for XML 1.1 in general.
-- Adding additional build systems.
+## Comparison Tests
 
+The comparison test suites are the primary correctness guarantee. They run identical inputs through both the C library (via `expat-sys`) and the Rust port, comparing every output. If you fix a bug or add a feature, add a comparison test.
 
-# What Expat needs on a technical level
+## Porting Tools
 
-- All new C code and changes to existing C code must:
-  - pass all existing CI
-    (that includes
-    [ASan](https://clang.llvm.org/docs/AddressSanitizer.html),
-    [UBSan](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html),
-    [clang-format](https://clang.llvm.org/docs/ClangFormat.html),
-    [Cppcheck](https://cppcheck.sourceforge.io/),
-    [codespell](https://github.com/codespell-project/codespell),
-    ..),
-  - conform to C99,
-  - check returns from `malloc`/`realloc` for `NULL`,
-  - not use recursion (when it can be controlled by user input),
-  - have integer overflow in mind,
-  - have undefined behavior in mind, and
-  - have security in mind in general.
-- A commit should be about one — and just one — of these things:
-  - fixing a bug,
-  - improving something,
-  - adding something new,
-  - doing a refactoring, or
-  - adjusting whitespace.
+The `meta/` directory contains the tooling used during the original port. See [meta/README.md](meta/README.md) for details. Key tools:
 
-
-# Providing feedback
-
-Thanks for your interest and attention! :+1:
-
-I'm happy about [constructive feedback](mailto:sebastian@pipping.org) to this document — thank you! :pray:
+- `meta/scripts/ast-compare.py` — Structural comparison between C and Rust functions
+- `meta/scripts/port-function.py` — Call tree analysis and function extraction

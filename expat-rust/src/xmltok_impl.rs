@@ -1,4 +1,10 @@
-// AI-generated port of xmltok_impl.c
+//! Core XML tokenizer implementation, ported from expat's `xmltok_impl.c`.
+//!
+//! Provides [`content_tok`] and [`prolog_tok`],
+//! the two main lexer entry points that break raw byte input into [`XmlTok`] tokens.
+//! This is the lowest-level lexer: it classifies bytes via [`ByteType`] tables and
+//! returns token boundaries without interpreting their semantic role (that is done
+//! by [`xmlrole`](crate::xmlrole) and [`xmlparse`](crate::xmlparse)).
 
 use crate::char_tables::ByteType;
 
@@ -140,9 +146,7 @@ pub fn scan_comment<E: Encoding>(
 
     while enc.has_char(data, pos, end) {
         match enc.byte_type(data, pos) {
-            ByteType::NONXML
-            | ByteType::MALFORM
-            | ByteType::TRAIL => {
+            ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
                 return Err(pos);
             }
             ByteType::MINUS => {
@@ -351,15 +355,30 @@ pub fn scan_pi<E: Encoding>(
                 while enc.has_char(data, pos, end) {
                     match enc.byte_type(data, pos) {
                         ByteType::LEAD2 => {
-                            if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                            if end - pos < 2 {
+                                return Ok(TokenResult {
+                                    token: XmlTok::Partial,
+                                    next_pos: pos,
+                                });
+                            }
                             pos += 2;
                         }
                         ByteType::LEAD3 => {
-                            if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                            if end - pos < 3 {
+                                return Ok(TokenResult {
+                                    token: XmlTok::Partial,
+                                    next_pos: pos,
+                                });
+                            }
                             pos += 3;
                         }
                         ByteType::LEAD4 => {
-                            if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                            if end - pos < 4 {
+                                return Ok(TokenResult {
+                                    token: XmlTok::Partial,
+                                    next_pos: pos,
+                                });
+                            }
                             pos += 4;
                         }
                         ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
@@ -537,15 +556,30 @@ pub fn cdata_section_tok<E: Encoding>(
             });
         }
         ByteType::LEAD2 => {
-            if end - pos < 2 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+            if end - pos < 2 {
+                return Ok(TokenResult {
+                    token: XmlTok::PartialChar,
+                    next_pos: pos,
+                });
+            }
             pos += 2;
         }
         ByteType::LEAD3 => {
-            if end - pos < 3 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+            if end - pos < 3 {
+                return Ok(TokenResult {
+                    token: XmlTok::PartialChar,
+                    next_pos: pos,
+                });
+            }
             pos += 3;
         }
         ByteType::LEAD4 => {
-            if end - pos < 4 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+            if end - pos < 4 {
+                return Ok(TokenResult {
+                    token: XmlTok::PartialChar,
+                    next_pos: pos,
+                });
+            }
             pos += 4;
         }
         ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
@@ -613,15 +647,30 @@ pub fn scan_end_tag<E: Encoding>(
     // Name start character (including multi-byte UTF-8)
     match enc.byte_type(data, pos) {
         ByteType::LEAD2 => {
-            if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+            if end - pos < 2 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
             pos += 2;
         }
         ByteType::LEAD3 => {
-            if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+            if end - pos < 3 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
             pos += 3;
         }
         ByteType::LEAD4 => {
-            if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+            if end - pos < 4 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
             pos += 4;
         }
         _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
@@ -664,15 +713,30 @@ pub fn scan_end_tag<E: Encoding>(
                 });
             }
             ByteType::LEAD2 => {
-                if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                if end - pos < 2 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
                 pos += 2;
             }
             ByteType::LEAD3 => {
-                if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                if end - pos < 3 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
                 pos += 3;
             }
             ByteType::LEAD4 => {
-                if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                if end - pos < 4 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
                 pos += 4;
             }
             ByteType::COLON => {
@@ -839,7 +903,7 @@ pub fn scan_ref<E: Encoding>(
 }
 
 /// Scan attributes starting after first character of attribute name
-/// Scan attributes in a start tag — 1:1 port of C scanAtts()
+/// Scan attributes in a start tag — 1:1 port of C scan_atts()
 /// pos points to the first attribute name start character
 pub fn scan_atts<E: Encoding>(
     enc: &E,
@@ -854,21 +918,45 @@ pub fn scan_atts<E: Encoding>(
         match enc.byte_type(data, pos) {
             // Multi-byte name characters (LEAD2/3/4)
             ByteType::LEAD2 => {
-                if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                if end - pos < 2 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
                 pos += 2;
             }
             ByteType::LEAD3 => {
-                if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                if end - pos < 3 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
                 pos += 3;
             }
             ByteType::LEAD4 => {
-                if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                if end - pos < 4 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
                 pos += 4;
             }
             // Name characters — continue scanning attr name
             _ if is_name_char(enc.byte_type(data, pos))
-                && !matches!(enc.byte_type(data, pos), ByteType::S | ByteType::CR | ByteType::LF
-                    | ByteType::GT | ByteType::SOL | ByteType::EQUALS | ByteType::QUOT | ByteType::APOS) =>
+                && !matches!(
+                    enc.byte_type(data, pos),
+                    ByteType::S
+                        | ByteType::CR
+                        | ByteType::LF
+                        | ByteType::GT
+                        | ByteType::SOL
+                        | ByteType::EQUALS
+                        | ByteType::QUOT
+                        | ByteType::APOS
+                ) =>
             {
                 pos += minbpc;
             }
@@ -878,7 +966,10 @@ pub fn scan_atts<E: Encoding>(
                 loop {
                     pos += minbpc;
                     if !enc.has_char(data, pos, end) {
-                        return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos });
+                        return Ok(TokenResult {
+                            token: XmlTok::Partial,
+                            next_pos: pos,
+                        });
                     }
                     let t = enc.byte_type(data, pos);
                     if t == ByteType::EQUALS {
@@ -907,7 +998,10 @@ pub fn scan_atts<E: Encoding>(
             ByteType::SOL => {
                 pos += minbpc;
                 if !enc.has_char(data, pos, end) {
-                    return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos });
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
                 }
                 if !enc.char_matches(data, pos, ASCII_GT) {
                     return Err(pos);
@@ -971,15 +1065,21 @@ fn scan_attr_value<E: Encoding>(
         }
         match t {
             ByteType::LEAD2 => {
-                if end - pos < 2 { return Ok(pos); } // Partial
+                if end - pos < 2 {
+                    return Ok(pos);
+                } // Partial
                 pos += 2;
             }
             ByteType::LEAD3 => {
-                if end - pos < 3 { return Ok(pos); } // Partial
+                if end - pos < 3 {
+                    return Ok(pos);
+                } // Partial
                 pos += 3;
             }
             ByteType::LEAD4 => {
-                if end - pos < 4 { return Ok(pos); } // Partial
+                if end - pos < 4 {
+                    return Ok(pos);
+                } // Partial
                 pos += 4;
             }
             ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => return Err(pos),
@@ -1062,16 +1162,31 @@ pub fn scan_lt<E: Encoding>(
             return scan_end_tag(enc, data, pos + enc.min_bytes_per_char(), end);
         }
         ByteType::LEAD2 => {
-            if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+            if end - pos < 2 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
             // Multi-byte name start — advance by n and fall through to name loop
             pos += 2;
         }
         ByteType::LEAD3 => {
-            if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+            if end - pos < 3 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
             pos += 3;
         }
         ByteType::LEAD4 => {
-            if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+            if end - pos < 4 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
             pos += 4;
         }
         _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
@@ -1150,15 +1265,30 @@ pub fn scan_lt<E: Encoding>(
                 });
             }
             ByteType::LEAD2 => {
-                if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                if end - pos < 2 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
                 pos += 2;
             }
             ByteType::LEAD3 => {
-                if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                if end - pos < 3 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
                 pos += 3;
             }
             ByteType::LEAD4 => {
-                if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                if end - pos < 4 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
                 pos += 4;
             }
             ByteType::COLON => {
@@ -1268,19 +1398,28 @@ pub fn content_tok<E: Encoding>(
         }
         ByteType::LEAD2 => {
             if end - pos < 2 {
-                return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos });
+                return Ok(TokenResult {
+                    token: XmlTok::PartialChar,
+                    next_pos: pos,
+                });
             }
             pos += 2;
         }
         ByteType::LEAD3 => {
             if end - pos < 3 {
-                return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos });
+                return Ok(TokenResult {
+                    token: XmlTok::PartialChar,
+                    next_pos: pos,
+                });
             }
             pos += 3;
         }
         ByteType::LEAD4 => {
             if end - pos < 4 {
-                return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos });
+                return Ok(TokenResult {
+                    token: XmlTok::PartialChar,
+                    next_pos: pos,
+                });
             }
             pos += 4;
         }
@@ -1480,7 +1619,12 @@ pub fn scan_lit<E: Encoding>(
                     });
                 }
                 match enc.byte_type(data, pos) {
-                    ByteType::S | ByteType::CR | ByteType::LF | ByteType::GT | ByteType::PERCNT | ByteType::LSQB => {
+                    ByteType::S
+                    | ByteType::CR
+                    | ByteType::LF
+                    | ByteType::GT
+                    | ByteType::PERCNT
+                    | ByteType::LSQB => {
                         return Ok(TokenResult {
                             token: XmlTok::Literal,
                             next_pos: pos,
@@ -1709,7 +1853,13 @@ pub fn prolog_tok<E: Encoding>(
                         next_pos: pos + minbpc,
                     });
                 }
-                ByteType::CR | ByteType::LF | ByteType::S | ByteType::GT | ByteType::COMMA | ByteType::VERBAR | ByteType::RPAR => {
+                ByteType::CR
+                | ByteType::LF
+                | ByteType::S
+                | ByteType::GT
+                | ByteType::COMMA
+                | ByteType::VERBAR
+                | ByteType::RPAR => {
                     return Ok(TokenResult {
                         token: XmlTok::CloseParen,
                         next_pos: pos,
@@ -1745,7 +1895,10 @@ pub fn prolog_tok<E: Encoding>(
 
     // Skip whitespace/parse name
     let start_pos = pos;
-    let mut is_name = matches!(enc.byte_type(data, start_pos - minbpc), ByteType::NMSTRT | ByteType::HEX);
+    let is_name = matches!(
+        enc.byte_type(data, start_pos - minbpc),
+        ByteType::NMSTRT | ByteType::HEX
+    );
 
     while enc.has_char(data, pos, end) {
         match enc.byte_type(data, pos) {
@@ -1759,7 +1912,11 @@ pub fn prolog_tok<E: Encoding>(
             | ByteType::CR
             | ByteType::LF => {
                 return Ok(TokenResult {
-                    token: if is_name { XmlTok::Name } else { XmlTok::Nmtoken },
+                    token: if is_name {
+                        XmlTok::Name
+                    } else {
+                        XmlTok::Nmtoken
+                    },
                     next_pos: pos,
                 });
             }
@@ -1802,15 +1959,30 @@ pub fn prolog_tok<E: Encoding>(
                 pos += minbpc;
             }
             ByteType::LEAD2 => {
-                if end - pos < 2 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+                if end - pos < 2 {
+                    return Ok(TokenResult {
+                        token: XmlTok::PartialChar,
+                        next_pos: pos,
+                    });
+                }
                 pos += 2;
             }
             ByteType::LEAD3 => {
-                if end - pos < 3 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+                if end - pos < 3 {
+                    return Ok(TokenResult {
+                        token: XmlTok::PartialChar,
+                        next_pos: pos,
+                    });
+                }
                 pos += 3;
             }
             ByteType::LEAD4 => {
-                if end - pos < 4 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+                if end - pos < 4 {
+                    return Ok(TokenResult {
+                        token: XmlTok::PartialChar,
+                        next_pos: pos,
+                    });
+                }
                 pos += 4;
             }
             _ => {
@@ -1824,7 +1996,11 @@ pub fn prolog_tok<E: Encoding>(
     // haveMore is true. We return the name but with next_pos == end to signal
     // the name consumed all remaining data (unterminated).
     Ok(TokenResult {
-        token: if is_name { XmlTok::Name } else { XmlTok::Nmtoken },
+        token: if is_name {
+            XmlTok::Name
+        } else {
+            XmlTok::Nmtoken
+        },
         next_pos: pos,
     })
 }
@@ -2249,12 +2425,7 @@ fn check_char_ref_number(num: i32) -> i32 {
 }
 
 /// Get predefined entity name
-pub fn predefined_entity_name<E: Encoding>(
-    enc: &E,
-    data: &[u8],
-    ptr: usize,
-    end: usize,
-) -> u8 {
+pub fn predefined_entity_name<E: Encoding>(enc: &E, data: &[u8], ptr: usize, end: usize) -> u8 {
     let minbpc = enc.min_bytes_per_char();
     let len = (end - ptr) / minbpc;
 
@@ -2399,7 +2570,7 @@ pub fn get_atts<E: Encoding>(
 
     let minbpc = enc.min_bytes_per_char();
     let mut state = State::InName;
-    let mut nAtts = 0;
+    let mut n_atts = 0;
     let mut atts = Vec::with_capacity(atts_max);
     let mut open = ByteType::QUOT; // delimiter type (QUOT or APOS)
 
@@ -2412,7 +2583,7 @@ pub fn get_atts<E: Encoding>(
             // Start of name: multi-byte lead characters
             ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4 => {
                 if matches!(state, State::Other) {
-                    if nAtts < atts_max {
+                    if n_atts < atts_max {
                         atts.push(Attribute {
                             name: pos,
                             name_end: 0,
@@ -2434,7 +2605,7 @@ pub fn get_atts<E: Encoding>(
             // Start of name: single-byte name start characters (letters, etc.)
             ByteType::NMSTRT | ByteType::HEX => {
                 if matches!(state, State::Other) {
-                    if nAtts < atts_max {
+                    if n_atts < atts_max {
                         atts.push(Attribute {
                             name: pos,
                             name_end: 0,
@@ -2449,7 +2620,7 @@ pub fn get_atts<E: Encoding>(
             // Quote delimiter
             ByteType::QUOT => {
                 if !matches!(state, State::InValue) {
-                    if nAtts < atts_max {
+                    if n_atts < atts_max {
                         if let Some(att) = atts.last_mut() {
                             att.value_ptr = pos + minbpc;
                         }
@@ -2458,18 +2629,18 @@ pub fn get_atts<E: Encoding>(
                     open = ByteType::QUOT;
                 } else if open == ByteType::QUOT {
                     state = State::Other;
-                    if nAtts < atts_max {
+                    if n_atts < atts_max {
                         if let Some(att) = atts.last_mut() {
                             att.value_end = pos;
                         }
                     }
-                    nAtts += 1;
+                    n_atts += 1;
                 }
             }
             // Apostrophe delimiter
             ByteType::APOS => {
                 if !matches!(state, State::InValue) {
-                    if nAtts < atts_max {
+                    if n_atts < atts_max {
                         if let Some(att) = atts.last_mut() {
                             att.value_ptr = pos + minbpc;
                         }
@@ -2478,17 +2649,17 @@ pub fn get_atts<E: Encoding>(
                     open = ByteType::APOS;
                 } else if open == ByteType::APOS {
                     state = State::Other;
-                    if nAtts < atts_max {
+                    if n_atts < atts_max {
                         if let Some(att) = atts.last_mut() {
                             att.value_end = pos;
                         }
                     }
-                    nAtts += 1;
+                    n_atts += 1;
                 }
             }
             // Entity reference (means value is not normalized)
             ByteType::AMP => {
-                if nAtts < atts_max {
+                if n_atts < atts_max {
                     if let Some(att) = atts.last_mut() {
                         att.normalized = false;
                     }
@@ -2497,13 +2668,13 @@ pub fn get_atts<E: Encoding>(
             // Whitespace
             ByteType::S => {
                 if matches!(state, State::InName) {
-                    if nAtts < atts_max {
+                    if n_atts < atts_max {
                         if let Some(att) = atts.last_mut() {
                             att.name_end = pos;
                         }
                     }
                     state = State::Other;
-                } else if matches!(state, State::InValue) && nAtts < atts_max {
+                } else if matches!(state, State::InValue) && n_atts < atts_max {
                     if let Some(att) = atts.last_mut() {
                         // Check if this whitespace makes the value non-normalized
                         if att.normalized
@@ -2521,13 +2692,13 @@ pub fn get_atts<E: Encoding>(
             // Carriage return or line feed
             ByteType::CR | ByteType::LF => {
                 if matches!(state, State::InName) {
-                    if nAtts < atts_max {
+                    if n_atts < atts_max {
                         if let Some(att) = atts.last_mut() {
                             att.name_end = pos;
                         }
                     }
                     state = State::Other;
-                } else if matches!(state, State::InValue) && nAtts < atts_max {
+                } else if matches!(state, State::InValue) && n_atts < atts_max {
                     if let Some(att) = atts.last_mut() {
                         att.normalized = false;
                     }
@@ -2536,7 +2707,7 @@ pub fn get_atts<E: Encoding>(
             // Equals sign — end of attribute name
             ByteType::EQUALS => {
                 if matches!(state, State::InName) {
-                    if nAtts < atts_max {
+                    if n_atts < atts_max {
                         if let Some(att) = atts.last_mut() {
                             att.name_end = pos;
                         }
@@ -2547,7 +2718,7 @@ pub fn get_atts<E: Encoding>(
             // End of tag
             ByteType::GT | ByteType::SOL => {
                 if !matches!(state, State::InValue) {
-                    return (nAtts, atts);
+                    return (n_atts, atts);
                 }
             }
             _ => {}
@@ -2556,16 +2727,11 @@ pub fn get_atts<E: Encoding>(
         pos += minbpc;
     }
 
-    (nAtts, atts)
+    (n_atts, atts)
 }
 
 /// Update position tracking based on character data
-pub fn update_position<E: Encoding>(
-    enc: &E,
-    data: &[u8],
-    mut pos: usize,
-    end: usize,
-) -> Position {
+pub fn update_position<E: Encoding>(enc: &E, data: &[u8], mut pos: usize, end: usize) -> Position {
     let minbpc = enc.min_bytes_per_char();
     let mut line_number = 0;
     let mut column_number = 0;
@@ -2983,7 +3149,7 @@ fn test_trace_doc_slash() {
     use crate::xmltok::Utf8Encoding;
     let enc = Utf8Encoding;
     let data = b"<doc/>";
-    
+
     // Step 1: prolog_tok should return InstanceStart at pos 0
     let r1 = prolog_tok(&enc, data, 0, data.len());
     let (tok1, next1) = match r1 {
@@ -2993,7 +3159,7 @@ fn test_trace_doc_slash() {
     eprintln!("prolog_tok: {:?} next={}", tok1, next1);
     assert_eq!(tok1, XmlTok::InstanceStart);
     assert_eq!(next1, 0); // points to '<'
-    
+
     // Step 2: content_tok from pos 0 should return EmptyElementNoAtts
     let r2 = content_tok(&enc, data, 0, data.len());
     let (tok2, next2) = match r2 {
@@ -3003,7 +3169,7 @@ fn test_trace_doc_slash() {
     eprintln!("content_tok: {:?} next={}", tok2, next2);
     assert_eq!(tok2, XmlTok::EmptyElementNoAtts);
     assert_eq!(next2, 6); // past '>'
-    
+
     // Step 3: content_tok from pos 6 should return None
     let r3 = content_tok(&enc, data, 6, data.len());
     let (tok3, _next3) = match r3 {
@@ -3019,14 +3185,14 @@ fn test_trace_doc_with_content() {
     use crate::xmltok::Utf8Encoding;
     let enc = Utf8Encoding;
     let data = b"<doc>hello</doc>";
-    
+
     let r1 = prolog_tok(&enc, data, 0, data.len());
     let (tok1, next1) = match r1 {
         Ok(TokenResult { token, next_pos }) => (token, next_pos),
         Err(p) => panic!("prolog_tok error at {}", p),
     };
     eprintln!("1. prolog_tok: {:?} next={}", tok1, next1);
-    
+
     let mut pos = next1;
     for i in 0..10 {
         let r = content_tok(&enc, data, pos, data.len());
@@ -3034,8 +3200,10 @@ fn test_trace_doc_with_content() {
             Ok(TokenResult { token, next_pos }) => (token, next_pos),
             Err(p) => panic!("content_tok error at {}", p),
         };
-        eprintln!("{}. content_tok({}): {:?} next={}", i+2, pos, tok, next);
-        if tok == XmlTok::None { break; }
+        eprintln!("{}. content_tok({}): {:?} next={}", i + 2, pos, tok, next);
+        if tok == XmlTok::None {
+            break;
+        }
         pos = next;
     }
 }
@@ -3049,13 +3217,19 @@ fn test_content_tok_with_attrs() {
     match r {
         Ok(TokenResult { token, next_pos }) => {
             eprintln!("token: {:?}, next: {}", token, next_pos);
-            assert!(matches!(token, XmlTok::EmptyElementWithAtts | XmlTok::EmptyElementNoAtts));
-            
+            assert!(matches!(
+                token,
+                XmlTok::EmptyElementWithAtts | XmlTok::EmptyElementNoAtts
+            ));
+
             // Test get_atts
             let (count, atts) = get_atts(&enc, data, 0, 10);
             eprintln!("get_atts: count={}, atts.len={}", count, atts.len());
             for (i, att) in atts.iter().enumerate() {
-                eprintln!("  attr {}: name={}..{} value={}..{}", i, att.name, att.name_end, att.value_ptr, att.value_end);
+                eprintln!(
+                    "  attr {}: name={}..{} value={}..{}",
+                    i, att.name, att.name_end, att.value_ptr, att.value_end
+                );
                 let name = std::str::from_utf8(&data[att.name..att.name_end]).unwrap();
                 let value = std::str::from_utf8(&data[att.value_ptr..att.value_end]).unwrap();
                 eprintln!("  attr {}: name='{}' value='{}'", i, name, value);

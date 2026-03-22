@@ -52,7 +52,11 @@ fn test_xmldecl_invalid() {
     let mut parser = Parser::new(None).expect("Parser creation failed");
     match parser.parse(doc, true) {
         XmlStatus::Error => {
-            assert_eq!(parser.error_code(), XmlError::XmlDecl, "Expected XML_DECL error");
+            assert_eq!(
+                parser.error_code(),
+                XmlError::XmlDecl,
+                "Expected XML_DECL error"
+            );
         }
         _ => {
             panic!("Expected parse error for invalid XML declaration");
@@ -67,7 +71,11 @@ fn test_xmldecl_missing_attr() {
     let mut parser = Parser::new(None).expect("Parser creation failed");
     match parser.parse(doc, true) {
         XmlStatus::Error => {
-            assert_eq!(parser.error_code(), XmlError::XmlDecl, "Expected XML_DECL error");
+            assert_eq!(
+                parser.error_code(),
+                XmlError::XmlDecl,
+                "Expected XML_DECL error"
+            );
         }
         _ => {
             panic!("Expected parse error for missing XML declaration attribute");
@@ -82,7 +90,11 @@ fn test_xmldecl_missing_value() {
     let mut parser = Parser::new(None).expect("Parser creation failed");
     match parser.parse(doc, true) {
         XmlStatus::Error => {
-            assert_eq!(parser.error_code(), XmlError::XmlDecl, "Expected XML_DECL error");
+            assert_eq!(
+                parser.error_code(),
+                XmlError::XmlDecl,
+                "Expected XML_DECL error"
+            );
         }
         _ => {
             panic!("Expected parse error for missing attribute value");

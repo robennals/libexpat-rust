@@ -1,7 +1,9 @@
-// AI-generated port of xmlrole.c
-//
-// This module implements the XML prolog role state machine that determines
-// the semantic role of each token in the XML declaration, DTD, and ELEMENT/ENTITY/NOTATION declarations.
+//! Prolog role state machine, ported from expat's `xmlrole.c`.
+//!
+//! Classifies each token in the XML prolog and DTD into a semantic [`Role`]
+//! (e.g., `DoctypeName`, `EntityValue`, `AttlistDeclName`). The parser feeds
+//! tokens from [`xmltok_impl`](crate::xmltok_impl) into [`xml_token_role`],
+//! which advances a state machine and returns the role for each token.
 
 // Return codes for token roles
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,12 +231,7 @@ fn common(state: &mut XmlRoleState, _tok: Token) -> Role {
     Role::Error
 }
 
-pub fn xml_token_role(
-    state: &mut XmlRoleState,
-    tok: Token,
-    _ptr: &[u8],
-    _end: &[u8],
-) -> Role {
+pub fn xml_token_role(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> Role {
     match state.state {
         PrologState::Prolog0 => prolog0(state, tok, _ptr, _end),
         PrologState::Prolog1 => prolog1(state, tok, _ptr, _end),
@@ -782,7 +779,9 @@ fn attlist2(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> R
     match tok {
         Token::PrologS => Role::AttlistNone,
         Token::Name => {
-            let types = ["CDATA", "ID", "IDREF", "IDREFS", "ENTITY", "ENTITIES", "NMTOKEN", "NMTOKENS"];
+            let types = [
+                "CDATA", "ID", "IDREF", "IDREFS", "ENTITY", "ENTITIES", "NMTOKEN", "NMTOKENS",
+            ];
             for (i, ty) in types.iter().enumerate() {
                 if keyword_matches(_ptr, ty) {
                     state.state = PrologState::Attlist8;
