@@ -284,6 +284,8 @@ pub struct Parser {
     has_param_entity_refs: bool,
     /// DTD standalone flag (from <?xml standalone='yes'?>)
     dtd_standalone: bool,
+    /// Whether to continue processing DTD declarations (false after undefined PE)
+    dtd_keep_processing: bool,
     /// Total original-encoding bytes consumed before the current parse() chunk.
     /// Incremented by data.len() at the start of each parse() call.
     original_bytes_before_chunk: u64,
@@ -406,6 +408,7 @@ impl Parser {
             detected_encoding: None,
             has_param_entity_refs: false,
             dtd_standalone: false,
+            dtd_keep_processing: true,
             original_bytes_before_chunk: 0,
             original_chunk: Vec::new(),
             original_chunk_bom_len: 0,
@@ -496,6 +499,7 @@ impl Parser {
             detected_encoding: None,
             has_param_entity_refs: false,
             dtd_standalone: false,
+            dtd_keep_processing: true,
             original_bytes_before_chunk: 0,
             original_chunk: Vec::new(),
             original_chunk_bom_len: 0,
@@ -582,6 +586,7 @@ impl Parser {
         self.event_cur_byte_count = 0;
         self.has_param_entity_refs = false;
         self.dtd_standalone = false;
+        self.dtd_keep_processing = true;
         self.internal_entities.clear();
         self.external_entities.clear();
         self.open_entities.clear();
@@ -1078,6 +1083,26 @@ impl Parser {
                 XmlError::None
             }
             Role::InstanceStart => {
+                // If foreign DTD is enabled, call external entity ref handler
+                // with empty context before processing the root element
+                if self.foreign_dtd {
+                    self.foreign_dtd = false; // Only trigger once
+                    if let Some(handler) = &mut self.external_entity_ref_handler {
+                        let base = self.base_uri.clone();
+                        let ok = handler("", base.as_deref(), None, None);
+                        if !ok {
+                            return XmlError::ExternalEntityHandling;
+                        }
+                    }
+                    // Check not-standalone after foreign DTD processing
+                    if !self.dtd_standalone {
+                        if let Some(handler) = &mut self.not_standalone_handler {
+                            if !handler() {
+                                return XmlError::NotStandalone;
+                            }
+                        }
+                    }
+                }
                 // Start of XML instance (root element)
                 self.processor = Processor::Content;
                 XmlError::None
@@ -1102,7 +1127,21 @@ impl Parser {
                     // tok_text has quotes already stripped by extract_token_text
                     match self.store_entity_value(tok_text) {
                         Ok(value) => {
-                            self.internal_entities.insert(name.clone(), value);
+                            self.internal_entities.insert(name.clone(), value.clone());
+                            // Call entity declaration handler (matches C)
+                            // Only if DTD processing hasn't been stopped by undefined PEs
+                            if self.dtd_keep_processing {
+                                if let Some(handler) = &mut self.entity_decl_handler {
+                                    let base = self.base_uri.clone();
+                                    handler(
+                                        name,
+                                        false,
+                                        Some(&value),
+                                        base.as_deref(),
+                                        None,
+                                    );
+                                }
+                            }
                         }
                         Err(e) => {
                             self.event_pos = pos;
@@ -1118,6 +1157,15 @@ impl Parser {
                 if let (Some(ref name), Some(_)) =
                     (&self.current_entity_name, &self.current_entity_system_id)
                 {
+                    // Call entity declaration handler for external entity
+                    // Only if DTD processing hasn't been stopped by undefined PEs
+                    if self.dtd_keep_processing {
+                        if let Some(handler) = &mut self.entity_decl_handler {
+                            let base = self.base_uri.clone();
+                            let sys_id = self.current_entity_system_id.clone();
+                            handler(name, false, None, base.as_deref(), sys_id.as_deref());
+                        }
+                    }
                     self.external_entities.insert(
                         name.clone(),
                         (
@@ -1262,6 +1310,14 @@ impl Parser {
                     XmlTok::ParamEntityRef => XmlError::ParamEntityRef,
                     _ => XmlError::Syntax,
                 }
+            }
+            Role::ParamEntityRef | Role::InnerParamEntityRef => {
+                // Parameter entity reference in DTD
+                // If PE is undefined and we don't have param entity parsing,
+                // stop processing DTD declarations (matches C keepProcessing=false)
+                self.has_param_entity_refs = true;
+                self.dtd_keep_processing = false;
+                XmlError::None
             }
             _ => {
                 // Other roles — ignore for now
