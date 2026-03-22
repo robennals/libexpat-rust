@@ -1,0 +1,19 @@
+[package]
+name = "c-tests-runner"
+version = "0.1.0"
+edition = "2021"
+description = "Run C expat test suite against the Rust parser via C ABI shim"
+
+[lib]
+name = "c_tests_runner"
+
+[[bin]]
+name = "run-c-tests"
+path = "src/main.rs"
+
+[dependencies]
+expat-rust = { path = "../expat-rust" }
+libc = "0.2"
+
+[build-dependencies]
+cc = "1"
