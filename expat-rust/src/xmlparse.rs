@@ -2051,9 +2051,9 @@ impl Parser {
                         // Only forward end of empty element if we didn't already forward the whole thing
                     }
 
-                    // Pop namespace bindings for empty element
+                    // Pop namespace bindings for empty element (tag_level still at binding level)
                     if self.ns_enabled {
-                        self.pop_ns_bindings();
+                        self.pop_ns_bindings(self.tag_level);
                         self.tag_level = self.tag_level.saturating_sub(1);
                     }
 
@@ -2110,9 +2110,9 @@ impl Parser {
                         self.report_default(enc, data, pos, next);
                     }
 
-                    // Pop namespace bindings
+                    // Pop namespace bindings (tag_level already decremented)
                     if self.ns_enabled {
-                        self.pop_ns_bindings();
+                        self.pop_ns_bindings(self.tag_level + 1);
                     }
 
                     // Check if root element closed
@@ -2739,11 +2739,30 @@ impl Parser {
                 if value == "http://www.w3.org/2000/xmlns/" {
                     return Err(XmlError::ReservedNamespaceUri);
                 }
+                // Check if namespace separator appears in URI (security check)
+                if self.ns_separator != '\0' && !is_rfc3986_uri_char(self.ns_separator) {
+                    for ch in value.chars() {
+                        if ch == self.ns_separator {
+                            return Err(XmlError::Syntax);
+                        }
+                    }
+                }
                 new_bindings.push((prefix.to_string(), value.clone()));
                 attrs.remove(i);
                 continue;
             }
             i += 1;
+        }
+
+        // Also check separator in default namespace URIs
+        for (prefix, value) in &new_bindings {
+            if prefix.is_empty() && !value.is_empty() && self.ns_separator != '\0' && !is_rfc3986_uri_char(self.ns_separator) {
+                for ch in value.chars() {
+                    if ch == self.ns_separator {
+                        return Err(XmlError::Syntax);
+                    }
+                }
+            }
         }
 
         // Apply bindings and call handler
@@ -2821,8 +2840,8 @@ impl Parser {
     }
 
     /// Pop namespace bindings for a closing element
-    fn pop_ns_bindings(&mut self) {
-        let level = self.tag_level + 1; // tag_level was already decremented
+    /// `level` is the tag_level at which the bindings were created
+    fn pop_ns_bindings(&mut self, level: u32) {
         while let Some(last) = self.ns_bindings.last() {
             if last.0 != level {
                 break;
@@ -3897,6 +3916,18 @@ fn is_known_encoding(name: &str) -> bool {
             | "ISO-8859-8"
             | "ISO-8859-9"
             | "WINDOWS-1252"
+    )
+}
+
+/// Check if a character is a valid RFC 3986 URI character
+fn is_rfc3986_uri_char(c: char) -> bool {
+    matches!(c,
+        'A'..='Z' | 'a'..='z' | '0'..='9' |  // unreserved
+        '-' | '.' | '_' | '~' |               // unreserved
+        ':' | '@' | '!' | '$' | '&' | '\'' |  // sub-delims + reserved
+        '(' | ')' | '*' | '+' | ',' | ';' |
+        '=' | '/' | '?' | '#' | '[' | ']' |
+        '%'                                     // pct-encoded
     )
 }
 
