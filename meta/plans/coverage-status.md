@@ -2,13 +2,34 @@
 
 ## Current Metrics
 
-| Metric | Value | Target | Notes |
-|--------|-------|--------|-------|
-| **C test suite (against Rust)** | 196/290 (67.6%) | 285/290 (98.3%) | 5 tests N/A |
-| **C line coverage (native C tests)** | **92.3%** xmlparse.c, 86.2% xmltok_impl.c, 84.6% xmlrole.c | — | Baseline: what C covers of itself |
-| **Rust comparison tests** | 1020/1212 (84%) | 100% | SAX event comparison for simple XML |
-| **Rust line coverage** | 80.3% (3249/4046) | 90%+ | Down from ~90% due to new untested code |
-| **Rust code size vs C** | 7903 / 12341 lines (64%) | ~100% | Missing ~4400 lines of C functionality |
+### Line coverage (measured by tooling)
+
+| File | C line coverage (gcov, native C tests) | Rust line coverage (tarpaulin, all Rust tests) |
+|------|----------------------------------------|------------------------------------------------|
+| xmlparse | **92.3%** of 4789 lines | **82.5%** of 1684 lines |
+| xmltok_impl | **86.2%** of 950 lines | **74.3%** of 1532 lines |
+| xmlrole | **84.6%** of 664 lines | **86.1%** of 526 lines |
+| **Overall** | **~90%** | **80.3%** (3249/4046 lines) |
+
+C line coverage is the baseline — it's what C's own comprehensive test suite (4692 test cases) achieves of the C source. Our Rust line coverage is lower both because we added new code without tests, and because our Rust is only 64% of C's size (missing features aren't lines to cover, but their absence means the code we DO have handles fewer cases).
+
+### Test pass rates
+
+| Test suite | Pass rate | What it measures |
+|------------|-----------|------------------|
+| **C test suite against Rust** | **196/290 (67.6%)** | Feature parity: does Rust match C behavior for complex XML? |
+| **Rust comparison tests** | 1020/1212 (84%) | SAX event equivalence for simple XML inputs. 192 tests ignored (features not yet implemented). |
+
+### Code size
+
+| | C | Rust | Ratio |
+|--|---|------|-------|
+| xmlparse | 9267 lines | 3645 lines | 39% |
+| xmltok_impl | 1819 lines | 3185 lines | 175% (Rust expanded from C macros) |
+| xmlrole | 1255 lines | 1073 lines | 85% |
+| **Total** | **12341 lines** | **7903 lines** | **64%** |
+
+The Rust code is 64% of C's size. The missing 36% corresponds to features like namespace processing, parameter entity expansion, content model building, unknown encoding handler, and various sub-parser modes.
 
 ## How to Measure Coverage
 
