@@ -687,3 +687,304 @@ fn cov90_large_incremental() {
         assert_eq!(rs, ce, "large incr chunk={chunk}");
     }
 }
+
+// ============================================================================
+// 17. DTD state machine — incremental parsing through every declaration type
+//     (xmlrole.rs entity, attlist, element, notation states)
+// ============================================================================
+
+#[test]
+fn cov90_dtd_all_declarations_incremental() {
+    // A DTD with every declaration type — incremental parsing hits all role states
+    let xml = br#"<!DOCTYPE root [
+  <!ELEMENT root (#PCDATA|child)*>
+  <!ELEMENT child EMPTY>
+  <!ATTLIST root
+    id ID #IMPLIED
+    class CDATA "default"
+    lang (en|fr|de) "en"
+    required CDATA #REQUIRED
+    fixed CDATA #FIXED "fixval"
+  >
+  <!ATTLIST child type NMTOKEN #IMPLIED>
+  <!ENTITY internal "hello world">
+  <!ENTITY ext_sys SYSTEM "ext.xml">
+  <!ENTITY ext_pub PUBLIC "-//Test//EN" "ext.xml">
+  <!NOTATION jpeg SYSTEM "viewer">
+  <!NOTATION png PUBLIC "-//Test//PNG" "viewer">
+  <!NOTATION gif PUBLIC "-//Test//GIF">
+  <!-- DTD comment -->
+  <?dtd-pi processing instruction data?>
+]>
+<root id="r1" class="cls" lang="fr">
+  text &internal;
+  <child type="tok"/>
+</root>"#;
+    compare_incr(xml, "all DTD decls incremental");
+}
+
+#[test]
+fn cov90_dtd_parameter_entity_decls() {
+    // Parameter entity declarations (% prefix) exercise entity states
+    let cases: &[&[u8]] = &[
+        b"<!DOCTYPE r [<!ENTITY % pe 'val'>]><r/>",
+        b"<!DOCTYPE r [<!ENTITY % pe SYSTEM \"file\">]><r/>",
+        b"<!DOCTYPE r [<!ENTITY % pe PUBLIC \"-//T//EN\" \"file\">]><r/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("pe_decl {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+#[test]
+fn cov90_dtd_entity_ndata_incremental() {
+    // NDATA requires NOTATION, exercises entity7+ states
+    compare_incr(
+        b"<!DOCTYPE r [<!NOTATION n SYSTEM \"x\"><!ENTITY e SYSTEM \"f\" NDATA n>]><r/>",
+        "entity NDATA incremental",
+    );
+    compare_incr(
+        b"<!DOCTYPE r [<!NOTATION n PUBLIC \"-//T//EN\"><!ENTITY e PUBLIC \"-//T//EN\" \"f\" NDATA n>]><r/>",
+        "entity PUBLIC NDATA incremental"
+    );
+}
+
+// ============================================================================
+// 18. Content with special characters — exercises content_tok branches
+// ============================================================================
+
+#[test]
+fn cov90_content_special_chars() {
+    let cases = [
+        "<r>&#9;</r>",      // tab char ref
+        "<r>&#10;</r>",     // LF char ref
+        "<r>&#13;</r>",     // CR char ref
+        "<r>&#x9;</r>",     // tab hex char ref
+        "<r>&#xA;</r>",     // LF hex
+        "<r>&#xD;</r>",     // CR hex
+        "<r>&#x20AC;</r>",  // Euro sign
+        "<r>&#x10000;</r>", // Supplementary char
+        "<r>&#x1F600;</r>", // Emoji via char ref
+    ];
+    for case in &cases {
+        compare_events(case.as_bytes(), &format!("special {:?}", case));
+    }
+}
+
+#[test]
+fn cov90_content_incremental_entities() {
+    // Incremental parsing splitting entity refs
+    let cases: &[&[u8]] = &[
+        b"<r>&amp;&lt;&gt;&apos;&quot;</r>",
+        b"<r>text&amp;more&lt;end</r>",
+        b"<!DOCTYPE r [<!ENTITY e 'val'>]><r>&e;</r>",
+        b"<!DOCTYPE r [<!ENTITY a '1'><!ENTITY b '2'>]><r>&a;&b;</r>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("entity_incr {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 19. Prolog tokenizer — various token types in prolog
+// ============================================================================
+
+#[test]
+fn cov90_prolog_tokens_incremental() {
+    let cases: &[&[u8]] = &[
+        // XML declaration with various attributes
+        b"<?xml version='1.0' encoding='utf-8'?><r/>",
+        b"<?xml version='1.0' encoding='ISO-8859-1'?><r/>",
+        b"<?xml version='1.0' encoding='US-ASCII'?><r/>",
+        // DOCTYPE with system/public
+        b"<!DOCTYPE r SYSTEM 'sys.dtd'><r/>",
+        b"<!DOCTYPE r PUBLIC '-//T//EN' 'pub.dtd'><r/>",
+        // Multiple comments and PIs in prolog
+        b"<!-- c1 --><?pi1 d?>\n<!-- c2 --><?pi2 d?><r/>",
+        // DTD with all element content model types
+        b"<!DOCTYPE r [<!ELEMENT r EMPTY>]><r/>",
+        b"<!DOCTYPE r [<!ELEMENT r ANY>]><r/>",
+        b"<!DOCTYPE r [<!ELEMENT r (#PCDATA)>]><r>text</r>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("prolog_tok {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 20. Attribute handling edge cases in DTD
+// ============================================================================
+
+#[test]
+fn cov90_attlist_all_types_incremental() {
+    let xml = b"<!DOCTYPE r [\
+        <!ATTLIST r \
+            a CDATA #IMPLIED \
+            b CDATA #REQUIRED \
+            c CDATA 'default' \
+            d CDATA #FIXED 'fixed' \
+            e (x|y|z) #IMPLIED \
+            f ID #IMPLIED \
+            g IDREF #IMPLIED \
+            h IDREFS #IMPLIED \
+            i NMTOKEN #IMPLIED \
+            j NMTOKENS #IMPLIED \
+        >\
+    ]><r a='1' b='2' e='x' f='id1' g='id1' h='id1' i='tok' j='tok1 tok2'/>";
+    compare_incr(xml, "attlist all types incremental");
+}
+
+// ============================================================================
+// 21. Mixed content edge cases
+// ============================================================================
+
+#[test]
+fn cov90_mixed_content_complex() {
+    let xml = br#"<?xml version="1.0"?>
+<!DOCTYPE doc [
+  <!ELEMENT doc (#PCDATA|p|b|i)*>
+  <!ELEMENT p (#PCDATA|b)*>
+  <!ELEMENT b (#PCDATA)>
+  <!ELEMENT i EMPTY>
+  <!ENTITY copy "&#169;">
+  <!ENTITY nbsp "&#160;">
+  <!ATTLIST doc version CDATA #IMPLIED>
+  <!ATTLIST p class CDATA "para">
+  <!NOTATION jpg SYSTEM "viewer.exe">
+]>
+<doc version="1.0">
+  <p class="intro">Hello &amp; welcome to &copy; document</p>
+  <!-- This is a comment with special chars: <>&"' -->
+  <?app-info key=value?>
+  <p>Paragraph with <b>bold &nbsp; text</b> and <i/> empty</p>
+  <![CDATA[Raw <data> & "stuff" in CDATA]]>
+  <p>Final &#x2014; paragraph</p>
+</doc>"#;
+    compare_events(xml, "complex mixed content");
+    compare_incr(xml, "complex mixed incremental");
+}
+
+// ============================================================================
+// 22. Error cases incremental — exercises error paths at different split points
+// ============================================================================
+
+#[test]
+fn cov90_errors_incremental() {
+    let cases: &[&[u8]] = &[
+        b"<r></s>",              // tag mismatch
+        b"<r a=\"1\" a=\"2\"/>", // duplicate attr
+        b"<r>&undefined;</r>",   // undefined entity
+        b"<r>&#0;</r>",          // null char ref
+        b"<r>]]></r>",           // ]]> in content
+        b"<r><![CDATA[",         // unclosed CDATA (partial)
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("error_incr {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 23. UTF-16 with various content types
+// ============================================================================
+
+#[test]
+fn cov90_utf16_content_types() {
+    fn utf16le(s: &str) -> Vec<u8> {
+        let mut out = vec![0xFF, 0xFE];
+        for c in s.encode_utf16() {
+            out.push(c as u8);
+            out.push((c >> 8) as u8);
+        }
+        out
+    }
+    fn utf16be(s: &str) -> Vec<u8> {
+        let mut out = vec![0xFE, 0xFF];
+        for c in s.encode_utf16() {
+            out.push((c >> 8) as u8);
+            out.push(c as u8);
+        }
+        out
+    }
+    let cases = [
+        (utf16le("<r a=\"v\">text</r>"), "UTF16LE attrs+text"),
+        (utf16be("<r a=\"v\">text</r>"), "UTF16BE attrs+text"),
+        (utf16le("<?xml version='1.0'?><r/>"), "UTF16LE xmldecl"),
+        (utf16le("<r><!-- c --></r>"), "UTF16LE comment"),
+        (utf16le("<r><?pi d?></r>"), "UTF16LE PI"),
+        (utf16le("<r>&amp;</r>"), "UTF16LE entity"),
+        (utf16le("<r><![CDATA[cd]]></r>"), "UTF16LE CDATA"),
+    ];
+    for (xml, desc) in &cases {
+        compare(xml, desc);
+    }
+}
+
+// ============================================================================
+// 24. Name matching / public ID validation (xmltok_impl.rs)
+// ============================================================================
+
+#[test]
+fn cov90_public_id_edge_cases() {
+    // Exercise is_public_id with various characters
+    let valid_pubids = [
+        "-//W3C//DTD XHTML 1.0//EN",
+        "+//ISBN 0-13-013052-6::Sec. 2.3//EN",
+        "ISO 8879:1986//ENTITIES Added Latin 1//EN//XML",
+    ];
+    for pubid in &valid_pubids {
+        let xml = format!("<!DOCTYPE r PUBLIC \"{}\" \"sys.dtd\"><r/>", pubid);
+        compare(xml.as_bytes(), &format!("pubid {:?}", pubid));
+    }
+    // Invalid chars in public IDs
+    let invalid_pubids = ["{", "}", "~", "\\", "^", "`"];
+    for ch in &invalid_pubids {
+        let xml = format!("<!DOCTYPE r PUBLIC \"bad{}id\" \"sys.dtd\"><r/>", ch);
+        compare(xml.as_bytes(), &format!("bad pubid {:?}", ch));
+    }
+}
+
+// ============================================================================
+// 25. External entity reference with handler set
+// ============================================================================
+
+#[test]
+fn cov90_external_entity_with_handler() {
+    // Set an external entity ref handler that returns false → ExternalEntityHandling error
+    let xml = b"<!DOCTYPE r [<!ENTITY e SYSTEM \"f.xml\">]><r>&e;</r>";
+    let mut r = Parser::new(None).unwrap();
+    r.set_external_entity_ref_handler(Some(Box::new(
+        |_: &str, _: Option<&str>, _: Option<&str>, _: Option<&str>| false,
+    )));
+    let rs = r.parse(xml, true) as u32;
+    let re = r.error_code() as u32;
+
+    // C parser with handler that returns 0 (failure)
+    unsafe extern "C" fn ext_handler(
+        _parser: expat_sys::XML_Parser,
+        _context: *const c_char,
+        _base: *const c_char,
+        _sys: *const c_char,
+        _pub: *const c_char,
+    ) -> c_int {
+        0
+    }
+    let c = CParser::new(None).unwrap();
+    unsafe {
+        expat_sys::XML_SetExternalEntityRefHandler(c.raw_parser(), Some(ext_handler));
+    }
+    let (cs, ce) = c.parse(xml, true);
+    assert_eq!(rs, cs, "ext entity handler status");
+    assert_eq!(re, ce, "ext entity handler error");
+}
