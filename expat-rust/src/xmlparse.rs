@@ -1624,19 +1624,9 @@ impl Parser {
             self.event_cur_byte_count = (next - pos) as i32;
             self.event_cur_data = data[pos..next].to_vec();
 
-            // Update line/column position up to current token before handler callbacks
-            // This ensures XML_GetCurrentLineNumber/ColumnNumber are correct inside handlers
-            if self.position_pos < pos {
-                let enc_ref = xmltok::Utf8Encoding;
-                let p = xmltok_impl::update_position(&enc_ref, data, self.position_pos, pos);
-                if p.line_number > 0 {
-                    self.line_number += p.line_number as u64;
-                    self.column_number = p.column_number as u64;
-                } else {
-                    self.column_number += p.column_number as u64;
-                }
-                self.position_pos = pos;
-            }
+            // Record the current token position for lazy line/column computation.
+            // XML_GetCurrentLineNumber/ColumnNumber will scan parse_data on demand.
+            self.event_pos = pos;
 
             match tok {
                 XmlTok::TrailingCr => {
@@ -1897,19 +1887,9 @@ impl Parser {
                     } else if self.default_handler.is_some() {
                         self.report_default(enc, data, pos, next);
                     }
-                    // For empty elements, update position to end of tag for end-element callback
+                    // For empty elements, set event_pos to end of tag for end-element callback
                     // (matches C: eventPtr points to end of tag for EndElement of empty tags)
-                    if self.position_pos < next {
-                        let enc_ref = xmltok::Utf8Encoding;
-                        let p = xmltok_impl::update_position(&enc_ref, data, self.position_pos, next);
-                        if p.line_number > 0 {
-                            self.line_number += p.line_number as u64;
-                            self.column_number = p.column_number as u64;
-                        } else {
-                            self.column_number += p.column_number as u64;
-                        }
-                        self.position_pos = next;
-                    }
+                    self.event_pos = next;
                     if let Some(handler) = &mut self.end_element_handler {
                         handler(&tag_name);
                     } else if self.start_element_handler.is_none() && self.default_handler.is_some() {
@@ -2663,7 +2643,8 @@ impl Parser {
         self.event_cur_byte_count = 0;
         self.event_cur_data.clear();
 
-        // Update position tracking from processed data
+        // Update final position tracking from processed data.
+        // After this, line_number/column_number reflect the end of processed data.
         // On error: calculate position up to event_pos (error location)
         // On success: calculate position up to end of all processed data
         // Note: position_pos may have been advanced by inline updates in do_content
@@ -2688,7 +2669,10 @@ impl Parser {
                 } else {
                     self.column_number += pos.column_number as u64;
                 }
+                self.position_pos = calc_end;
             }
+            // Mark position as fully up-to-date so lazy getters just return stored values
+            self.event_pos = self.position_pos;
         }
 
         // Track total byte offset (for XML_GetCurrentByteIndex)
@@ -2993,14 +2977,35 @@ impl Parser {
     ///
     /// Equivalent to XML_GetCurrentLineNumber(parser) in C
     pub fn current_line_number(&self) -> u64 {
-        self.line_number
+        // Lazy computation: scan parse_data from position_pos to event_pos
+        // to get the current line number during handler callbacks
+        if self.event_pos > self.position_pos && !self.parse_data.is_empty() {
+            let scan_end = self.event_pos.min(self.parse_data.len());
+            let enc = xmltok::Utf8Encoding;
+            let p = xmltok_impl::update_position(&enc, &self.parse_data, self.position_pos, scan_end);
+            self.line_number + p.line_number as u64
+        } else {
+            self.line_number
+        }
     }
 
     /// Get the current column number in the parse
     ///
     /// Equivalent to XML_GetCurrentColumnNumber(parser) in C
     pub fn current_column_number(&self) -> u64 {
-        self.column_number
+        // Lazy computation: scan parse_data from position_pos to event_pos
+        if self.event_pos > self.position_pos && !self.parse_data.is_empty() {
+            let scan_end = self.event_pos.min(self.parse_data.len());
+            let enc = xmltok::Utf8Encoding;
+            let p = xmltok_impl::update_position(&enc, &self.parse_data, self.position_pos, scan_end);
+            if p.line_number > 0 {
+                p.column_number as u64
+            } else {
+                self.column_number + p.column_number as u64
+            }
+        } else {
+            self.column_number
+        }
     }
 
     /// Get the current byte index in the original input stream.
