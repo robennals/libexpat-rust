@@ -1112,8 +1112,15 @@ pub unsafe extern "C" fn XML_SetExternalEntityRefHandler(
             .parser
             .set_external_entity_ref_handler(Some(Box::new(
                 move |context, base, system_id, public_id| {
-                    let mut ctx_bytes: Vec<u8> = context.as_bytes().to_vec();
-                    ctx_bytes.push(0);
+                    // Empty context from foreign DTD → pass NULL to C
+                    // (C distinguishes NULL context from "" context)
+                    let ctx_bytes: Option<Vec<u8>> = if context.is_empty() {
+                        None
+                    } else {
+                        let mut b = context.as_bytes().to_vec();
+                        b.push(0);
+                        Some(b)
+                    };
 
                     let base_bytes: Option<Vec<u8>> = base.map(|s| {
                         let mut b = s.as_bytes().to_vec();
@@ -1141,9 +1148,13 @@ pub unsafe extern "C" fn XML_SetExternalEntityRefHandler(
                         .as_ref()
                         .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
 
+                    let ctx_ptr = ctx_bytes
+                        .as_ref()
+                        .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
+
                     let result = handler_fn(
                         parser_ptr,
-                        ctx_bytes.as_ptr() as *const XML_Char,
+                        ctx_ptr,
                         base_ptr,
                         sysid_ptr,
                         pubid_ptr,
