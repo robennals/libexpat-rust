@@ -3,11 +3,10 @@ use std::path::PathBuf;
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let expat_dir = manifest_dir.join("..").join("expat");
+    let expat_dir = manifest_dir.join("..").join("expat").join("expat");
     let tests_dir = expat_dir.join("tests");
     let lib_dir = expat_dir.join("lib");
 
-    // We generate expat_config.h in OUT_DIR
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     // Write expat_config.h
@@ -52,7 +51,6 @@ fn main() {
     .expect("Failed to write expat_config.h");
 
     // Compile the C test suite files
-    // These will link against our Rust staticlib (which provides all XML_* symbols)
     cc::Build::new()
         // Test framework
         .file(tests_dir.join("minicheck.c"))
@@ -76,7 +74,7 @@ fn main() {
         .include(&out_dir) // for expat_config.h
         .include(&lib_dir) // for expat.h, internal.h, expat_external.h
         .include(&tests_dir) // for test headers
-        // Defines matching the expat build
+        // Defines
         .define("HAVE_ARC4RANDOM_BUF", None)
         .define("XML_DEV_URANDOM", None)
         .define("XML_DTD", None)

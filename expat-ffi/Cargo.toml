@@ -7,7 +7,7 @@ license = "MIT"
 
 [lib]
 name = "expat"
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 expat-rust = { path = "../expat-rust" }
