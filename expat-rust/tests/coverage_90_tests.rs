@@ -2698,3 +2698,96 @@ fn cov90_use_foreign_dtd_comparison() {
 
     assert_eq!(r_err, c_err, "use_foreign_dtd before parse");
 }
+
+// ============================================================================
+// 98. Prolog token at exact buffer boundary (lines 691-697)
+// ============================================================================
+
+#[test]
+fn cov90_prolog_token_at_boundary() {
+    // Documents designed to have tokens end exactly at chunk boundaries
+    // BOM spanning entire first chunk
+    let mut r = Parser::new(None).unwrap();
+    let _ = r.parse(b"\xEF\xBB\xBF", false);
+    let _ = r.parse(b"", false); // empty non-final after BOM
+    let rs = r.parse(b"<r/>", true) as u32;
+    let c = CParser::new(None).unwrap();
+    let _ = c.parse(b"\xEF\xBB\xBF", false);
+    let _ = c.parse(b"", false);
+    let (cs, _) = c.parse(b"<r/>", true);
+    assert_eq!(rs, cs, "BOM at boundary");
+
+    // Comment spanning exact boundary
+    let xml = b"<!-- comment --><r/>";
+    for split in 1..xml.len() {
+        let mut r = Parser::new(None).unwrap();
+        let _ = r.parse(&xml[..split], false);
+        let rs = r.parse(&xml[split..], true) as u32;
+        let c = CParser::new(None).unwrap();
+        let _ = c.parse(&xml[..split], false);
+        let (cs, _) = c.parse(&xml[split..], true);
+        assert_eq!(rs, cs, "comment boundary @{split}");
+    }
+}
+
+// ============================================================================
+// 99. Content partial token at boundary (lines 1343-1348)
+// ============================================================================
+
+#[test]
+fn cov90_content_token_at_boundary() {
+    // Documents with content tokens ending exactly at chunk boundaries
+    let xml = b"<r>text&amp;more</r>";
+    for split in 1..xml.len() {
+        let mut r = Parser::new(None).unwrap();
+        let _ = r.parse(&xml[..split], false);
+        let rs = r.parse(&xml[split..], true) as u32;
+        let c = CParser::new(None).unwrap();
+        let _ = c.parse(&xml[..split], false);
+        let (cs, _) = c.parse(&xml[split..], true);
+        assert_eq!(rs, cs, "content boundary @{split}");
+    }
+}
+
+// ============================================================================
+// 100. xmlrole PCDATA keyword match (line 942-944)
+// ============================================================================
+
+#[test]
+fn cov90_pcdata_keyword_incremental() {
+    // #PCDATA keyword in element content model — incremental through the keyword
+    compare_incr(
+        b"<!DOCTYPE r [<!ELEMENT r (#PCDATA)>]><r>text</r>",
+        "PCDATA keyword incremental",
+    );
+    // Mixed content with PCDATA
+    compare_incr(
+        b"<!DOCTYPE r [<!ELEMENT r (#PCDATA|a)*><!ELEMENT a EMPTY>]><r>text<a/></r>",
+        "PCDATA mixed incremental",
+    );
+}
+
+// ============================================================================
+// 101. Empty final after various states
+// ============================================================================
+
+#[test]
+fn cov90_empty_final_after_content() {
+    // Parse content non-final, then empty final
+    let mut r = Parser::new(None).unwrap();
+    r.parse(b"<r/>", false);
+    let rs = r.parse(b"", true) as u32;
+    let c = CParser::new(None).unwrap();
+    c.parse(b"<r/>", false);
+    let (cs, _) = c.parse(b"", true);
+    assert_eq!(rs, cs, "empty final after content");
+
+    // Parse DTD non-final, then element
+    let mut r2 = Parser::new(None).unwrap();
+    r2.parse(b"<!DOCTYPE r [<!ELEMENT r EMPTY>]>", false);
+    let rs2 = r2.parse(b"<r/>", true) as u32;
+    let c2 = CParser::new(None).unwrap();
+    c2.parse(b"<!DOCTYPE r [<!ELEMENT r EMPTY>]>", false);
+    let (cs2, _) = c2.parse(b"<r/>", true);
+    assert_eq!(rs2, cs2, "empty final after DTD");
+}
