@@ -561,7 +561,9 @@ pub unsafe extern "C" fn XML_SetEncoding(
     }
     let handle = &mut *parser;
     if encoding.is_null() {
-        return XML_STATUS_ERROR;
+        // NULL encoding clears the encoding setting (matches C behavior)
+        handle.parser.clear_encoding();
+        return XML_STATUS_OK;
     }
     let enc_str = match CStr::from_ptr(encoding).to_str() {
         Ok(s) => s,

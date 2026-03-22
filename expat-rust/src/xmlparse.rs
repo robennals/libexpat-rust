@@ -3706,6 +3706,12 @@ impl Parser {
         XmlStatus::Ok
     }
 
+    /// Clear the encoding setting (NULL encoding in C)
+    /// Always succeeds — matches C behavior where NULL encoding is accepted in any state
+    pub fn clear_encoding(&mut self) {
+        self.encoding_name = None;
+    }
+
     /// Get the number of specified attributes in the last element
     ///
     /// Equivalent to XML_GetSpecifiedAttributeCount(parser) in C.
