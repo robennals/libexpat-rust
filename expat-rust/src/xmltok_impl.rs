@@ -1908,9 +1908,10 @@ pub fn prolog_tok<E: Encoding>(
         ByteType::RPAR => {
             pos += minbpc;
             if !enc.has_char(data, pos, end) {
+                // Can't determine if followed by *, ?, + — need more data
                 return Ok(TokenResult {
-                    token: XmlTok::CloseParen,
-                    next_pos: pos,
+                    token: XmlTok::Partial,
+                    next_pos: pos - minbpc,
                 });
             }
             match enc.byte_type(data, pos) {
