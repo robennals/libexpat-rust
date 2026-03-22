@@ -833,16 +833,40 @@ impl Parser {
                         return (error, pos);
                     }
 
-                    // Forward to default handler if no specific handler handled this token
-                    // In C libexpat, reportDefault() is called for every prolog token
-                    // unless a specific handler consumed it.
-                    // PI and Comment roles already call report_default internally via
-                    // report_processing_instruction/report_comment, so skip those.
-                    // XmlDecl is also handled by handle_prolog_role.
-                    if self.default_handler.is_some()
-                        && !matches!(role, Role::Pi | Role::Comment | Role::XmlDecl)
-                    {
-                        self.report_default(&xmltok::Utf8Encoding, data, pos, next);
+                    // Forward to default handler if no specific handler handled this token.
+                    // In C libexpat, reportDefault() is called for prolog tokens
+                    // ONLY when no specific handler consumed them.
+                    // Skip roles where a specific handler was invoked.
+                    if self.default_handler.is_some() {
+                        let handled_by_specific = match role {
+                            // PI/Comment: always skip — report_processing_instruction/
+                            // report_comment already handle default forwarding internally
+                            Role::Pi | Role::Comment => true,
+                            Role::XmlDecl => self.xml_decl_handler.is_some(),
+                            Role::DoctypeName | Role::DoctypeClose => {
+                                self.start_doctype_decl_handler.is_some()
+                                    || self.end_doctype_decl_handler.is_some()
+                            }
+                            Role::EntityValue | Role::EntityComplete
+                            | Role::GeneralEntityName | Role::EntitySystemId => {
+                                self.entity_decl_handler.is_some()
+                            }
+                            Role::NotationName | Role::NotationSystemId
+                            | Role::NotationNoSystemId => {
+                                self.notation_decl_handler.is_some()
+                            }
+                            Role::ElementName => {
+                                self.element_decl_handler.is_some()
+                            }
+                            Role::DefaultAttributeValue | Role::FixedAttributeValue
+                            | Role::ImpliedAttributeValue | Role::RequiredAttributeValue => {
+                                self.attlist_decl_handler.is_some()
+                            }
+                            _ => false,
+                        };
+                        if !handled_by_specific {
+                            self.report_default(&xmltok::Utf8Encoding, data, pos, next);
+                        }
                     }
 
                     // If processor changed to Content, break out — remaining data
