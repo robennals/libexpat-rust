@@ -2083,6 +2083,11 @@ impl Parser {
                 Err(_) => return (XmlError::InvalidToken, pos),
             };
 
+            // Track event position and byte count for handler callbacks
+            self.event_pos = pos;
+            self.event_cur_byte_count = (next - pos) as i32;
+            self.event_cur_data = data[pos..next].to_vec();
+
             match tok {
                 XmlTok::CdataSectClose => {
                     if let Some(handler) = &mut self.end_cdata_section_handler {
@@ -3107,6 +3112,15 @@ impl Parser {
     /// Equivalent to XML_GetCurrentByteCount(parser) in C
     pub fn current_byte_count(&self) -> i32 {
         self.event_cur_byte_count
+    }
+
+    /// Get the input context buffer and the offset of the current event within it.
+    /// Returns (buffer_slice, event_offset). Empty slice if no context available.
+    pub fn get_input_context(&self) -> (&[u8], usize) {
+        if self.parse_data.is_empty() {
+            return (&[], 0);
+        }
+        (&self.parse_data, self.event_pos.min(self.parse_data.len()))
     }
 
     /// Get parsing status information

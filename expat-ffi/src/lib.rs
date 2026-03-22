@@ -1648,11 +1648,25 @@ pub unsafe extern "C" fn XML_ParserCreate_MM(
 
 #[no_mangle]
 pub unsafe extern "C" fn XML_GetInputContext(
-    _parser: XML_Parser,
-    _offset: *mut c_int,
-    _size: *mut c_int,
+    parser: XML_Parser,
+    offset: *mut c_int,
+    size: *mut c_int,
 ) -> *const c_char {
-    ptr::null()
+    if parser.is_null() {
+        return ptr::null();
+    }
+    let handle = &*parser;
+    let (buf, event_offset) = handle.parser.get_input_context();
+    if buf.is_empty() {
+        return ptr::null();
+    }
+    if !offset.is_null() {
+        *offset = event_offset as c_int;
+    }
+    if !size.is_null() {
+        *size = buf.len() as c_int;
+    }
+    buf.as_ptr() as *const c_char
 }
 
 #[no_mangle]
