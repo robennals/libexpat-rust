@@ -330,6 +330,8 @@ pub struct Parser {
     current_entity_system_id: Option<String>,
     /// Current entity's public ID (for external entities)
     current_entity_public_id: Option<String>,
+    /// Current entity's notation (for unparsed entities with NDATA)
+    current_entity_notation: Option<String>,
     /// DOCTYPE declaration state (accumulated across DoctypeName/SystemId/PublicId roles)
     doctype_name: Option<String>,
     doctype_system_id: Option<String>,
@@ -450,6 +452,7 @@ impl Parser {
             current_entity_name: None,
             current_entity_system_id: None,
             current_entity_public_id: None,
+            current_entity_notation: None,
             doctype_name: None,
             doctype_system_id: None,
             doctype_public_id: None,
@@ -552,6 +555,7 @@ impl Parser {
             current_entity_name: None,
             current_entity_system_id: None,
             current_entity_public_id: None,
+            current_entity_notation: None,
             doctype_name: None,
             doctype_system_id: None,
             doctype_public_id: None,
@@ -1094,6 +1098,10 @@ impl Parser {
                     let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                     self.doctype_public_id = Some(pubid);
                 }
+                if matches!(role, Role::EntityPublicId) {
+                    let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                    self.current_entity_public_id = Some(pubid);
+                }
                 if matches!(role, Role::NotationPublicId) {
                     let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                     self.current_notation_public_id = Some(pubid);
@@ -1245,6 +1253,7 @@ impl Parser {
                 self.current_entity_name = None;
                 self.current_entity_system_id = None;
                 self.current_entity_public_id = None;
+                self.current_entity_notation = None;
                 XmlError::None
             }
             Role::NotationName => {
@@ -1276,6 +1285,29 @@ impl Parser {
                     let base = self.base_uri.clone();
                     let pubid = self.current_notation_public_id.clone();
                     handler(&name, base.as_deref(), "", pubid.as_deref());
+                }
+                XmlError::None
+            }
+            Role::EntityNotationName => {
+                // Entity NDATA notation name — store notation and call unparsed entity handler
+                let notation = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.current_entity_notation = Some(notation);
+
+                // Call unparsed entity handler if set (matches C XML_ROLE_ENTITY_NOTATION_NAME)
+                if let Some(ref name) = self.current_entity_name {
+                    if self.dtd_keep_processing {
+                        if let Some(handler) = &mut self.unparsed_entity_decl_handler {
+                            let base = self.base_uri.clone();
+                            let sys_id = self.current_entity_system_id.clone();
+                            let pub_id = self.current_entity_public_id.clone();
+                            handler(name, base.as_deref(), sys_id.as_deref().unwrap_or(""), pub_id.as_deref());
+                        } else if let Some(handler) = &mut self.entity_decl_handler {
+                            // Fallback to entity_decl_handler if unparsed handler not set (matches C)
+                            let base = self.base_uri.clone();
+                            let sys_id = self.current_entity_system_id.clone();
+                            handler(name, false, None, base.as_deref(), sys_id.as_deref());
+                        }
+                    }
                 }
                 XmlError::None
             }
