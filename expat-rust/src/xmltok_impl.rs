@@ -183,7 +183,8 @@ pub fn scan_comment<E: Encoding>(
                         next_pos: pos,
                     });
                 }
-                if !is_utf8_follow(data[pos + 1]) || !is_utf8_follow(data[pos + 2])
+                if !is_utf8_follow(data[pos + 1])
+                    || !is_utf8_follow(data[pos + 2])
                     || !is_utf8_follow(data[pos + 3])
                 {
                     return Err(pos);
@@ -672,7 +673,8 @@ pub fn cdata_section_tok<E: Encoding>(
                     next_pos: pos,
                 });
             }
-            if !is_utf8_follow(data[pos + 1]) || !is_utf8_follow(data[pos + 2])
+            if !is_utf8_follow(data[pos + 1])
+                || !is_utf8_follow(data[pos + 2])
                 || !is_utf8_follow(data[pos + 3])
             {
                 return Err(pos);
@@ -1518,7 +1520,8 @@ pub fn content_tok<E: Encoding>(
                     next_pos: pos,
                 });
             }
-            if !is_utf8_follow(data[pos + 1]) || !is_utf8_follow(data[pos + 2])
+            if !is_utf8_follow(data[pos + 1])
+                || !is_utf8_follow(data[pos + 2])
                 || !is_utf8_follow(data[pos + 3])
             {
                 return Err(pos);

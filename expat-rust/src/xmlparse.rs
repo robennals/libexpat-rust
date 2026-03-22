@@ -851,21 +851,18 @@ impl Parser {
                                 self.start_doctype_decl_handler.is_some()
                                     || self.end_doctype_decl_handler.is_some()
                             }
-                            Role::EntityValue | Role::EntityComplete
-                            | Role::GeneralEntityName | Role::EntitySystemId => {
-                                self.entity_decl_handler.is_some()
-                            }
-                            Role::NotationName | Role::NotationSystemId
-                            | Role::NotationNoSystemId => {
-                                self.notation_decl_handler.is_some()
-                            }
-                            Role::ElementName => {
-                                self.element_decl_handler.is_some()
-                            }
-                            Role::DefaultAttributeValue | Role::FixedAttributeValue
-                            | Role::ImpliedAttributeValue | Role::RequiredAttributeValue => {
-                                self.attlist_decl_handler.is_some()
-                            }
+                            Role::EntityValue
+                            | Role::EntityComplete
+                            | Role::GeneralEntityName
+                            | Role::EntitySystemId => self.entity_decl_handler.is_some(),
+                            Role::NotationName
+                            | Role::NotationSystemId
+                            | Role::NotationNoSystemId => self.notation_decl_handler.is_some(),
+                            Role::ElementName => self.element_decl_handler.is_some(),
+                            Role::DefaultAttributeValue
+                            | Role::FixedAttributeValue
+                            | Role::ImpliedAttributeValue
+                            | Role::RequiredAttributeValue => self.attlist_decl_handler.is_some(),
                             _ => false,
                         };
                         if !handled_by_specific {
@@ -1161,13 +1158,7 @@ impl Parser {
                             if self.dtd_keep_processing {
                                 if let Some(handler) = &mut self.entity_decl_handler {
                                     let base = self.base_uri.clone();
-                                    handler(
-                                        name,
-                                        false,
-                                        Some(&value),
-                                        base.as_deref(),
-                                        None,
-                                    );
+                                    handler(name, false, Some(&value), base.as_deref(), None);
                                 }
                             }
                         }
@@ -1799,9 +1790,14 @@ impl Parser {
                             if let Some(att_type) = type_map.get(attr_name.as_str()) {
                                 if matches!(
                                     att_type.as_str(),
-                                    "NMTOKENS" | "IDREFS" | "ENTITIES"
-                                        | "NMTOKEN" | "IDREF" | "ENTITY"
-                                        | "ID" | "NOTATION"
+                                    "NMTOKENS"
+                                        | "IDREFS"
+                                        | "ENTITIES"
+                                        | "NMTOKEN"
+                                        | "IDREF"
+                                        | "ENTITY"
+                                        | "ID"
+                                        | "NOTATION"
                                 ) {
                                     // Collapse: strip leading/trailing whitespace, collapse internal runs
                                     let collapsed: String = attr_val
@@ -1892,7 +1888,8 @@ impl Parser {
                     self.event_pos = next;
                     if let Some(handler) = &mut self.end_element_handler {
                         handler(&tag_name);
-                    } else if self.start_element_handler.is_none() && self.default_handler.is_some() {
+                    } else if self.start_element_handler.is_none() && self.default_handler.is_some()
+                    {
                         // Only forward end of empty element if we didn't already forward the whole thing
                     }
 
@@ -2220,7 +2217,10 @@ impl Parser {
                             if !matches!(name, "amp" | "lt" | "gt" | "apos" | "quot") {
                                 if let Some(child_value) = entities.get(name) {
                                     if Self::entity_value_contains_cycle(
-                                        name, child_value.as_bytes(), entities, visited,
+                                        name,
+                                        child_value.as_bytes(),
+                                        entities,
+                                        visited,
                                     ) {
                                         return true;
                                     }
@@ -2292,14 +2292,17 @@ impl Parser {
                                     if let Some(value) = entities.get(name) {
                                         // Check for recursive entity reference
                                         if Self::entity_value_contains_cycle(
-                                            name, value.as_bytes(), entities,
+                                            name,
+                                            value.as_bytes(),
+                                            entities,
                                             &mut std::collections::HashSet::new(),
                                         ) {
                                             // Return error marker — caller should detect
                                             return String::from("\x00RECURSIVE");
                                         }
                                         let expanded = Self::normalize_attribute_value(
-                                            value.as_bytes(), entities,
+                                            value.as_bytes(),
+                                            entities,
                                         );
                                         result.extend_from_slice(expanded.as_bytes());
                                     } else {
@@ -2706,7 +2709,9 @@ impl Parser {
                 return XmlStatus::Error;
             }
             // If root element was opened but not closed, that's unclosed token
-            if self.seen_root && !self.root_closed && self.tag_level > 0
+            if self.seen_root
+                && !self.root_closed
+                && self.tag_level > 0
                 && self.error_code == XmlError::None
             {
                 self.error_code = XmlError::UnclosedToken;
@@ -2987,7 +2992,8 @@ impl Parser {
         if self.event_pos > self.position_pos && !self.parse_data.is_empty() {
             let scan_end = self.event_pos.min(self.parse_data.len());
             let enc = xmltok::Utf8Encoding;
-            let p = xmltok_impl::update_position(&enc, &self.parse_data, self.position_pos, scan_end);
+            let p =
+                xmltok_impl::update_position(&enc, &self.parse_data, self.position_pos, scan_end);
             self.line_number + p.line_number as u64
         } else {
             self.line_number
@@ -3002,7 +3008,8 @@ impl Parser {
         if self.event_pos > self.position_pos && !self.parse_data.is_empty() {
             let scan_end = self.event_pos.min(self.parse_data.len());
             let enc = xmltok::Utf8Encoding;
-            let p = xmltok_impl::update_position(&enc, &self.parse_data, self.position_pos, scan_end);
+            let p =
+                xmltok_impl::update_position(&enc, &self.parse_data, self.position_pos, scan_end);
             if p.line_number > 0 {
                 p.column_number as u64
             } else {
@@ -3404,7 +3411,6 @@ impl Parser {
             if let Some(handler) = &mut self.default_handler {
                 handler(&data);
             }
-            return;
         }
     }
 

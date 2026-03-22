@@ -20,9 +20,7 @@
 
 #![allow(non_camel_case_types, non_snake_case, dead_code, private_interfaces)]
 
-use expat_rust::xmlparse::{
-    self, ParamEntityParsing, Parser, ParsingState, XmlError, XmlStatus,
-};
+use expat_rust::xmlparse::{self, ParamEntityParsing, Parser, ParsingState, XmlError, XmlStatus};
 use std::ffi::{c_char, c_int, c_long, c_ulong, c_void, CStr};
 use std::ptr;
 
@@ -72,8 +70,7 @@ type XML_Error_t = c_int;
 type XML_StartElementHandler =
     Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, *mut *const XML_Char)>;
 type XML_EndElementHandler = Option<unsafe extern "C" fn(*mut c_void, *const XML_Char)>;
-type XML_CharacterDataHandler =
-    Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, c_int)>;
+type XML_CharacterDataHandler = Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, c_int)>;
 type XML_ProcessingInstructionHandler =
     Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, *const XML_Char)>;
 type XML_CommentHandler = Option<unsafe extern "C" fn(*mut c_void, *const XML_Char)>;
@@ -81,18 +78,11 @@ type XML_StartCdataSectionHandler = Option<unsafe extern "C" fn(*mut c_void)>;
 type XML_EndCdataSectionHandler = Option<unsafe extern "C" fn(*mut c_void)>;
 type XML_DefaultHandler = Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, c_int)>;
 type XML_StartDoctypeDeclHandler = Option<
-    unsafe extern "C" fn(
-        *mut c_void,
-        *const XML_Char,
-        *const XML_Char,
-        *const XML_Char,
-        c_int,
-    ),
+    unsafe extern "C" fn(*mut c_void, *const XML_Char, *const XML_Char, *const XML_Char, c_int),
 >;
 type XML_EndDoctypeDeclHandler = Option<unsafe extern "C" fn(*mut c_void)>;
-type XML_XmlDeclHandler = Option<
-    unsafe extern "C" fn(*mut c_void, *const XML_Char, *const XML_Char, c_int),
->;
+type XML_XmlDeclHandler =
+    Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, *const XML_Char, c_int)>;
 type XML_ExternalEntityRefHandler = Option<
     unsafe extern "C" fn(
         XML_Parser,
@@ -103,8 +93,7 @@ type XML_ExternalEntityRefHandler = Option<
     ) -> c_int,
 >;
 type XML_NotStandaloneHandler = Option<unsafe extern "C" fn(*mut c_void) -> c_int>;
-type XML_SkippedEntityHandler =
-    Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, c_int)>;
+type XML_SkippedEntityHandler = Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, c_int)>;
 type XML_ElementDeclHandler =
     Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, *mut XML_Content)>;
 type XML_AttlistDeclHandler = Option<
@@ -150,11 +139,9 @@ type XML_NotationDeclHandler = Option<
 >;
 type XML_StartNamespaceDeclHandler =
     Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, *const XML_Char)>;
-type XML_EndNamespaceDeclHandler =
-    Option<unsafe extern "C" fn(*mut c_void, *const XML_Char)>;
-type XML_UnknownEncodingHandler = Option<
-    unsafe extern "C" fn(*mut c_void, *const XML_Char, *mut XML_Encoding) -> c_int,
->;
+type XML_EndNamespaceDeclHandler = Option<unsafe extern "C" fn(*mut c_void, *const XML_Char)>;
+type XML_UnknownEncodingHandler =
+    Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, *mut XML_Encoding) -> c_int>;
 
 // --- C structures ---
 
@@ -390,10 +377,7 @@ pub unsafe extern "C" fn XML_ParseBuffer(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn XML_StopParser(
-    parser: XML_Parser,
-    resumable: XML_Bool,
-) -> XML_Status_t {
+pub unsafe extern "C" fn XML_StopParser(parser: XML_Parser, resumable: XML_Bool) -> XML_Status_t {
     if parser.is_null() {
         return XML_STATUS_ERROR;
     }
@@ -466,8 +450,10 @@ pub unsafe extern "C" fn XML_ErrorString(code: XML_Error_t) -> *const XML_Char {
         35 => b"parsing aborted\0".as_ptr() as *const XML_Char,
         36 => b"parsing finished\0".as_ptr() as *const XML_Char,
         37 => b"cannot suspend in external parameter entity\0".as_ptr() as *const XML_Char,
-        38 => b"reserved prefix (xml) must not be undeclared or bound to another namespace name\0".as_ptr() as *const XML_Char,
-        39 => b"reserved prefix (xmlns) must not be declared or undeclared\0".as_ptr() as *const XML_Char,
+        38 => b"reserved prefix (xml) must not be undeclared or bound to another namespace name\0"
+            .as_ptr() as *const XML_Char,
+        39 => b"reserved prefix (xmlns) must not be declared or undeclared\0".as_ptr()
+            as *const XML_Char,
         40 => b"reserved namespace URI must not be used\0".as_ptr() as *const XML_Char,
         41 => b"invalid argument\0".as_ptr() as *const XML_Char,
         42 => b"no buffer\0".as_ptr() as *const XML_Char,
@@ -522,10 +508,7 @@ pub unsafe extern "C" fn XML_GetCurrentByteCount(parser: XML_Parser) -> c_int {
 // ============================================================================
 
 #[no_mangle]
-pub unsafe extern "C" fn XML_GetParsingStatus(
-    parser: XML_Parser,
-    status: *mut XML_ParsingStatus,
-) {
+pub unsafe extern "C" fn XML_GetParsingStatus(parser: XML_Parser, status: *mut XML_ParsingStatus) {
     if parser.is_null() || status.is_null() {
         return;
     }
@@ -565,10 +548,7 @@ pub unsafe extern "C" fn XML_SetEncoding(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn XML_SetBase(
-    parser: XML_Parser,
-    base: *const XML_Char,
-) -> XML_Status_t {
+pub unsafe extern "C" fn XML_SetBase(parser: XML_Parser, base: *const XML_Char) -> XML_Status_t {
     if parser.is_null() {
         return XML_STATUS_ERROR;
     }
@@ -637,10 +617,7 @@ pub unsafe extern "C" fn XML_SetParamEntityParsing(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn XML_UseForeignDTD(
-    parser: XML_Parser,
-    use_dtd: XML_Bool,
-) -> XML_Error_t {
+pub unsafe extern "C" fn XML_UseForeignDTD(parser: XML_Parser, use_dtd: XML_Bool) -> XML_Error_t {
     if parser.is_null() {
         return error_to_c(XmlError::InvalidArgument);
     }
@@ -780,7 +757,10 @@ pub unsafe extern "C" fn XML_SetEndElementHandler(
             .set_end_element_handler(Some(Box::new(move |name| {
                 let mut name_bytes: Vec<u8> = name.as_bytes().to_vec();
                 name_bytes.push(0);
-                end_fn((*parser_ptr).user_data, name_bytes.as_ptr() as *const XML_Char);
+                end_fn(
+                    (*parser_ptr).user_data,
+                    name_bytes.as_ptr() as *const XML_Char,
+                );
             })));
     } else {
         handle.parser.set_end_element_handler(None);
@@ -802,7 +782,11 @@ pub unsafe extern "C" fn XML_SetCharacterDataHandler(
         handle
             .parser
             .set_character_data_handler(Some(Box::new(move |data| {
-                handler_fn((*parser_ptr).user_data, data.as_ptr() as *const XML_Char, data.len() as c_int);
+                handler_fn(
+                    (*parser_ptr).user_data,
+                    data.as_ptr() as *const XML_Char,
+                    data.len() as c_int,
+                );
             })));
     } else {
         handle.parser.set_character_data_handler(None);
@@ -840,10 +824,7 @@ pub unsafe extern "C" fn XML_SetProcessingInstructionHandler(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn XML_SetCommentHandler(
-    parser: XML_Parser,
-    handler: XML_CommentHandler,
-) {
+pub unsafe extern "C" fn XML_SetCommentHandler(parser: XML_Parser, handler: XML_CommentHandler) {
     if parser.is_null() {
         return;
     }
@@ -921,10 +902,7 @@ pub unsafe extern "C" fn XML_SetEndCdataSectionHandler(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn XML_SetDefaultHandler(
-    parser: XML_Parser,
-    handler: XML_DefaultHandler,
-) {
+pub unsafe extern "C" fn XML_SetDefaultHandler(parser: XML_Parser, handler: XML_DefaultHandler) {
     if parser.is_null() {
         return;
     }
@@ -935,7 +913,11 @@ pub unsafe extern "C" fn XML_SetDefaultHandler(
         handle
             .parser
             .set_default_handler(Some(Box::new(move |data| {
-                handler_fn((*parser_ptr).user_data, data.as_ptr() as *const XML_Char, data.len() as c_int);
+                handler_fn(
+                    (*parser_ptr).user_data,
+                    data.as_ptr() as *const XML_Char,
+                    data.len() as c_int,
+                );
             })));
     } else {
         handle.parser.set_default_handler(None);
@@ -957,7 +939,11 @@ pub unsafe extern "C" fn XML_SetDefaultHandlerExpand(
         handle
             .parser
             .set_default_handler_expand(Some(Box::new(move |data| {
-                handler_fn((*parser_ptr).user_data, data.as_ptr() as *const XML_Char, data.len() as c_int);
+                handler_fn(
+                    (*parser_ptr).user_data,
+                    data.as_ptr() as *const XML_Char,
+                    data.len() as c_int,
+                );
             })));
     } else {
         handle.parser.set_default_handler_expand(None);
@@ -989,40 +975,38 @@ pub unsafe extern "C" fn XML_SetStartDoctypeDeclHandler(
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
-        handle
-            .parser
-            .set_start_doctype_decl_handler(Some(Box::new(
-                move |doctype_name, sysid, pubid, has_internal_subset| {
-                    let mut name_bytes: Vec<u8> = doctype_name.as_bytes().to_vec();
-                    name_bytes.push(0);
+        handle.parser.set_start_doctype_decl_handler(Some(Box::new(
+            move |doctype_name, sysid, pubid, has_internal_subset| {
+                let mut name_bytes: Vec<u8> = doctype_name.as_bytes().to_vec();
+                name_bytes.push(0);
 
-                    let sysid_bytes: Option<Vec<u8>> = sysid.map(|s| {
-                        let mut b = s.as_bytes().to_vec();
-                        b.push(0);
-                        b
-                    });
-                    let pubid_bytes: Option<Vec<u8>> = pubid.map(|s| {
-                        let mut b = s.as_bytes().to_vec();
-                        b.push(0);
-                        b
-                    });
+                let sysid_bytes: Option<Vec<u8>> = sysid.map(|s| {
+                    let mut b = s.as_bytes().to_vec();
+                    b.push(0);
+                    b
+                });
+                let pubid_bytes: Option<Vec<u8>> = pubid.map(|s| {
+                    let mut b = s.as_bytes().to_vec();
+                    b.push(0);
+                    b
+                });
 
-                    let sysid_ptr = sysid_bytes
-                        .as_ref()
-                        .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
-                    let pubid_ptr = pubid_bytes
-                        .as_ref()
-                        .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
+                let sysid_ptr = sysid_bytes
+                    .as_ref()
+                    .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
+                let pubid_ptr = pubid_bytes
+                    .as_ref()
+                    .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
 
-                    handler_fn(
-                        (*parser_ptr).user_data,
-                        name_bytes.as_ptr() as *const XML_Char,
-                        sysid_ptr,
-                        pubid_ptr,
-                        if has_internal_subset { 1 } else { 0 },
-                    );
-                },
-            )));
+                handler_fn(
+                    (*parser_ptr).user_data,
+                    name_bytes.as_ptr() as *const XML_Char,
+                    sysid_ptr,
+                    pubid_ptr,
+                    if has_internal_subset { 1 } else { 0 },
+                );
+            },
+        )));
     } else {
         handle.parser.set_start_doctype_decl_handler(None);
     }
@@ -1051,10 +1035,7 @@ pub unsafe extern "C" fn XML_SetEndDoctypeDeclHandler(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn XML_SetXmlDeclHandler(
-    parser: XML_Parser,
-    handler: XML_XmlDeclHandler,
-) {
+pub unsafe extern "C" fn XML_SetXmlDeclHandler(parser: XML_Parser, handler: XML_XmlDeclHandler) {
     if parser.is_null() {
         return;
     }
@@ -1089,7 +1070,12 @@ pub unsafe extern "C" fn XML_SetXmlDeclHandler(
                     None => -1,
                 };
 
-                handler_fn((*parser_ptr).user_data, version_ptr, encoding_ptr, standalone_int);
+                handler_fn(
+                    (*parser_ptr).user_data,
+                    version_ptr,
+                    encoding_ptr,
+                    standalone_int,
+                );
             })));
     } else {
         handle.parser.set_xml_decl_handler(None);
@@ -1108,60 +1094,52 @@ pub unsafe extern "C" fn XML_SetExternalEntityRefHandler(
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
-        handle
-            .parser
-            .set_external_entity_ref_handler(Some(Box::new(
-                move |context, base, system_id, public_id| {
-                    // Empty context from foreign DTD → pass NULL to C
-                    // (C distinguishes NULL context from "" context)
-                    let ctx_bytes: Option<Vec<u8>> = if context.is_empty() {
-                        None
-                    } else {
-                        let mut b = context.as_bytes().to_vec();
-                        b.push(0);
-                        Some(b)
-                    };
+        handle.parser.set_external_entity_ref_handler(Some(Box::new(
+            move |context, base, system_id, public_id| {
+                // Empty context from foreign DTD → pass NULL to C
+                // (C distinguishes NULL context from "" context)
+                let ctx_bytes: Option<Vec<u8>> = if context.is_empty() {
+                    None
+                } else {
+                    let mut b = context.as_bytes().to_vec();
+                    b.push(0);
+                    Some(b)
+                };
 
-                    let base_bytes: Option<Vec<u8>> = base.map(|s| {
-                        let mut b = s.as_bytes().to_vec();
-                        b.push(0);
-                        b
-                    });
-                    let sysid_bytes: Option<Vec<u8>> = system_id.map(|s| {
-                        let mut b = s.as_bytes().to_vec();
-                        b.push(0);
-                        b
-                    });
-                    let pubid_bytes: Option<Vec<u8>> = public_id.map(|s| {
-                        let mut b = s.as_bytes().to_vec();
-                        b.push(0);
-                        b
-                    });
+                let base_bytes: Option<Vec<u8>> = base.map(|s| {
+                    let mut b = s.as_bytes().to_vec();
+                    b.push(0);
+                    b
+                });
+                let sysid_bytes: Option<Vec<u8>> = system_id.map(|s| {
+                    let mut b = s.as_bytes().to_vec();
+                    b.push(0);
+                    b
+                });
+                let pubid_bytes: Option<Vec<u8>> = public_id.map(|s| {
+                    let mut b = s.as_bytes().to_vec();
+                    b.push(0);
+                    b
+                });
 
-                    let base_ptr = base_bytes
-                        .as_ref()
-                        .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
-                    let sysid_ptr = sysid_bytes
-                        .as_ref()
-                        .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
-                    let pubid_ptr = pubid_bytes
-                        .as_ref()
-                        .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
+                let base_ptr = base_bytes
+                    .as_ref()
+                    .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
+                let sysid_ptr = sysid_bytes
+                    .as_ref()
+                    .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
+                let pubid_ptr = pubid_bytes
+                    .as_ref()
+                    .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
 
-                    let ctx_ptr = ctx_bytes
-                        .as_ref()
-                        .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
+                let ctx_ptr = ctx_bytes
+                    .as_ref()
+                    .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
 
-                    let result = handler_fn(
-                        parser_ptr,
-                        ctx_ptr,
-                        base_ptr,
-                        sysid_ptr,
-                        pubid_ptr,
-                    );
-                    result != 0
-                },
-            )));
+                let result = handler_fn(parser_ptr, ctx_ptr, base_ptr, sysid_ptr, pubid_ptr);
+                result != 0
+            },
+        )));
     } else {
         handle.parser.set_external_entity_ref_handler(None);
     }
@@ -1305,7 +1283,11 @@ pub unsafe extern "C" fn XML_ExpatVersion() -> *const XML_Char {
 
 #[no_mangle]
 pub unsafe extern "C" fn XML_ExpatVersionInfo() -> XML_Expat_Version {
-    XML_Expat_Version { major: 2, minor: 7, micro: 5 }
+    XML_Expat_Version {
+        major: 2,
+        minor: 7,
+        micro: 5,
+    }
 }
 
 // ============================================================================
@@ -1323,15 +1305,51 @@ static FEATURE_BLAP_THR: &[u8] = b"XML_BLAP_ACT_THRES\0";
 static FEATURE_END_NAME: &[u8] = b"\0";
 
 static FEATURES: [XML_Feature; 9] = [
-    XML_Feature { feature: 3, name: FEATURE_DTD_NAME.as_ptr() as *const XML_Char, value: 0 },
-    XML_Feature { feature: 8, name: FEATURE_NS_NAME.as_ptr() as *const XML_Char, value: 0 },
-    XML_Feature { feature: 4, name: FEATURE_CTX_NAME.as_ptr() as *const XML_Char, value: 1024 },
-    XML_Feature { feature: 6, name: FEATURE_CHAR_NAME.as_ptr() as *const XML_Char, value: 1 },
-    XML_Feature { feature: 7, name: FEATURE_LCHAR_NAME.as_ptr() as *const XML_Char, value: 1 },
-    XML_Feature { feature: 13, name: FEATURE_GE_NAME.as_ptr() as *const XML_Char, value: 1 },
-    XML_Feature { feature: 11, name: FEATURE_BLAP_AMP.as_ptr() as *const XML_Char, value: 100 },
-    XML_Feature { feature: 12, name: FEATURE_BLAP_THR.as_ptr() as *const XML_Char, value: 8388608 },
-    XML_Feature { feature: 0, name: FEATURE_END_NAME.as_ptr() as *const XML_Char, value: 0 },
+    XML_Feature {
+        feature: 3,
+        name: FEATURE_DTD_NAME.as_ptr() as *const XML_Char,
+        value: 0,
+    },
+    XML_Feature {
+        feature: 8,
+        name: FEATURE_NS_NAME.as_ptr() as *const XML_Char,
+        value: 0,
+    },
+    XML_Feature {
+        feature: 4,
+        name: FEATURE_CTX_NAME.as_ptr() as *const XML_Char,
+        value: 1024,
+    },
+    XML_Feature {
+        feature: 6,
+        name: FEATURE_CHAR_NAME.as_ptr() as *const XML_Char,
+        value: 1,
+    },
+    XML_Feature {
+        feature: 7,
+        name: FEATURE_LCHAR_NAME.as_ptr() as *const XML_Char,
+        value: 1,
+    },
+    XML_Feature {
+        feature: 13,
+        name: FEATURE_GE_NAME.as_ptr() as *const XML_Char,
+        value: 1,
+    },
+    XML_Feature {
+        feature: 11,
+        name: FEATURE_BLAP_AMP.as_ptr() as *const XML_Char,
+        value: 100,
+    },
+    XML_Feature {
+        feature: 12,
+        name: FEATURE_BLAP_THR.as_ptr() as *const XML_Char,
+        value: 8388608,
+    },
+    XML_Feature {
+        feature: 0,
+        name: FEATURE_END_NAME.as_ptr() as *const XML_Char,
+        value: 0,
+    },
 ];
 
 #[no_mangle]
@@ -1345,13 +1363,17 @@ pub unsafe extern "C" fn XML_GetFeatureList() -> *const XML_Feature {
 
 #[no_mangle]
 pub unsafe extern "C" fn XML_GetUserData(parser: XML_Parser) -> *mut c_void {
-    if parser.is_null() { return ptr::null_mut(); }
+    if parser.is_null() {
+        return ptr::null_mut();
+    }
     (*parser).user_data
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn XML_SetExternalEntityRefHandlerArg(parser: XML_Parser, arg: *mut c_void) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     (*parser).ext_entity_ref_handler_arg = arg;
 }
 
@@ -1360,15 +1382,19 @@ pub unsafe extern "C" fn XML_SetNotStandaloneHandler(
     parser: XML_Parser,
     handler: XML_NotStandaloneHandler,
 ) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     let handle = &mut *parser;
     handle.c_not_standalone_handler = handler;
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
-        handle.parser.set_not_standalone_handler(Some(Box::new(move || -> bool {
-            let h = &*parser_ptr;
-            handler_fn(h.user_data) != 0
-        })));
+        handle
+            .parser
+            .set_not_standalone_handler(Some(Box::new(move || -> bool {
+                let h = &*parser_ptr;
+                handler_fn(h.user_data) != 0
+            })));
     } else {
         handle.parser.set_not_standalone_handler(None);
     }
@@ -1379,17 +1405,25 @@ pub unsafe extern "C" fn XML_SetSkippedEntityHandler(
     parser: XML_Parser,
     handler: XML_SkippedEntityHandler,
 ) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     let handle = &mut *parser;
     handle.c_skipped_entity_handler = handler;
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
-        handle.parser.set_skipped_entity_handler(Some(Box::new(move |name: &str, is_param: bool| {
-            let h = &*parser_ptr;
-            let mut nb: Vec<u8> = name.as_bytes().to_vec();
-            nb.push(0);
-            handler_fn(h.user_data, nb.as_ptr() as *const XML_Char, if is_param { 1 } else { 0 });
-        })));
+        handle.parser.set_skipped_entity_handler(Some(Box::new(
+            move |name: &str, is_param: bool| {
+                let h = &*parser_ptr;
+                let mut nb: Vec<u8> = name.as_bytes().to_vec();
+                nb.push(0);
+                handler_fn(
+                    h.user_data,
+                    nb.as_ptr() as *const XML_Char,
+                    if is_param { 1 } else { 0 },
+                );
+            },
+        )));
     } else {
         handle.parser.set_skipped_entity_handler(None);
     }
@@ -1400,18 +1434,28 @@ pub unsafe extern "C" fn XML_SetElementDeclHandler(
     parser: XML_Parser,
     handler: XML_ElementDeclHandler,
 ) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     let handle = &mut *parser;
     handle.c_element_decl_handler = handler;
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
-        handle.parser.set_element_decl_handler(Some(Box::new(move |name: &str, _model: &str| {
-            let h = &*parser_ptr;
-            let mut nb: Vec<u8> = name.as_bytes().to_vec();
-            nb.push(0);
-            let mut content = XML_Content { type_: 0, quant: 0, name: ptr::null_mut(), numchildren: 0, children: ptr::null_mut() };
-            handler_fn(h.user_data, nb.as_ptr() as *const XML_Char, &mut content);
-        })));
+        handle
+            .parser
+            .set_element_decl_handler(Some(Box::new(move |name: &str, _model: &str| {
+                let h = &*parser_ptr;
+                let mut nb: Vec<u8> = name.as_bytes().to_vec();
+                nb.push(0);
+                let mut content = XML_Content {
+                    type_: 0,
+                    quant: 0,
+                    name: ptr::null_mut(),
+                    numchildren: 0,
+                    children: ptr::null_mut(),
+                };
+                handler_fn(h.user_data, nb.as_ptr() as *const XML_Char, &mut content);
+            })));
     } else {
         handle.parser.set_element_decl_handler(None);
     }
@@ -1422,22 +1466,41 @@ pub unsafe extern "C" fn XML_SetAttlistDeclHandler(
     parser: XML_Parser,
     handler: XML_AttlistDeclHandler,
 ) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     let handle = &mut *parser;
     handle.c_attlist_decl_handler = handler;
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
         handle.parser.set_attlist_decl_handler(Some(Box::new(
-            move |elname: &str, attname: &str, att_type: &str, dflt: Option<&str>, _dflt2: Option<&str>, is_required: bool| {
+            move |elname: &str,
+                  attname: &str,
+                  att_type: &str,
+                  dflt: Option<&str>,
+                  _dflt2: Option<&str>,
+                  is_required: bool| {
                 let h = &*parser_ptr;
-                let mut el = elname.as_bytes().to_vec(); el.push(0);
-                let mut att = attname.as_bytes().to_vec(); att.push(0);
-                let mut tp = att_type.as_bytes().to_vec(); tp.push(0);
-                let df = dflt.map(|s| { let mut b = s.as_bytes().to_vec(); b.push(0); b });
-                handler_fn(h.user_data, el.as_ptr() as _, att.as_ptr() as _, tp.as_ptr() as _,
+                let mut el = elname.as_bytes().to_vec();
+                el.push(0);
+                let mut att = attname.as_bytes().to_vec();
+                att.push(0);
+                let mut tp = att_type.as_bytes().to_vec();
+                tp.push(0);
+                let df = dflt.map(|s| {
+                    let mut b = s.as_bytes().to_vec();
+                    b.push(0);
+                    b
+                });
+                handler_fn(
+                    h.user_data,
+                    el.as_ptr() as _,
+                    att.as_ptr() as _,
+                    tp.as_ptr() as _,
                     df.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
-                    if is_required { 1 } else { 0 });
-            }
+                    if is_required { 1 } else { 0 },
+                );
+            },
         )));
     } else {
         handle.parser.set_attlist_decl_handler(None);
@@ -1449,25 +1512,50 @@ pub unsafe extern "C" fn XML_SetEntityDeclHandler(
     parser: XML_Parser,
     handler: XML_EntityDeclHandler,
 ) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     let handle = &mut *parser;
     handle.c_entity_decl_handler = handler;
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
         handle.parser.set_entity_decl_handler(Some(Box::new(
-            move |name: &str, is_param: bool, value: Option<&str>, base: Option<&str>, system_id: Option<&str>| {
+            move |name: &str,
+                  is_param: bool,
+                  value: Option<&str>,
+                  base: Option<&str>,
+                  system_id: Option<&str>| {
                 let h = &*parser_ptr;
-                let mut nb = name.as_bytes().to_vec(); nb.push(0);
-                let vb = value.map(|s| { let mut b = s.as_bytes().to_vec(); b.push(0); b });
+                let mut nb = name.as_bytes().to_vec();
+                nb.push(0);
+                let vb = value.map(|s| {
+                    let mut b = s.as_bytes().to_vec();
+                    b.push(0);
+                    b
+                });
                 let vlen = value.map_or(0, |s| s.len()) as c_int;
-                let bb = base.map(|s| { let mut b = s.as_bytes().to_vec(); b.push(0); b });
-                let sb = system_id.map(|s| { let mut b = s.as_bytes().to_vec(); b.push(0); b });
-                handler_fn(h.user_data, nb.as_ptr() as _, if is_param { 1 } else { 0 },
-                    vb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _), vlen,
+                let bb = base.map(|s| {
+                    let mut b = s.as_bytes().to_vec();
+                    b.push(0);
+                    b
+                });
+                let sb = system_id.map(|s| {
+                    let mut b = s.as_bytes().to_vec();
+                    b.push(0);
+                    b
+                });
+                handler_fn(
+                    h.user_data,
+                    nb.as_ptr() as _,
+                    if is_param { 1 } else { 0 },
+                    vb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
+                    vlen,
                     bb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
                     sb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
-                    ptr::null(), ptr::null());
-            }
+                    ptr::null(),
+                    ptr::null(),
+                );
+            },
         )));
     } else {
         handle.parser.set_entity_decl_handler(None);
@@ -1479,24 +1567,41 @@ pub unsafe extern "C" fn XML_SetUnparsedEntityDeclHandler(
     parser: XML_Parser,
     handler: XML_UnparsedEntityDeclHandler,
 ) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     let handle = &mut *parser;
     handle.c_unparsed_entity_decl_handler = handler;
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
-        handle.parser.set_unparsed_entity_decl_handler(Some(Box::new(
-            move |name: &str, base: Option<&str>, system_id: &str, notation: Option<&str>| {
-                let h = &*parser_ptr;
-                let mut nb = name.as_bytes().to_vec(); nb.push(0);
-                let bb = base.map(|s| { let mut b = s.as_bytes().to_vec(); b.push(0); b });
-                let mut sb = system_id.as_bytes().to_vec(); sb.push(0);
-                let nt = notation.map(|s| { let mut b = s.as_bytes().to_vec(); b.push(0); b });
-                handler_fn(h.user_data, nb.as_ptr() as _,
-                    bb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
-                    sb.as_ptr() as _,
-                    nt.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _));
-            }
-        )));
+        handle
+            .parser
+            .set_unparsed_entity_decl_handler(Some(Box::new(
+                move |name: &str, base: Option<&str>, system_id: &str, notation: Option<&str>| {
+                    let h = &*parser_ptr;
+                    let mut nb = name.as_bytes().to_vec();
+                    nb.push(0);
+                    let bb = base.map(|s| {
+                        let mut b = s.as_bytes().to_vec();
+                        b.push(0);
+                        b
+                    });
+                    let mut sb = system_id.as_bytes().to_vec();
+                    sb.push(0);
+                    let nt = notation.map(|s| {
+                        let mut b = s.as_bytes().to_vec();
+                        b.push(0);
+                        b
+                    });
+                    handler_fn(
+                        h.user_data,
+                        nb.as_ptr() as _,
+                        bb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
+                        sb.as_ptr() as _,
+                        nt.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
+                    );
+                },
+            )));
     } else {
         handle.parser.set_unparsed_entity_decl_handler(None);
     }
@@ -1507,7 +1612,9 @@ pub unsafe extern "C" fn XML_SetNotationDeclHandler(
     parser: XML_Parser,
     handler: XML_NotationDeclHandler,
 ) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     let handle = &mut *parser;
     handle.c_notation_decl_handler = handler;
     if let Some(handler_fn) = handler {
@@ -1515,15 +1622,28 @@ pub unsafe extern "C" fn XML_SetNotationDeclHandler(
         handle.parser.set_notation_decl_handler(Some(Box::new(
             move |name: &str, base: Option<&str>, system_id: &str, public_id: Option<&str>| {
                 let h = &*parser_ptr;
-                let mut nb = name.as_bytes().to_vec(); nb.push(0);
-                let bb = base.map(|s| { let mut b = s.as_bytes().to_vec(); b.push(0); b });
-                let mut sb = system_id.as_bytes().to_vec(); sb.push(0);
-                let pb = public_id.map(|s| { let mut b = s.as_bytes().to_vec(); b.push(0); b });
-                handler_fn(h.user_data, nb.as_ptr() as _,
+                let mut nb = name.as_bytes().to_vec();
+                nb.push(0);
+                let bb = base.map(|s| {
+                    let mut b = s.as_bytes().to_vec();
+                    b.push(0);
+                    b
+                });
+                let mut sb = system_id.as_bytes().to_vec();
+                sb.push(0);
+                let pb = public_id.map(|s| {
+                    let mut b = s.as_bytes().to_vec();
+                    b.push(0);
+                    b
+                });
+                handler_fn(
+                    h.user_data,
+                    nb.as_ptr() as _,
                     bb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
                     sb.as_ptr() as _,
-                    pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _));
-            }
+                    pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
+                );
+            },
         )));
     } else {
         handle.parser.set_notation_decl_handler(None);
@@ -1536,7 +1656,9 @@ pub unsafe extern "C" fn XML_SetNamespaceDeclHandler(
     start: XML_StartNamespaceDeclHandler,
     end: XML_EndNamespaceDeclHandler,
 ) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     XML_SetStartNamespaceDeclHandler(parser, start);
     XML_SetEndNamespaceDeclHandler(parser, end);
 }
@@ -1546,21 +1668,32 @@ pub unsafe extern "C" fn XML_SetStartNamespaceDeclHandler(
     parser: XML_Parser,
     handler: XML_StartNamespaceDeclHandler,
 ) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     let handle = &mut *parser;
     handle.c_start_ns_handler = handler;
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
-        handle.parser.set_start_namespace_decl_handler(Some(Box::new(
-            move |prefix: Option<&str>, uri: &str| {
-                let h = &*parser_ptr;
-                let pb = prefix.map(|s| { let mut b = s.as_bytes().to_vec(); b.push(0); b });
-                let mut ub = uri.as_bytes().to_vec(); ub.push(0);
-                handler_fn(h.user_data,
-                    pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
-                    ub.as_ptr() as _);
-            }
-        )));
+        handle
+            .parser
+            .set_start_namespace_decl_handler(Some(Box::new(
+                move |prefix: Option<&str>, uri: &str| {
+                    let h = &*parser_ptr;
+                    let pb = prefix.map(|s| {
+                        let mut b = s.as_bytes().to_vec();
+                        b.push(0);
+                        b
+                    });
+                    let mut ub = uri.as_bytes().to_vec();
+                    ub.push(0);
+                    handler_fn(
+                        h.user_data,
+                        pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
+                        ub.as_ptr() as _,
+                    );
+                },
+            )));
     } else {
         handle.parser.set_start_namespace_decl_handler(None);
     }
@@ -1571,7 +1704,9 @@ pub unsafe extern "C" fn XML_SetEndNamespaceDeclHandler(
     parser: XML_Parser,
     handler: XML_EndNamespaceDeclHandler,
 ) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     let handle = &mut *parser;
     handle.c_end_ns_handler = handler;
     if let Some(handler_fn) = handler {
@@ -1579,9 +1714,16 @@ pub unsafe extern "C" fn XML_SetEndNamespaceDeclHandler(
         handle.parser.set_end_namespace_decl_handler(Some(Box::new(
             move |prefix: Option<&str>| {
                 let h = &*parser_ptr;
-                let pb = prefix.map(|s| { let mut b = s.as_bytes().to_vec(); b.push(0); b });
-                handler_fn(h.user_data, pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _));
-            }
+                let pb = prefix.map(|s| {
+                    let mut b = s.as_bytes().to_vec();
+                    b.push(0);
+                    b
+                });
+                handler_fn(
+                    h.user_data,
+                    pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
+                );
+            },
         )));
     } else {
         handle.parser.set_end_namespace_decl_handler(None);
@@ -1594,17 +1736,27 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
     handler: XML_UnknownEncodingHandler,
     data: *mut c_void,
 ) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     let handle = &mut *parser;
     handle.c_unknown_encoding_handler = handler;
     handle.c_unknown_encoding_data = data;
     if let Some(handler_fn) = handler {
         let enc_data = data;
-        handle.parser.set_unknown_encoding_handler(Some(Box::new(move |name: &str| -> bool {
-            let mut nb = name.as_bytes().to_vec(); nb.push(0);
-            let mut enc = XML_Encoding { map: [0i32; 256], data: ptr::null_mut(), convert: None, release: None };
-            handler_fn(enc_data, nb.as_ptr() as _, &mut enc) != 0
-        })));
+        handle
+            .parser
+            .set_unknown_encoding_handler(Some(Box::new(move |name: &str| -> bool {
+                let mut nb = name.as_bytes().to_vec();
+                nb.push(0);
+                let mut enc = XML_Encoding {
+                    map: [0i32; 256],
+                    data: ptr::null_mut(),
+                    convert: None,
+                    release: None,
+                };
+                handler_fn(enc_data, nb.as_ptr() as _, &mut enc) != 0
+            })));
     } else {
         handle.parser.set_unknown_encoding_handler(None);
     }
@@ -1616,7 +1768,9 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
 
 #[no_mangle]
 pub unsafe extern "C" fn XML_DefaultCurrent(parser: XML_Parser) {
-    if parser.is_null() { return; }
+    if parser.is_null() {
+        return;
+    }
     (*parser).parser.default_current();
 }
 
@@ -1633,7 +1787,11 @@ pub unsafe extern "C" fn XML_ParserCreate_MM(
     memsuite: *const XML_Memory_Handling_Suite,
     ns_separator: *const XML_Char,
 ) -> XML_Parser {
-    let enc = if encoding.is_null() { None } else { CStr::from_ptr(encoding).to_str().ok() };
+    let enc = if encoding.is_null() {
+        None
+    } else {
+        CStr::from_ptr(encoding).to_str().ok()
+    };
     let parser = if ns_separator.is_null() {
         Parser::new(enc)
     } else {
@@ -1675,7 +1833,11 @@ pub unsafe extern "C" fn XML_MemMalloc(_parser: XML_Parser, size: usize) -> *mut
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn XML_MemRealloc(_parser: XML_Parser, ptr: *mut c_void, size: usize) -> *mut c_void {
+pub unsafe extern "C" fn XML_MemRealloc(
+    _parser: XML_Parser,
+    ptr: *mut c_void,
+    size: usize,
+) -> *mut c_void {
     libc_realloc(ptr, size)
 }
 
@@ -1691,17 +1853,32 @@ extern "C" {
     fn free(ptr: *mut c_void);
 }
 
-unsafe fn libc_malloc(size: usize) -> *mut c_void { malloc(size) }
-unsafe fn libc_realloc(p: *mut c_void, size: usize) -> *mut c_void { realloc(p, size) }
-unsafe fn libc_free(p: *mut c_void) { free(p) }
+unsafe fn libc_malloc(size: usize) -> *mut c_void {
+    malloc(size)
+}
+unsafe fn libc_realloc(p: *mut c_void, size: usize) -> *mut c_void {
+    realloc(p, size)
+}
+unsafe fn libc_free(p: *mut c_void) {
+    free(p)
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn XML_SetAllocTrackerMaximumAmplification(
     parser: XML_Parser,
     factor: f32,
 ) -> XML_Bool {
-    if parser.is_null() { return XML_FALSE; }
-    if (*parser).parser.set_alloc_tracker_maximum_amplification(factor) { XML_TRUE } else { XML_FALSE }
+    if parser.is_null() {
+        return XML_FALSE;
+    }
+    if (*parser)
+        .parser
+        .set_alloc_tracker_maximum_amplification(factor)
+    {
+        XML_TRUE
+    } else {
+        XML_FALSE
+    }
 }
 
 #[no_mangle]
@@ -1709,8 +1886,17 @@ pub unsafe extern "C" fn XML_SetAllocTrackerActivationThreshold(
     parser: XML_Parser,
     threshold: c_ulong,
 ) -> XML_Bool {
-    if parser.is_null() { return XML_FALSE; }
-    if (*parser).parser.set_alloc_tracker_activation_threshold(threshold as u64) { XML_TRUE } else { XML_FALSE }
+    if parser.is_null() {
+        return XML_FALSE;
+    }
+    if (*parser)
+        .parser
+        .set_alloc_tracker_activation_threshold(threshold as u64)
+    {
+        XML_TRUE
+    } else {
+        XML_FALSE
+    }
 }
 
 // ============================================================================
@@ -1768,12 +1954,21 @@ pub unsafe extern "C" fn unsignedCharToPrintable(c: u8) -> *const c_char {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn expat_malloc(_parser: XML_Parser, size: usize, _line: c_int) -> *mut c_void {
+pub unsafe extern "C" fn expat_malloc(
+    _parser: XML_Parser,
+    size: usize,
+    _line: c_int,
+) -> *mut c_void {
     malloc(size)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn expat_realloc(_parser: XML_Parser, ptr: *mut c_void, size: usize, _line: c_int) -> *mut c_void {
+pub unsafe extern "C" fn expat_realloc(
+    _parser: XML_Parser,
+    ptr: *mut c_void,
+    size: usize,
+    _line: c_int,
+) -> *mut c_void {
     realloc(ptr, size)
 }
 
