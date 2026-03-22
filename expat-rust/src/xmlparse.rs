@@ -1132,9 +1132,13 @@ impl Parser {
                 }
                 Err(err_pos) => {
                     // Check if this is a partial UTF-8 character at the end
-                    // Search backwards from err_pos to find the start of a potential UTF-8 lead byte
-                    if have_more && Self::is_partial_utf8_sequence(&data, err_pos) {
-                        self.buffer = data[err_pos..].to_vec();
+                    if Self::is_partial_utf8_sequence(&data, err_pos) {
+                        if have_more {
+                            self.buffer = data[err_pos..].to_vec();
+                            return;
+                        }
+                        // Final buffer with partial char — matches C epilogProcessor
+                        self.error_code = XmlError::PartialChar;
                         return;
                     }
                     self.error_code = XmlError::JunkAfterDocElement;
