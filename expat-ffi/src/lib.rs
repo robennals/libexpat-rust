@@ -738,7 +738,11 @@ pub unsafe extern "C" fn XML_SetStartElementHandler(
         handle
             .parser
             .set_start_element_handler(Some(Box::new(move |name, attrs| {
-                let ud = (*parser_ptr).user_data;
+                let ud = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
                 let mut name_bytes: Vec<u8> = name.as_bytes().to_vec();
                 name_bytes.push(0);
 
@@ -784,8 +788,13 @@ pub unsafe extern "C" fn XML_SetEndElementHandler(
             .set_end_element_handler(Some(Box::new(move |name| {
                 let mut name_bytes: Vec<u8> = name.as_bytes().to_vec();
                 name_bytes.push(0);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
                 end_fn(
-                    (*parser_ptr).user_data,
+                    handler_arg,
                     name_bytes.as_ptr() as *const XML_Char,
                 );
             })));
@@ -810,8 +819,13 @@ pub unsafe extern "C" fn XML_SetCharacterDataHandler(
         handle
             .parser
             .set_character_data_handler(Some(Box::new(move |data| {
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
                 handler_fn(
-                    (*parser_ptr).user_data,
+                    handler_arg,
                     data.as_ptr() as *const XML_Char,
                     data.len() as c_int,
                 );
@@ -841,8 +855,13 @@ pub unsafe extern "C" fn XML_SetProcessingInstructionHandler(
                 target_bytes.push(0);
                 let mut data_bytes: Vec<u8> = data.as_bytes().to_vec();
                 data_bytes.push(0);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
                 handler_fn(
-                    (*parser_ptr).user_data,
+                    handler_arg,
                     target_bytes.as_ptr() as *const XML_Char,
                     data_bytes.as_ptr() as *const XML_Char,
                 );
@@ -867,7 +886,12 @@ pub unsafe extern "C" fn XML_SetCommentHandler(parser: XML_Parser, handler: XML_
             .set_comment_handler(Some(Box::new(move |data| {
                 let mut bytes: Vec<u8> = data.to_vec();
                 bytes.push(0);
-                handler_fn((*parser_ptr).user_data, bytes.as_ptr() as *const XML_Char);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+                handler_fn(handler_arg, bytes.as_ptr() as *const XML_Char);
             })));
     } else {
         handle.parser.set_comment_handler(None);
@@ -903,7 +927,12 @@ pub unsafe extern "C" fn XML_SetStartCdataSectionHandler(
         handle
             .parser
             .set_start_cdata_section_handler(Some(Box::new(move || {
-                handler_fn((*parser_ptr).user_data);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+                handler_fn(handler_arg);
             })));
     } else {
         handle.parser.set_start_cdata_section_handler(None);
@@ -926,7 +955,12 @@ pub unsafe extern "C" fn XML_SetEndCdataSectionHandler(
         handle
             .parser
             .set_end_cdata_section_handler(Some(Box::new(move || {
-                handler_fn((*parser_ptr).user_data);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+                handler_fn(handler_arg);
             })));
     } else {
         handle.parser.set_end_cdata_section_handler(None);
@@ -946,8 +980,13 @@ pub unsafe extern "C" fn XML_SetDefaultHandler(parser: XML_Parser, handler: XML_
         handle
             .parser
             .set_default_handler(Some(Box::new(move |data| {
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
                 handler_fn(
-                    (*parser_ptr).user_data,
+                    handler_arg,
                     data.as_ptr() as *const XML_Char,
                     data.len() as c_int,
                 );
@@ -972,8 +1011,13 @@ pub unsafe extern "C" fn XML_SetDefaultHandlerExpand(
         handle
             .parser
             .set_default_handler_expand(Some(Box::new(move |data| {
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
                 handler_fn(
-                    (*parser_ptr).user_data,
+                    handler_arg,
                     data.as_ptr() as *const XML_Char,
                     data.len() as c_int,
                 );
@@ -1032,8 +1076,14 @@ pub unsafe extern "C" fn XML_SetStartDoctypeDeclHandler(
                     .as_ref()
                     .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
 
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+
                 handler_fn(
-                    (*parser_ptr).user_data,
+                    handler_arg,
                     name_bytes.as_ptr() as *const XML_Char,
                     sysid_ptr,
                     pubid_ptr,
@@ -1062,7 +1112,12 @@ pub unsafe extern "C" fn XML_SetEndDoctypeDeclHandler(
         handle
             .parser
             .set_end_doctype_decl_handler(Some(Box::new(move || {
-                handler_fn((*parser_ptr).user_data);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+                handler_fn(handler_arg);
             })));
     } else {
         handle.parser.set_end_doctype_decl_handler(None);
@@ -1106,8 +1161,14 @@ pub unsafe extern "C" fn XML_SetXmlDeclHandler(parser: XML_Parser, handler: XML_
                     None => -1,
                 };
 
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+
                 handler_fn(
-                    (*parser_ptr).user_data,
+                    handler_arg,
                     version_ptr,
                     encoding_ptr,
                     standalone_int,
@@ -1496,8 +1557,13 @@ pub unsafe extern "C" fn XML_SetSkippedEntityHandler(
                 let h = &*parser_ptr;
                 let mut nb: Vec<u8> = name.as_bytes().to_vec();
                 nb.push(0);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    h.user_data
+                };
                 handler_fn(
-                    h.user_data,
+                    handler_arg,
                     nb.as_ptr() as *const XML_Char,
                     if is_param { 1 } else { 0 },
                 );
