@@ -327,3 +327,27 @@ fn final90_parse_buffer_usage() {
     let (cs, _) = c.parse(b"<r/>", true);
     assert_eq!(rs2, cs, "parse after parse_buffer");
 }
+
+// 22. ATTLIST default values with CR/LF — hits attribute_value_tok CR/LF paths
+#[test]
+fn final90_attlist_default_with_crlf() {
+    let cases: &[&[u8]] = &[
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA 'text\rmore'>]><r/>",
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA 'text\nmore'>]><r/>",
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA 'text\r\nmore'>]><r/>",
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA '\rstart'>]><r/>",
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA '\nstart'>]><r/>",
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA '\r\nstart'>]><r/>",
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA 'a\rb\nc\r\nd'>]><r/>",
+        // With entity ref in default value
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA '&amp;\rtext'>]><r/>",
+        // With char ref in default value
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA '&#65;\ntext'>]><r/>",
+    ];
+    for case in cases {
+        compare(
+            case,
+            &format!("attlist_crlf {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
