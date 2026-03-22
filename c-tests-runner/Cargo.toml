@@ -1,0 +1,11 @@
+[package]
+name = "c-tests-runner"
+version = "0.1.0"
+edition = "2021"
+description = "Run C expat test suite against the Rust parser via expat-ffi"
+
+[dependencies]
+expat-ffi = { path = "../expat-ffi" }
+
+[build-dependencies]
+cc = "1"

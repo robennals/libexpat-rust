@@ -8,6 +8,12 @@
 
 use crate::char_tables::ByteType;
 
+/// Check if a byte is a valid UTF-8 continuation byte (0x80-0xBF)
+#[inline]
+fn is_utf8_follow(b: u8) -> bool {
+    (b & 0xC0) == 0x80
+}
+
 /// Token type enumeration matching XML_TOK_* constants
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
@@ -153,6 +159,9 @@ pub fn scan_comment<E: Encoding>(
                         next_pos: pos,
                     });
                 }
+                if !is_utf8_follow(data[pos + 1]) {
+                    return Err(pos);
+                }
                 pos += 2;
             }
             ByteType::LEAD3 => {
@@ -162,6 +171,9 @@ pub fn scan_comment<E: Encoding>(
                         next_pos: pos,
                     });
                 }
+                if !is_utf8_follow(data[pos + 1]) || !is_utf8_follow(data[pos + 2]) {
+                    return Err(pos);
+                }
                 pos += 3;
             }
             ByteType::LEAD4 => {
@@ -170,6 +182,12 @@ pub fn scan_comment<E: Encoding>(
                         token: XmlTok::Partial,
                         next_pos: pos,
                     });
+                }
+                if !is_utf8_follow(data[pos + 1])
+                    || !is_utf8_follow(data[pos + 2])
+                    || !is_utf8_follow(data[pos + 3])
+                {
+                    return Err(pos);
                 }
                 pos += 4;
             }
@@ -631,6 +649,9 @@ pub fn cdata_section_tok<E: Encoding>(
                     next_pos: pos,
                 });
             }
+            if !is_utf8_follow(data[pos + 1]) {
+                return Err(pos);
+            }
             pos += 2;
         }
         ByteType::LEAD3 => {
@@ -640,6 +661,9 @@ pub fn cdata_section_tok<E: Encoding>(
                     next_pos: pos,
                 });
             }
+            if !is_utf8_follow(data[pos + 1]) || !is_utf8_follow(data[pos + 2]) {
+                return Err(pos);
+            }
             pos += 3;
         }
         ByteType::LEAD4 => {
@@ -648,6 +672,12 @@ pub fn cdata_section_tok<E: Encoding>(
                     token: XmlTok::PartialChar,
                     next_pos: pos,
                 });
+            }
+            if !is_utf8_follow(data[pos + 1])
+                || !is_utf8_follow(data[pos + 2])
+                || !is_utf8_follow(data[pos + 3])
+            {
+                return Err(pos);
             }
             pos += 4;
         }
@@ -800,13 +830,8 @@ pub fn scan_end_tag<E: Encoding>(
                 pos += 3;
             }
             ByteType::LEAD4 => {
-                if end - pos < 4 {
-                    return Ok(TokenResult {
-                        token: XmlTok::Partial,
-                        next_pos: pos,
-                    });
-                }
-                pos += 4;
+                // 4-byte UTF-8 = U+10000+, not valid as XML name character
+                return Err(pos);
             }
             ByteType::COLON => {
                 pos += enc.min_bytes_per_char();
@@ -1273,13 +1298,8 @@ pub fn scan_lt<E: Encoding>(
             pos += 3;
         }
         ByteType::LEAD4 => {
-            if end - pos < 4 {
-                return Ok(TokenResult {
-                    token: XmlTok::Partial,
-                    next_pos: pos,
-                });
-            }
-            pos += 4;
+            // 4-byte UTF-8 = U+10000+, not valid as XML name character
+            return Err(pos);
         }
         _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
             // Start tag - advance past first char and fall through to name loop
@@ -1375,13 +1395,8 @@ pub fn scan_lt<E: Encoding>(
                 pos += 3;
             }
             ByteType::LEAD4 => {
-                if end - pos < 4 {
-                    return Ok(TokenResult {
-                        token: XmlTok::Partial,
-                        next_pos: pos,
-                    });
-                }
-                pos += 4;
+                // 4-byte UTF-8 = U+10000+, not valid as XML name character
+                return Err(pos);
             }
             ByteType::COLON => {
                 pos += enc.min_bytes_per_char();
@@ -1481,6 +1496,9 @@ pub fn content_tok<E: Encoding>(
                     next_pos: pos,
                 });
             }
+            if !is_utf8_follow(data[pos + 1]) {
+                return Err(pos);
+            }
             pos += 2;
         }
         ByteType::LEAD3 => {
@@ -1490,6 +1508,9 @@ pub fn content_tok<E: Encoding>(
                     next_pos: pos,
                 });
             }
+            if !is_utf8_follow(data[pos + 1]) || !is_utf8_follow(data[pos + 2]) {
+                return Err(pos);
+            }
             pos += 3;
         }
         ByteType::LEAD4 => {
@@ -1498,6 +1519,12 @@ pub fn content_tok<E: Encoding>(
                     token: XmlTok::PartialChar,
                     next_pos: pos,
                 });
+            }
+            if !is_utf8_follow(data[pos + 1])
+                || !is_utf8_follow(data[pos + 2])
+                || !is_utf8_follow(data[pos + 3])
+            {
+                return Err(pos);
             }
             pos += 4;
         }

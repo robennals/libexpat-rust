@@ -224,6 +224,12 @@ pub struct AttrInfo {
 pub struct Parser {
     /// Parse buffer for incremental parsing
     buffer: Vec<u8>,
+    /// Buffer for XML_GetBuffer/XML_ParseBuffer two-phase API
+    get_buffer_data: Vec<u8>,
+    /// Data remaining when parser was suspended (for resume)
+    suspended_data: Vec<u8>,
+    /// Whether the suspended parse was final
+    suspended_is_final: bool,
     /// Current error code
     error_code: XmlError,
     /// Parsing state machine
@@ -278,6 +284,8 @@ pub struct Parser {
     has_param_entity_refs: bool,
     /// DTD standalone flag (from <?xml standalone='yes'?>)
     dtd_standalone: bool,
+    /// Whether to continue processing DTD declarations (false after undefined PE)
+    dtd_keep_processing: bool,
     /// Total original-encoding bytes consumed before the current parse() chunk.
     /// Incremented by data.len() at the start of each parse() call.
     original_bytes_before_chunk: u64,
@@ -285,6 +293,12 @@ pub struct Parser {
     original_chunk: Vec<u8>,
     /// Length of current chunk's BOM that was stripped (for offset correction)
     original_chunk_bom_len: usize,
+    /// Total byte offset in input (for tracking position across parse calls)
+    byte_offset: u64,
+    /// Number of bytes in the current event token (set during handler callbacks)
+    event_cur_byte_count: i32,
+    /// Raw bytes of the current event token (for XML_DefaultCurrent)
+    event_cur_data: Vec<u8>,
     /// Pending byte from incomplete UTF-16 code unit across chunk boundaries
     utf16_pending_byte: Option<u8>,
     /// Buffer for partial encoding detection (BOM bytes received across calls)
@@ -313,6 +327,10 @@ pub struct Parser {
     doctype_public_id: Option<String>,
     /// Whether the start_doctype_decl_handler has been called for the current DOCTYPE
     doctype_handler_called: bool,
+    /// Notation declaration tracking
+    current_notation_name: Option<String>,
+    current_notation_system_id: Option<String>,
+    current_notation_public_id: Option<String>,
     /// Number of explicitly specified attributes in the most recent start element
     n_specified_atts: i32,
     /// Index of the ID-type attribute in the most recent start element (-1 if none)
@@ -365,6 +383,9 @@ impl Parser {
     pub fn new(encoding: Option<&str>) -> Option<Parser> {
         Some(Parser {
             buffer: Vec::new(),
+            get_buffer_data: Vec::new(),
+            suspended_data: Vec::new(),
+            suspended_is_final: false,
             error_code: XmlError::None,
             parsing_state: ParsingState::Initialized,
             processor: Processor::PrologInit,
@@ -389,9 +410,13 @@ impl Parser {
             detected_encoding: None,
             has_param_entity_refs: false,
             dtd_standalone: false,
+            dtd_keep_processing: true,
             original_bytes_before_chunk: 0,
             original_chunk: Vec::new(),
             original_chunk_bom_len: 0,
+            byte_offset: 0,
+            event_cur_byte_count: 0,
+            event_cur_data: Vec::new(),
             utf16_pending_byte: None,
             encoding_detection_buf: Vec::new(),
             internal_entities: HashMap::new(),
@@ -407,6 +432,9 @@ impl Parser {
             doctype_system_id: None,
             doctype_public_id: None,
             doctype_handler_called: false,
+            current_notation_name: None,
+            current_notation_system_id: None,
+            current_notation_public_id: None,
             n_specified_atts: 0,
             id_att_index: -1,
             attlist_types: HashMap::new(),
@@ -447,6 +475,9 @@ impl Parser {
     pub fn new_ns(encoding: Option<&str>, separator: char) -> Option<Parser> {
         Some(Parser {
             buffer: Vec::new(),
+            get_buffer_data: Vec::new(),
+            suspended_data: Vec::new(),
+            suspended_is_final: false,
             error_code: XmlError::None,
             parsing_state: ParsingState::Initialized,
             processor: Processor::PrologInit,
@@ -471,9 +502,13 @@ impl Parser {
             detected_encoding: None,
             has_param_entity_refs: false,
             dtd_standalone: false,
+            dtd_keep_processing: true,
             original_bytes_before_chunk: 0,
             original_chunk: Vec::new(),
             original_chunk_bom_len: 0,
+            byte_offset: 0,
+            event_cur_byte_count: 0,
+            event_cur_data: Vec::new(),
             utf16_pending_byte: None,
             encoding_detection_buf: Vec::new(),
             internal_entities: HashMap::new(),
@@ -489,6 +524,9 @@ impl Parser {
             doctype_system_id: None,
             doctype_public_id: None,
             doctype_handler_called: false,
+            current_notation_name: None,
+            current_notation_system_id: None,
+            current_notation_public_id: None,
             n_specified_atts: 0,
             id_att_index: -1,
             attlist_types: HashMap::new(),
@@ -548,8 +586,42 @@ impl Parser {
         self.original_chunk.clear();
         self.original_chunk_bom_len = 0;
         self.encoding_detection_buf.clear();
+        self.byte_offset = 0;
+        self.event_cur_byte_count = 0;
+        self.has_param_entity_refs = false;
+        self.dtd_standalone = false;
+        self.dtd_keep_processing = true;
         self.internal_entities.clear();
+        self.external_entities.clear();
+        self.open_entities.clear();
+        self.get_buffer_data.clear();
+        self.suspended_data.clear();
+        self.suspended_is_final = false;
         self.prolog_state = XmlRoleState::new();
+        // Clear all handlers (matches C parserInit behavior)
+        self.start_element_handler = None;
+        self.end_element_handler = None;
+        self.character_data_handler = None;
+        self.processing_instruction_handler = None;
+        self.comment_handler = None;
+        self.start_cdata_section_handler = None;
+        self.end_cdata_section_handler = None;
+        self.default_handler = None;
+        self.default_handler_expand = None;
+        self.start_doctype_decl_handler = None;
+        self.end_doctype_decl_handler = None;
+        self.element_decl_handler = None;
+        self.attlist_decl_handler = None;
+        self.xml_decl_handler = None;
+        self.entity_decl_handler = None;
+        self.unparsed_entity_decl_handler = None;
+        self.notation_decl_handler = None;
+        self.start_namespace_decl_handler = None;
+        self.end_namespace_decl_handler = None;
+        self.not_standalone_handler = None;
+        self.external_entity_ref_handler = None;
+        self.skipped_entity_handler = None;
+        self.unknown_encoding_handler = None;
         true
     }
 
@@ -765,6 +837,39 @@ impl Parser {
                         return (error, pos);
                     }
 
+                    // Forward to default handler if no specific handler handled this token.
+                    // In C libexpat, reportDefault() is called for prolog tokens
+                    // ONLY when no specific handler consumed them.
+                    // Skip roles where a specific handler was invoked.
+                    if self.default_handler.is_some() {
+                        let handled_by_specific = match role {
+                            // PI/Comment: always skip — report_processing_instruction/
+                            // report_comment already handle default forwarding internally
+                            Role::Pi | Role::Comment => true,
+                            Role::XmlDecl => self.xml_decl_handler.is_some(),
+                            Role::DoctypeName | Role::DoctypeClose => {
+                                self.start_doctype_decl_handler.is_some()
+                                    || self.end_doctype_decl_handler.is_some()
+                            }
+                            Role::EntityValue
+                            | Role::EntityComplete
+                            | Role::GeneralEntityName
+                            | Role::EntitySystemId => self.entity_decl_handler.is_some(),
+                            Role::NotationName
+                            | Role::NotationSystemId
+                            | Role::NotationNoSystemId => self.notation_decl_handler.is_some(),
+                            Role::ElementName => self.element_decl_handler.is_some(),
+                            Role::DefaultAttributeValue
+                            | Role::FixedAttributeValue
+                            | Role::ImpliedAttributeValue
+                            | Role::RequiredAttributeValue => self.attlist_decl_handler.is_some(),
+                            _ => false,
+                        };
+                        if !handled_by_specific {
+                            self.report_default(&xmltok::Utf8Encoding, data, pos, next);
+                        }
+                    }
+
                     // If processor changed to Content, break out — remaining data
                     // will be processed by content_processor
                     if self.processor == Processor::Content {
@@ -940,6 +1045,10 @@ impl Parser {
                     let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                     self.doctype_public_id = Some(pubid);
                 }
+                if matches!(role, Role::NotationPublicId) {
+                    let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                    self.current_notation_public_id = Some(pubid);
+                }
                 XmlError::None
             }
             Role::DoctypeSystemId => {
@@ -979,6 +1088,15 @@ impl Parser {
                     }
                     self.doctype_handler_called = true;
                 }
+                // If the document references an external subset and is not standalone,
+                // invoke the not-standalone handler (matches C doProlog behavior)
+                if self.has_param_entity_refs && !self.dtd_standalone {
+                    if let Some(handler) = &mut self.not_standalone_handler {
+                        if !handler() {
+                            return XmlError::NotStandalone;
+                        }
+                    }
+                }
                 // End of DOCTYPE
                 if let Some(handler) = &mut self.end_doctype_decl_handler {
                     handler();
@@ -990,6 +1108,26 @@ impl Parser {
                 XmlError::None
             }
             Role::InstanceStart => {
+                // If foreign DTD is enabled, call external entity ref handler
+                // with empty context before processing the root element
+                if self.foreign_dtd {
+                    self.foreign_dtd = false; // Only trigger once
+                    if let Some(handler) = &mut self.external_entity_ref_handler {
+                        let base = self.base_uri.clone();
+                        let ok = handler("", base.as_deref(), None, None);
+                        if !ok {
+                            return XmlError::ExternalEntityHandling;
+                        }
+                    }
+                    // Check not-standalone after foreign DTD processing
+                    if !self.dtd_standalone {
+                        if let Some(handler) = &mut self.not_standalone_handler {
+                            if !handler() {
+                                return XmlError::NotStandalone;
+                            }
+                        }
+                    }
+                }
                 // Start of XML instance (root element)
                 self.processor = Processor::Content;
                 XmlError::None
@@ -1014,7 +1152,15 @@ impl Parser {
                     // tok_text has quotes already stripped by extract_token_text
                     match self.store_entity_value(tok_text) {
                         Ok(value) => {
-                            self.internal_entities.insert(name.clone(), value);
+                            self.internal_entities.insert(name.clone(), value.clone());
+                            // Call entity declaration handler (matches C)
+                            // Only if DTD processing hasn't been stopped by undefined PEs
+                            if self.dtd_keep_processing {
+                                if let Some(handler) = &mut self.entity_decl_handler {
+                                    let base = self.base_uri.clone();
+                                    handler(name, false, Some(&value), base.as_deref(), None);
+                                }
+                            }
                         }
                         Err(e) => {
                             self.event_pos = pos;
@@ -1030,6 +1176,15 @@ impl Parser {
                 if let (Some(ref name), Some(_)) =
                     (&self.current_entity_name, &self.current_entity_system_id)
                 {
+                    // Call entity declaration handler for external entity
+                    // Only if DTD processing hasn't been stopped by undefined PEs
+                    if self.dtd_keep_processing {
+                        if let Some(handler) = &mut self.entity_decl_handler {
+                            let base = self.base_uri.clone();
+                            let sys_id = self.current_entity_system_id.clone();
+                            handler(name, false, None, base.as_deref(), sys_id.as_deref());
+                        }
+                    }
                     self.external_entities.insert(
                         name.clone(),
                         (
@@ -1044,7 +1199,35 @@ impl Parser {
                 XmlError::None
             }
             Role::NotationName => {
-                // Notation declaration
+                // Notation declaration — save name
+                let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.current_notation_name = Some(name);
+                self.current_notation_system_id = None;
+                self.current_notation_public_id = None;
+                XmlError::None
+            }
+            Role::NotationSystemId => {
+                // Notation SYSTEM ID
+                let sysid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.current_notation_system_id = Some(sysid);
+                // Call notation handler
+                if let Some(handler) = &mut self.notation_decl_handler {
+                    let name = self.current_notation_name.clone().unwrap_or_default();
+                    let base = self.base_uri.clone();
+                    let sysid = self.current_notation_system_id.clone().unwrap_or_default();
+                    let pubid = self.current_notation_public_id.clone();
+                    handler(&name, base.as_deref(), &sysid, pubid.as_deref());
+                }
+                XmlError::None
+            }
+            Role::NotationNoSystemId => {
+                // Notation with PUBLIC but no SYSTEM — call handler
+                if let Some(handler) = &mut self.notation_decl_handler {
+                    let name = self.current_notation_name.clone().unwrap_or_default();
+                    let base = self.base_uri.clone();
+                    let pubid = self.current_notation_public_id.clone();
+                    handler(&name, base.as_deref(), "", pubid.as_deref());
+                }
                 XmlError::None
             }
             Role::AttlistElementName => {
@@ -1146,6 +1329,14 @@ impl Parser {
                     XmlTok::ParamEntityRef => XmlError::ParamEntityRef,
                     _ => XmlError::Syntax,
                 }
+            }
+            Role::ParamEntityRef | Role::InnerParamEntityRef => {
+                // Parameter entity reference in DTD
+                // If PE is undefined and we don't have param entity parsing,
+                // stop processing DTD declarations (matches C keepProcessing=false)
+                self.has_param_entity_refs = true;
+                self.dtd_keep_processing = false;
+                XmlError::None
             }
             _ => {
                 // Other roles — ignore for now
@@ -1419,6 +1610,15 @@ impl Parser {
                 }
             };
 
+            // Track byte count and raw data of current token for XML_GetCurrentByteCount
+            // and XML_DefaultCurrent
+            self.event_cur_byte_count = (next - pos) as i32;
+            self.event_cur_data = data[pos..next].to_vec();
+
+            // Record the current token position for lazy line/column computation.
+            // XML_GetCurrentLineNumber/ColumnNumber will scan parse_data on demand.
+            self.event_pos = pos;
+
             match tok {
                 XmlTok::TrailingCr => {
                     if have_more {
@@ -1583,6 +1783,32 @@ impl Parser {
                             }
                         }
                     }
+                    // Normalize tokenized attribute values per XML spec §3.3.3
+                    // NMTOKENS, IDREFS, ENTITIES types get whitespace collapsed
+                    if let Some(type_map) = self.attlist_types.get(tag_name) {
+                        for (attr_name, attr_val) in attrs.iter_mut() {
+                            if let Some(att_type) = type_map.get(attr_name.as_str()) {
+                                if matches!(
+                                    att_type.as_str(),
+                                    "NMTOKENS"
+                                        | "IDREFS"
+                                        | "ENTITIES"
+                                        | "NMTOKEN"
+                                        | "IDREF"
+                                        | "ENTITY"
+                                        | "ID"
+                                        | "NOTATION"
+                                ) {
+                                    // Collapse: strip leading/trailing whitespace, collapse internal runs
+                                    let collapsed: String = attr_val
+                                        .split_whitespace()
+                                        .collect::<Vec<&str>>()
+                                        .join(" ");
+                                    *attr_val = collapsed;
+                                }
+                            }
+                        }
+                    }
                     self.n_specified_atts = specified_count * 2; // C counts name+value pairs
                                                                  // Find ID attribute index
                     self.id_att_index = -1;
@@ -1603,6 +1829,8 @@ impl Parser {
                             .map(|(k, v)| (k.as_str(), v.as_str()))
                             .collect();
                         handler(tag_name, &attr_refs);
+                    } else if self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, next);
                     }
                 }
 
@@ -1652,9 +1880,17 @@ impl Parser {
                             .map(|(k, v)| (k.as_str(), v.as_str()))
                             .collect();
                         handler(&tag_name, &attr_refs);
+                    } else if self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, next);
                     }
+                    // For empty elements, set event_pos to end of tag for end-element callback
+                    // (matches C: eventPtr points to end of tag for EndElement of empty tags)
+                    self.event_pos = next;
                     if let Some(handler) = &mut self.end_element_handler {
                         handler(&tag_name);
+                    } else if self.start_element_handler.is_none() && self.default_handler.is_some()
+                    {
+                        // Only forward end of empty element if we didn't already forward the whole thing
                     }
 
                     // Check if root element closed (empty root element)
@@ -1696,6 +1932,8 @@ impl Parser {
 
                     if let Some(handler) = &mut self.end_element_handler {
                         handler(tag_name);
+                    } else if self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, next);
                     }
 
                     // Check if root element closed
@@ -1742,6 +1980,8 @@ impl Parser {
                 XmlTok::CdataSectOpen => {
                     if let Some(handler) = &mut self.start_cdata_section_handler {
                         handler();
+                    } else if self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, next);
                     }
                     // Scan CDATA content
                     let saved_processor = self.processor;
@@ -1769,6 +2009,8 @@ impl Parser {
                     }
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&data[pos..end]);
+                    } else if self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, end);
                     }
                     if start_tag_level == 0 && !self.seen_root {
                         return (XmlError::NoElements, end);
@@ -1838,10 +2080,17 @@ impl Parser {
                 Err(_) => return (XmlError::InvalidToken, pos),
             };
 
+            // Track event position and byte count for handler callbacks
+            self.event_pos = pos;
+            self.event_cur_byte_count = (next - pos) as i32;
+            self.event_cur_data = data[pos..next].to_vec();
+
             match tok {
                 XmlTok::CdataSectClose => {
                     if let Some(handler) = &mut self.end_cdata_section_handler {
                         handler();
+                    } else if self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, next);
                     }
                     // Signal that CDATA section has closed
                     self.processor = Processor::Content;
@@ -1936,12 +2185,59 @@ impl Parser {
             let raw_value = &data[attr.value_ptr..attr.value_end];
             // Always normalize: expand refs, normalize \t \n \r → space
             let value = Self::normalize_attribute_value(raw_value, &self.internal_entities);
+            if value.contains('\x00') {
+                return Err(XmlError::RecursiveEntityRef);
+            }
             if !seen.insert(name.clone()) {
                 return Err(XmlError::DuplicateAttribute);
             }
             result.push((name, value));
         }
         Ok(result)
+    }
+
+    /// Check if an entity value contains a cycle (recursive entity references)
+    fn entity_value_contains_cycle(
+        entity_name: &str,
+        value: &[u8],
+        entities: &std::collections::HashMap<String, String>,
+        visited: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        if !visited.insert(entity_name.to_string()) {
+            return true; // Cycle detected
+        }
+        // Scan value for entity references
+        let mut i = 0;
+        while i < value.len() {
+            if value[i] == b'&' {
+                if let Some(semi) = value[i + 1..].iter().position(|&b| b == b';') {
+                    let ref_name = &value[i + 1..i + 1 + semi];
+                    if !ref_name.starts_with(b"#") {
+                        if let Ok(name) = std::str::from_utf8(ref_name) {
+                            if !matches!(name, "amp" | "lt" | "gt" | "apos" | "quot") {
+                                if let Some(child_value) = entities.get(name) {
+                                    if Self::entity_value_contains_cycle(
+                                        name,
+                                        child_value.as_bytes(),
+                                        entities,
+                                        visited,
+                                    ) {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    i = i + 2 + semi;
+                } else {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        visited.remove(entity_name);
+        false
     }
 
     /// Normalize an attribute value per XML spec section 3.3.3:
@@ -1992,9 +2288,23 @@ impl Parser {
                                 "apos" => result.push(b'\''),
                                 "quot" => result.push(b'"'),
                                 _ => {
-                                    // Internal general entity
+                                    // Internal general entity — recursively expand
                                     if let Some(value) = entities.get(name) {
-                                        result.extend_from_slice(value.as_bytes());
+                                        // Check for recursive entity reference
+                                        if Self::entity_value_contains_cycle(
+                                            name,
+                                            value.as_bytes(),
+                                            entities,
+                                            &mut std::collections::HashSet::new(),
+                                        ) {
+                                            // Return error marker — caller should detect
+                                            return String::from("\x00RECURSIVE");
+                                        }
+                                        let expanded = Self::normalize_attribute_value(
+                                            value.as_bytes(),
+                                            entities,
+                                        );
+                                        result.extend_from_slice(expanded.as_bytes());
                                     } else {
                                         // Unknown entity — keep as-is
                                         result.extend_from_slice(&raw[i..i + 2 + semi_offset]);
@@ -2333,16 +2643,19 @@ impl Parser {
         self.parse_data = self.buffer.clone();
         self.position_pos = 0;
         self.event_pos = self.buffer.len(); // default: end of buffer
-                                            // Save base position before processor modifies it via advance_pos
-        let base_line = self.line_number;
-        let base_column = self.column_number;
 
         // Run the current processor
         self.run_processor();
 
-        // Update position tracking from processed data
+        // Reset event byte count and data (only valid during handler callbacks)
+        self.event_cur_byte_count = 0;
+        self.event_cur_data.clear();
+
+        // Update final position tracking from processed data.
+        // After this, line_number/column_number reflect the end of processed data.
         // On error: calculate position up to event_pos (error location)
         // On success: calculate position up to end of all processed data
+        // Note: position_pos may have been advanced by inline updates in do_content
         {
             let calc_end =
                 if self.error_code != XmlError::None && self.event_pos < self.parse_data.len() {
@@ -2350,16 +2663,35 @@ impl Parser {
                 } else {
                     self.parse_data.len()
                 };
-            let enc = xmltok::Utf8Encoding;
-            let pos =
-                xmltok_impl::update_position(&enc, &self.parse_data, self.position_pos, calc_end);
-            if pos.line_number > 0 {
-                self.line_number = base_line + pos.line_number as u64;
-                self.column_number = pos.column_number as u64;
-            } else {
-                self.line_number = base_line;
-                self.column_number = base_column + pos.column_number as u64;
+            if self.position_pos < calc_end {
+                let enc = xmltok::Utf8Encoding;
+                let pos = xmltok_impl::update_position(
+                    &enc,
+                    &self.parse_data,
+                    self.position_pos,
+                    calc_end,
+                );
+                if pos.line_number > 0 {
+                    self.line_number += pos.line_number as u64;
+                    self.column_number = pos.column_number as u64;
+                } else {
+                    self.column_number += pos.column_number as u64;
+                }
+                self.position_pos = calc_end;
             }
+            // Mark position as fully up-to-date so lazy getters just return stored values
+            self.event_pos = self.position_pos;
+        }
+
+        // Track total byte offset (for XML_GetCurrentByteIndex)
+        self.byte_offset += data.len() as u64;
+
+        // If the parser was suspended during a handler callback, save remaining data and return Suspended
+        if self.parsing_state == ParsingState::Suspended {
+            // Save the buffer for resume — the buffer still has unprocessed data
+            self.suspended_data = self.buffer.clone();
+            self.suspended_is_final = is_final;
+            return XmlStatus::Suspended;
         }
 
         // If an error occurred during processing, return error
@@ -2368,8 +2700,24 @@ impl Parser {
             return XmlStatus::Error;
         }
 
-        // If final, mark as finished
+        // If final, check for incomplete document and mark as finished
         if is_final {
+            // If we never saw a root element, that's an error
+            if !self.seen_root && self.error_code == XmlError::None {
+                self.error_code = XmlError::NoElements;
+                self.parsing_state = ParsingState::Finished;
+                return XmlStatus::Error;
+            }
+            // If root element was opened but not closed, that's unclosed token
+            if self.seen_root
+                && !self.root_closed
+                && self.tag_level > 0
+                && self.error_code == XmlError::None
+            {
+                self.error_code = XmlError::UnclosedToken;
+                self.parsing_state = ParsingState::Finished;
+                return XmlStatus::Error;
+            }
             self.parsing_state = ParsingState::Finished;
         }
 
@@ -2544,26 +2892,23 @@ impl Parser {
     ///
     /// Equivalent to XML_GetBuffer(parser, len) in C
     pub fn get_buffer(&mut self, len: usize) -> Option<&mut [u8]> {
-        // Ensure buffer has enough capacity
-        if self.buffer.capacity() < len {
-            self.buffer.reserve(len - self.buffer.capacity());
-        }
-        // Return a mutable slice for writing
-        Some(&mut self.buffer)
+        // Resize the get_buffer storage to the requested length
+        self.get_buffer_data.resize(len, 0);
+        Some(&mut self.get_buffer_data)
     }
 
-    /// Parse data from the internal buffer (previously obtained via get_buffer).
+    /// Parse data from the internal buffer (populated by get_buffer)
     ///
-    /// Equivalent to XML_ParseBuffer(parser, len, isFinal) in C.
-    /// The caller should have written `len` bytes into the buffer returned
-    /// by `get_buffer`, then call this to parse them.
+    /// Equivalent to XML_ParseBuffer(parser, len, isFinal) in C
     pub fn parse_buffer(&mut self, len: usize, is_final: bool) -> XmlStatus {
-        let data = if len <= self.buffer.len() {
-            self.buffer[..len].to_vec()
-        } else {
-            self.buffer.clone()
-        };
-        self.buffer.clear();
+        if len == 0 {
+            return self.parse(&[], is_final);
+        }
+        if len > self.get_buffer_data.len() {
+            self.error_code = XmlError::NoBuffer;
+            return XmlStatus::Error;
+        }
+        let data = self.get_buffer_data[..len].to_vec();
         self.parse(&data, is_final)
     }
 
@@ -2579,6 +2924,18 @@ impl Parser {
         if self.parsing_state == ParsingState::Finished {
             self.error_code = XmlError::Finished;
             return XmlStatus::Error;
+        }
+
+        if self.parsing_state == ParsingState::Suspended {
+            if resumable {
+                // Can't suspend an already-suspended parser
+                self.error_code = XmlError::Suspended;
+                return XmlStatus::Error;
+            } else {
+                // Aborting a suspended parser is allowed — just finish it
+                self.parsing_state = ParsingState::Finished;
+                return XmlStatus::Ok;
+            }
         }
 
         if resumable {
@@ -2600,6 +2957,17 @@ impl Parser {
             return XmlStatus::Error;
         }
         self.parsing_state = ParsingState::Parsing;
+
+        // Re-process the saved data from when we suspended
+        if !self.suspended_data.is_empty() || self.suspended_is_final {
+            let data = std::mem::take(&mut self.suspended_data);
+            let is_final = self.suspended_is_final;
+            self.suspended_is_final = false;
+            // Clear the buffer since parse() will re-add data
+            self.buffer.clear();
+            return self.parse(&data, is_final);
+        }
+
         XmlStatus::Ok
     }
 
@@ -2610,18 +2978,46 @@ impl Parser {
         self.error_code
     }
 
+    /// Set the error code directly (used by FFI layer for argument validation)
+    pub fn set_error(&mut self, error: XmlError) {
+        self.error_code = error;
+    }
+
     /// Get the current line number in the parse
     ///
     /// Equivalent to XML_GetCurrentLineNumber(parser) in C
     pub fn current_line_number(&self) -> u64 {
-        self.line_number
+        // Lazy computation: scan parse_data from position_pos to event_pos
+        // to get the current line number during handler callbacks
+        if self.event_pos > self.position_pos && !self.parse_data.is_empty() {
+            let scan_end = self.event_pos.min(self.parse_data.len());
+            let enc = xmltok::Utf8Encoding;
+            let p =
+                xmltok_impl::update_position(&enc, &self.parse_data, self.position_pos, scan_end);
+            self.line_number + p.line_number as u64
+        } else {
+            self.line_number
+        }
     }
 
     /// Get the current column number in the parse
     ///
     /// Equivalent to XML_GetCurrentColumnNumber(parser) in C
     pub fn current_column_number(&self) -> u64 {
-        self.column_number
+        // Lazy computation: scan parse_data from position_pos to event_pos
+        if self.event_pos > self.position_pos && !self.parse_data.is_empty() {
+            let scan_end = self.event_pos.min(self.parse_data.len());
+            let enc = xmltok::Utf8Encoding;
+            let p =
+                xmltok_impl::update_position(&enc, &self.parse_data, self.position_pos, scan_end);
+            if p.line_number > 0 {
+                p.column_number as u64
+            } else {
+                self.column_number + p.column_number as u64
+            }
+        } else {
+            self.column_number
+        }
     }
 
     /// Get the current byte index in the original input stream.
@@ -2634,6 +3030,9 @@ impl Parser {
     /// encoding's byte offset. This is O(chunk_size) but only for
     /// non-UTF-8 input and only when this function is called.
     pub fn current_byte_index(&self) -> i64 {
+        if self.parsing_state == ParsingState::Initialized {
+            return -1; // Before any parsing, C returns -1
+        }
         if self.parse_data.is_empty() || self.event_pos > self.parse_data.len() {
             return -1;
         }
@@ -2719,7 +3118,16 @@ impl Parser {
     ///
     /// Equivalent to XML_GetCurrentByteCount(parser) in C
     pub fn current_byte_count(&self) -> i32 {
-        0 // Placeholder
+        self.event_cur_byte_count
+    }
+
+    /// Get the input context buffer and the offset of the current event within it.
+    /// Returns (buffer_slice, event_offset). Empty slice if no context available.
+    pub fn get_input_context(&self) -> (&[u8], usize) {
+        if self.parse_data.is_empty() {
+            return (&[], 0);
+        }
+        (&self.parse_data, self.event_pos.min(self.parse_data.len()))
     }
 
     /// Get parsing status information
@@ -2736,6 +3144,9 @@ impl Parser {
     ///
     /// Equivalent to XML_SetHashSalt(parser, salt) in C
     pub fn set_hash_salt(&mut self, salt: u64) -> bool {
+        if self.parsing_state != ParsingState::Initialized {
+            return false;
+        }
         self.hash_salt = salt;
         true
     }
@@ -2759,6 +3170,10 @@ impl Parser {
     ///
     /// Equivalent to XML_SetParamEntityParsing(parser, parsing) in C
     pub fn set_param_entity_parsing(&mut self, parsing: ParamEntityParsing) -> bool {
+        // Can't change once parsing has started
+        if self.parsing_state != ParsingState::Initialized {
+            return false;
+        }
         self.param_entity_parsing = parsing;
         true
     }
@@ -2985,7 +3400,18 @@ impl Parser {
 
     /// Make the parser call handlers with the parser as first argument
     pub fn use_parser_as_handler_arg(&mut self) {
-        // no-op
+        // Handled in C ABI shim layer
+    }
+
+    /// Default current markup to the default handler
+    pub fn default_current(&mut self) {
+        // Forward the current event's raw bytes to the default handler
+        if !self.event_cur_data.is_empty() {
+            let data = self.event_cur_data.clone();
+            if let Some(handler) = &mut self.default_handler {
+                handler(&data);
+            }
+        }
     }
 
     /// Set the billion laughs attack protection maximum amplification
@@ -3013,6 +3439,16 @@ impl Parser {
     ) -> bool {
         self.billion_laughs_activation_threshold = threshold;
         true
+    }
+
+    /// Set the alloc tracker maximum amplification
+    pub fn set_alloc_tracker_maximum_amplification(&mut self, _factor: f32) -> bool {
+        true // Accept but don't enforce
+    }
+
+    /// Set the alloc tracker activation threshold
+    pub fn set_alloc_tracker_activation_threshold(&mut self, _threshold: u64) -> bool {
+        true // Accept but don't enforce
     }
 
     /// Set reparse deferral enabled

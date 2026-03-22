@@ -62,6 +62,38 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  c-tests:
+    name: C Test Suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build C test runner
+        run: cargo build -p c-tests-runner
+      - name: Run C test suite against Rust parser
+        run: |
+          PASS=$(./target/debug/c-tests-runner 2>/dev/null | grep -c "^PASS:" || true)
+          FAIL=$(./target/debug/c-tests-runner 2>/dev/null | grep -c "^FAIL " || true)
+          TOTAL=$((PASS + FAIL))
+          echo "C test results: $PASS pass, $FAIL fail out of $TOTAL"
+          echo ""
+          echo "=== Failing tests ==="
+          ./target/debug/c-tests-runner 2>/dev/null | grep "^FAIL " || true
+          echo ""
+          # Fail CI if pass count drops below current baseline
+          BASELINE=170
+          if [ "$PASS" -lt "$BASELINE" ]; then
+            echo "REGRESSION: $PASS passes is below baseline of $BASELINE"
+            exit 1
+          fi
+          echo "OK: $PASS passes meets or exceeds baseline of $BASELINE"
+
   msrv:
     name: MSRV (1.70)
     runs-on: ubuntu-latest
