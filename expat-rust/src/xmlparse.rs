@@ -514,14 +514,25 @@ impl Parser {
 
         // If processor switched to Content, process remaining data as content
         if self.processor == Processor::Content && next_pos < data.len() {
-            self.buffer = data[next_pos..].to_vec();
+            let remaining = &data[next_pos..];
+            // If Latin-1 encoding was detected, transcode remaining bytes
+            self.buffer = if is_latin1_encoding(self.detected_encoding.as_deref()) {
+                transcode_latin1_to_utf8(remaining)
+            } else {
+                remaining.to_vec()
+            };
             self.content_processor();
             return;
         }
 
         // Keep unprocessed data for next parse call
         if next_pos < data.len() {
-            self.buffer = data[next_pos..].to_vec();
+            let remaining = &data[next_pos..];
+            self.buffer = if is_latin1_encoding(self.detected_encoding.as_deref()) {
+                transcode_latin1_to_utf8(remaining)
+            } else {
+                remaining.to_vec()
+            };
         } else if self.is_final && self.processor != Processor::Content && !self.seen_root {
             // All prolog data consumed, is_final, but no root element seen
             self.error_code = XmlError::NoElements;
@@ -729,6 +740,10 @@ impl Parser {
                                     self.event_pos = pos;
                                     return XmlError::IncorrectEncoding;
                                 }
+                            } else if upper == "ISO-8859-1" || upper == "LATIN1" || upper.starts_with("ISO-8859-") || upper == "WINDOWS-1252" {
+                                // Latin-1 or similar single-byte encoding
+                                // Set detected_encoding so parse() transcodes subsequent data
+                                self.detected_encoding = Some(upper.clone());
                             } else if !is_known_encoding(&upper) {
                                 // Unknown encoding — try handler
                                 let mut handled = false;
@@ -1678,30 +1693,34 @@ impl Parser {
                 }
             }
         } else if self.detected_encoding.is_some() {
-            // Subsequent chunk with UTF-16 encoding — transcode
-            // Prepend any pending byte from previous chunk
-            let is_be = self.detected_encoding.as_deref() == Some("UTF-16BE");
-            let input = if let Some(pending) = self.utf16_pending_byte.take() {
-                let mut combined = vec![pending];
-                combined.extend_from_slice(data);
-                combined
-            } else {
-                data.to_vec()
-            };
-            // Save odd trailing byte for next chunk
-            let (to_transcode, leftover) = if input.len() % 2 != 0 {
-                (&input[..input.len() - 1], Some(input[input.len() - 1]))
-            } else {
-                (&input[..], None)
-            };
-            self.utf16_pending_byte = leftover;
-            match self.transcode_utf16(to_transcode, is_be) {
-                Ok(transcoded) => self.buffer.extend_from_slice(&transcoded),
-                Err(err) => {
-                    self.error_code = err;
-                    self.parsing_state = ParsingState::Finished;
-                    return XmlStatus::Error;
+            let enc_name = self.detected_encoding.as_deref().unwrap_or("");
+            if enc_name == "UTF-16BE" || enc_name == "UTF-16LE" {
+                // Subsequent chunk with UTF-16 encoding — transcode
+                let is_be = enc_name == "UTF-16BE";
+                let input = if let Some(pending) = self.utf16_pending_byte.take() {
+                    let mut combined = vec![pending];
+                    combined.extend_from_slice(data);
+                    combined
+                } else {
+                    data.to_vec()
+                };
+                let (to_transcode, leftover) = if input.len() % 2 != 0 {
+                    (&input[..input.len() - 1], Some(input[input.len() - 1]))
+                } else {
+                    (&input[..], None)
+                };
+                self.utf16_pending_byte = leftover;
+                match self.transcode_utf16(to_transcode, is_be) {
+                    Ok(transcoded) => self.buffer.extend_from_slice(&transcoded),
+                    Err(err) => {
+                        self.error_code = err;
+                        self.parsing_state = ParsingState::Finished;
+                        return XmlStatus::Error;
+                    }
                 }
+            } else {
+                // Latin-1 or similar single-byte encoding — transcode to UTF-8
+                self.buffer.extend(transcode_latin1_to_utf8(data));
             }
         } else {
             self.buffer.extend_from_slice(data);
@@ -2449,6 +2468,32 @@ impl Drop for Parser {
 }
 
 /// Check if an encoding name is known/supported
+/// Check if an encoding is a Latin-1 variant that needs transcoding
+fn is_latin1_encoding(name: Option<&str>) -> bool {
+    match name {
+        Some(n) => matches!(n, "ISO-8859-1" | "LATIN1" | "WINDOWS-1252"
+            | "ISO-8859-2" | "ISO-8859-3" | "ISO-8859-4" | "ISO-8859-5"
+            | "ISO-8859-6" | "ISO-8859-7" | "ISO-8859-8" | "ISO-8859-9"),
+        None => false,
+    }
+}
+
+/// Transcode Latin-1 (ISO-8859-1) bytes to UTF-8
+fn transcode_latin1_to_utf8(data: &[u8]) -> Vec<u8> {
+    let mut result = Vec::with_capacity(data.len() * 2);
+    for &b in data {
+        if b < 0x80 {
+            result.push(b);
+        } else {
+            // Latin-1 byte value = Unicode code point
+            // Encode as 2-byte UTF-8: 110xxxxx 10xxxxxx
+            result.push(0xC0 | (b >> 6));
+            result.push(0x80 | (b & 0x3F));
+        }
+    }
+    result
+}
+
 fn is_known_encoding(name: &str) -> bool {
     matches!(
         name,
