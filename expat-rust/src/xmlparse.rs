@@ -347,6 +347,13 @@ pub struct Parser {
     billion_laughs_activation_threshold: u64,
     /// XML role state machine for prolog parsing
     prolog_state: XmlRoleState,
+    /// Namespace bindings stack: each entry is (element_level, prefix, uri, previous_uri)
+    /// When an element closes, we pop all bindings at that level
+    ns_bindings: Vec<(u32, String, String, Option<String>)>,
+    /// Current namespace mapping: prefix → URI. "" key = default namespace.
+    ns_map: HashMap<String, String>,
+    /// Whether to return namespace triplets (uri + sep + localname + sep + prefix)
+    ns_triplets: bool,
 
     // Handler fields
     start_element_handler: Option<StartElementHandler>,
@@ -443,6 +450,9 @@ impl Parser {
             billion_laughs_max_amplification: 0.0,
             billion_laughs_activation_threshold: 0,
             prolog_state: XmlRoleState::new(),
+            ns_bindings: Vec::new(),
+            ns_map: HashMap::new(),
+            ns_triplets: false,
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -473,6 +483,10 @@ impl Parser {
     ///
     /// Equivalent to XML_ParserCreateNS(encoding, sep) in C
     pub fn new_ns(encoding: Option<&str>, separator: char) -> Option<Parser> {
+        let mut ns_map = HashMap::new();
+        // "xml" prefix is implicitly bound to the XML namespace
+        ns_map.insert("xml".to_string(), "http://www.w3.org/XML/1998/namespace".to_string());
+
         Some(Parser {
             buffer: Vec::new(),
             get_buffer_data: Vec::new(),
@@ -535,6 +549,9 @@ impl Parser {
             billion_laughs_max_amplification: 0.0,
             billion_laughs_activation_threshold: 0,
             prolog_state: XmlRoleState::new(),
+            ns_bindings: Vec::new(),
+            ns_map,
+            ns_triplets: false,
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -598,6 +615,14 @@ impl Parser {
         self.suspended_data.clear();
         self.suspended_is_final = false;
         self.prolog_state = XmlRoleState::new();
+        // Reset namespace state
+        self.ns_bindings.clear();
+        self.ns_map.clear();
+        if self.ns_enabled {
+            // Re-initialize implicit "xml" binding for namespace-enabled parsers
+            self.ns_map.insert("xml".to_string(), "http://www.w3.org/XML/1998/namespace".to_string());
+        }
+        self.ns_triplets = false;
         // Clear all handlers (matches C parserInit behavior)
         self.start_element_handler = None;
         self.end_element_handler = None;
@@ -1872,7 +1897,7 @@ impl Parser {
                     self.seen_root = true;
 
                     // Extract attributes (with duplicate detection)
-                    let attrs = if tok == XmlTok::StartTagWithAtts {
+                    let mut attrs = if tok == XmlTok::StartTagWithAtts {
                         match self.extract_attrs(enc, data, pos, next) {
                             Ok(a) => a,
                             Err(e) => return (e, pos),
@@ -1881,8 +1906,17 @@ impl Parser {
                         Vec::new()
                     };
 
+                    // Process namespaces if enabled
+                    let effective_tag_name = if self.ns_enabled {
+                        match self.process_namespaces(tag_name, &mut attrs) {
+                            Ok(name) => name,
+                            Err(e) => return (e, pos),
+                        }
+                    } else {
+                        tag_name.to_string()
+                    };
+
                     // Apply ATTLIST defaults and track attribute info
-                    let mut attrs = attrs;
                     let specified_count = attrs.len() as i32;
                     if let Some(defaults) = self.attlist_defaults.get(tag_name) {
                         for (dname, dval) in defaults {
@@ -1929,14 +1963,14 @@ impl Parser {
                         }
                     }
 
-                    self.tag_stack.push(tag_name.to_string());
+                    self.tag_stack.push(effective_tag_name.clone());
 
                     if let Some(handler) = &mut self.start_element_handler {
                         let attr_refs: Vec<(&str, &str)> = attrs
                             .iter()
                             .map(|(k, v)| (k.as_str(), v.as_str()))
                             .collect();
-                        handler(tag_name, &attr_refs);
+                        handler(&effective_tag_name, &attr_refs);
                     } else if self.default_handler.is_some() {
                         self.report_default(enc, data, pos, next);
                     }
@@ -1960,6 +1994,22 @@ impl Parser {
                         }
                     } else {
                         Vec::new()
+                    };
+
+                    // For namespace processing, we need to temporarily bump tag_level
+                    // to track namespace bindings, but we'll restore it after processing
+                    if self.ns_enabled {
+                        self.tag_level += 1;
+                    }
+
+                    // Process namespaces if enabled
+                    let effective_tag_name = if self.ns_enabled {
+                        match self.process_namespaces(&tag_name, &mut attrs) {
+                            Ok(name) => name,
+                            Err(e) => return (e, pos),
+                        }
+                    } else {
+                        tag_name.clone()
                     };
 
                     // Apply ATTLIST defaults and track attribute info
@@ -1987,7 +2037,7 @@ impl Parser {
                             .iter()
                             .map(|(k, v)| (k.as_str(), v.as_str()))
                             .collect();
-                        handler(&tag_name, &attr_refs);
+                        handler(&effective_tag_name, &attr_refs);
                     } else if self.default_handler.is_some() {
                         self.report_default(enc, data, pos, next);
                     }
@@ -1995,10 +2045,16 @@ impl Parser {
                     // (matches C: eventPtr points to end of tag for EndElement of empty tags)
                     self.event_pos = next;
                     if let Some(handler) = &mut self.end_element_handler {
-                        handler(&tag_name);
+                        handler(&effective_tag_name);
                     } else if self.start_element_handler.is_none() && self.default_handler.is_some()
                     {
                         // Only forward end of empty element if we didn't already forward the whole thing
+                    }
+
+                    // Pop namespace bindings for empty element
+                    if self.ns_enabled {
+                        self.pop_ns_bindings();
+                        self.tag_level = self.tag_level.saturating_sub(1);
                     }
 
                     // Check if root element closed (empty root element)
@@ -2023,10 +2079,20 @@ impl Parser {
                         std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len])
                             .unwrap_or("");
 
+                    // Expand tag name if namespace processing is enabled
+                    let effective_tag_name = if self.ns_enabled {
+                        match self.expand_name(tag_name, true) {
+                            Ok(name) => name,
+                            Err(e) => return (e, raw_name_start),
+                        }
+                    } else {
+                        tag_name.to_string()
+                    };
+
                     // Check tag mismatch — set event position to rawName
                     // (matches C: *eventPP = rawName)
                     if let Some(expected) = self.tag_stack.last() {
-                        if expected != tag_name {
+                        if expected != &effective_tag_name {
                             self.event_pos = raw_name_start;
                             return (XmlError::TagMismatch, raw_name_start);
                         }
@@ -2039,9 +2105,14 @@ impl Parser {
                     self.tag_level = self.tag_level.saturating_sub(1);
 
                     if let Some(handler) = &mut self.end_element_handler {
-                        handler(tag_name);
+                        handler(&effective_tag_name);
                     } else if self.default_handler.is_some() {
                         self.report_default(enc, data, pos, next);
+                    }
+
+                    // Pop namespace bindings
+                    if self.ns_enabled {
+                        self.pop_ns_bindings();
                     }
 
                     // Check if root element closed
@@ -2625,6 +2696,150 @@ impl Parser {
             pos = next;
         }
         Ok(())
+    }
+
+    /// Process namespace declarations and expand element/attribute names
+    fn process_namespaces(
+        &mut self,
+        tag_name: &str,
+        attrs: &mut Vec<(String, String)>,
+    ) -> Result<String, XmlError> {
+        let tag_level = self.tag_level;
+
+        // Phase 1: Extract xmlns declarations and create bindings
+        let mut new_bindings = Vec::new();
+        let mut i = 0;
+        while i < attrs.len() {
+            let (ref name, ref value) = attrs[i];
+            if name == "xmlns" {
+                // Default namespace declaration
+                new_bindings.push(("".to_string(), value.clone()));
+                attrs.remove(i);
+                continue;
+            } else if let Some(prefix) = name.strip_prefix("xmlns:") {
+                // Prefixed namespace declaration
+                // Empty URI is only valid for default namespace
+                if value.is_empty() && prefix != "" {
+                    return Err(XmlError::UndeclaringPrefix);
+                }
+                // Check reserved prefixes
+                if prefix == "xmlns" {
+                    return Err(XmlError::ReservedPrefixXmlns);
+                }
+                if prefix == "xml" {
+                    // "xml" prefix must be bound to the XML namespace
+                    if value != "http://www.w3.org/XML/1998/namespace" {
+                        return Err(XmlError::ReservedPrefixXml);
+                    }
+                }
+                // Check reserved namespace URIs
+                if value == "http://www.w3.org/XML/1998/namespace" && prefix != "xml" {
+                    return Err(XmlError::ReservedNamespaceUri);
+                }
+                if value == "http://www.w3.org/2000/xmlns/" {
+                    return Err(XmlError::ReservedNamespaceUri);
+                }
+                new_bindings.push((prefix.to_string(), value.clone()));
+                attrs.remove(i);
+                continue;
+            }
+            i += 1;
+        }
+
+        // Apply bindings and call handler
+        for (prefix, uri) in &new_bindings {
+            let prev = self.ns_map.get(prefix).cloned();
+            self.ns_bindings.push((tag_level, prefix.clone(), uri.clone(), prev.clone()));
+            if uri.is_empty() && prefix.is_empty() {
+                // Empty default namespace removes the binding
+                self.ns_map.remove(prefix);
+            } else {
+                self.ns_map.insert(prefix.clone(), uri.clone());
+            }
+            if let Some(handler) = &mut self.start_namespace_decl_handler {
+                let p = if prefix.is_empty() { None } else { Some(prefix.as_str()) };
+                handler(p, uri.as_str());
+            }
+        }
+
+        // Phase 2: Expand element name
+        let expanded_name = self.expand_name(tag_name, true)?;
+
+        // Phase 3: Expand attribute names and check for duplicates
+        let mut expanded_attrs = Vec::new();
+        for (attr_name, attr_val) in attrs.iter_mut() {
+            let expanded_attr_name = if attr_name.contains(':') {
+                self.expand_name(attr_name, false)?
+            } else {
+                attr_name.clone()
+            };
+
+            // Check for duplicate expanded attribute names
+            if expanded_attrs.iter().any(|(n, _): &(String, String)| n == &expanded_attr_name) {
+                return Err(XmlError::DuplicateAttribute);
+            }
+            expanded_attrs.push((expanded_attr_name, attr_val.clone()));
+        }
+        *attrs = expanded_attrs;
+
+        Ok(expanded_name)
+    }
+
+    /// Expand a name by looking up its prefix in the namespace map
+    fn expand_name(&self, name: &str, is_element: bool) -> Result<String, XmlError> {
+        if let Some(colon_pos) = name.find(':') {
+            let prefix = &name[..colon_pos];
+            let local = &name[colon_pos + 1..];
+            // Check for double colon or empty prefix/local
+            if local.contains(':') || local.is_empty() || prefix.is_empty() {
+                return Err(XmlError::InvalidToken);
+            }
+            if let Some(uri) = self.ns_map.get(prefix) {
+                if self.ns_triplets {
+                    Ok(format!("{}{}{}{}{}", uri, self.ns_separator, local, self.ns_separator, prefix))
+                } else {
+                    Ok(format!("{}{}{}", uri, self.ns_separator, local))
+                }
+            } else {
+                Err(XmlError::UnboundPrefix)
+            }
+        } else if is_element {
+            // Elements use default namespace if available
+            if let Some(uri) = self.ns_map.get("") {
+                if !uri.is_empty() {
+                    Ok(format!("{}{}{}", uri, self.ns_separator, name))
+                } else {
+                    Ok(name.to_string())
+                }
+            } else {
+                Ok(name.to_string())
+            }
+        } else {
+            // Attributes without prefix don't get default namespace
+            Ok(name.to_string())
+        }
+    }
+
+    /// Pop namespace bindings for a closing element
+    fn pop_ns_bindings(&mut self) {
+        let level = self.tag_level + 1; // tag_level was already decremented
+        while let Some(last) = self.ns_bindings.last() {
+            if last.0 != level {
+                break;
+            }
+            let (_, prefix, _uri, prev) = self.ns_bindings.pop().unwrap();
+            // Restore previous binding
+            if let Some(prev_uri) = prev {
+                self.ns_map.insert(prefix.clone(), prev_uri);
+            } else {
+                self.ns_map.remove(&prefix);
+            }
+            // Call end namespace handler (in reverse order)
+            if let Some(handler) = &mut self.end_namespace_decl_handler {
+                let p = if prefix.is_empty() { None } else { Some(prefix.as_str()) };
+                handler(p);
+            }
+        }
     }
 
     fn report_default<E: Encoding>(&mut self, _enc: &E, data: &[u8], start: usize, end: usize) {
@@ -3523,9 +3738,11 @@ impl Parser {
     }
 
     /// Set whether to return namespace triplets
-    pub fn set_return_ns_triplet(&mut self, _return_triplet: bool) {
+    pub fn set_return_ns_triplet(&mut self, return_triplet: bool) {
         // Namespace triplet support requires full namespace processing.
-        // For now, accept the call without error.
+        // When enabled, element and attribute names are expanded to:
+        // uri + separator + localname + separator + prefix
+        self.ns_triplets = return_triplet;
     }
 
     /// Make the parser call handlers with the parser as first argument
