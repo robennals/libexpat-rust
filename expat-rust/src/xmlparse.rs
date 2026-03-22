@@ -1858,6 +1858,11 @@ impl Parser {
 
             match tok {
                 XmlTok::TrailingCr => {
+                    // Check for async entity — mismatched tag levels
+                    if start_tag_level > 0 && self.tag_level != start_tag_level {
+                        return (XmlError::AsyncEntity, pos);
+                    }
+
                     if have_more {
                         return (XmlError::None, pos);
                     }
@@ -2176,6 +2181,11 @@ impl Parser {
                 }
 
                 XmlTok::EndTag => {
+                    // Check for async entity — tag level mismatch indicates an entity was opened but not closed
+                    if self.tag_level == start_tag_level {
+                        return (XmlError::AsyncEntity, pos);
+                    }
+
                     let minbpc = enc.min_bytes_per_char();
                     let raw_name_start = pos + minbpc * 2; // skip '</'
                     let raw_name_len = xmltok_impl::name_length(enc, data, raw_name_start);
@@ -2295,12 +2305,12 @@ impl Parser {
                     } else if self.default_handler.is_some() {
                         self.report_default(enc, data, pos, end);
                     }
-                    if start_tag_level == 0 && !self.seen_root {
+                    if start_tag_level == 0 {
                         return (XmlError::NoElements, end);
                     }
-                    if self.tag_level > 0 {
-                        // Document ended with open elements — unclosed token
-                        return (XmlError::NoElements, end);
+                    // Check for async entity — mismatched tag levels
+                    if self.tag_level != start_tag_level {
+                        return (XmlError::AsyncEntity, end);
                     }
                     return (XmlError::None, end);
                 }
