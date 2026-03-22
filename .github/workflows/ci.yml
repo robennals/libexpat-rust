@@ -87,7 +87,7 @@ jobs:
           ./target/debug/c-tests-runner 2>/dev/null | grep "^FAIL " || true
           echo ""
           # Fail CI if pass count drops below current baseline
-          BASELINE=186
+          BASELINE=191
           if [ "$PASS" -lt "$BASELINE" ]; then
             echo "REGRESSION: $PASS passes is below baseline of $BASELINE"
             exit 1
