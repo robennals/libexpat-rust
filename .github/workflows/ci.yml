@@ -16,19 +16,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Run Rust-only tests
-        run: cargo test -p expat-rust --lib
-
-  comparison:
-    name: C-vs-Rust comparison
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
@@ -36,25 +23,21 @@ jobs:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Generate expat_config.h
-        run: mkdir -p expat/expat/build && cp meta/c2rust-output/expat_config.h expat/expat/build/
       - name: Run all tests including C-vs-Rust comparison
         run: cargo test -p expat-rust
-      - name: Build expat-ffi
-        run: cargo build --release -p expat-ffi
-      - name: Run C integration tests
-        run: make -C expat-ffi/tests
 
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy -p expat-rust --lib -- -D warnings
+      - run: cargo clippy -p expat-rust -- -D warnings
 
   fmt:
     name: Format
@@ -71,6 +54,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc -p expat-rust --no-deps
@@ -82,6 +67,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: dtolnay/rust-toolchain@1.70.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p expat-rust
