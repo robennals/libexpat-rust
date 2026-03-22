@@ -1671,3 +1671,132 @@ fn cov90_content_cdata_resume() {
         assert_eq!(rs, cs, "cdata split @{split}");
     }
 }
+
+// ============================================================================
+// 57. Single-quoted attribute values with whitespace — byte-by-byte incremental
+//     Targets attribute_value_tok' (single-quote) CR/LF/S paths
+// ============================================================================
+
+#[test]
+fn cov90_single_quoted_attr_ws_incremental() {
+    // These need to be split at the exact whitespace positions within single-quoted values
+    let cases: &[&[u8]] = &[
+        b"<r a='\r'/>",
+        b"<r a='\n'/>",
+        b"<r a='\r\n'/>",
+        b"<r a=' '/>",
+        b"<r a='\t'/>",
+        b"<r a='x\ry'/>",
+        b"<r a='x\ny'/>",
+        b"<r a='x\r\ny'/>",
+        b"<r a='x y'/>",
+        b"<r a='x\ty'/>",
+        b"<r a='\r\n\r\n'/>",
+        b"<r a='a\rb\nc\r\nd e\tf'/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("sq_ws {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 58. Prolog BOM at buffer boundary
+// ============================================================================
+
+#[test]
+fn cov90_prolog_bom_boundary() {
+    // BOM is entire first chunk, data comes in second
+    let mut r = Parser::new(None).unwrap();
+    r.parse(b"\xEF\xBB\xBF", false);
+    let rs = r.parse(b"<r/>", true) as u32;
+    let c = CParser::new(None).unwrap();
+    c.parse(b"\xEF\xBB\xBF", false);
+    let (cs, _) = c.parse(b"<r/>", true);
+    assert_eq!(rs, cs, "BOM only first chunk");
+}
+
+// ============================================================================
+// 59. Content with trailing CR (incremental — TrailingCr paths)
+// ============================================================================
+
+#[test]
+fn cov90_trailing_cr_incremental() {
+    let cases: &[&[u8]] = &[b"<r>text\r</r>", b"<r>\r</r>", b"<r>a\r\n</r>"];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("trailing_cr {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 60. Prolog processor — empty final
+// ============================================================================
+
+#[test]
+fn cov90_prolog_empty_final() {
+    // Empty document — final with no data
+    let mut r = Parser::new(None).unwrap();
+    let rs = r.parse(b"", true) as u32;
+    let re = r.error_code() as u32;
+    let c = CParser::new(None).unwrap();
+    let (cs, ce) = c.parse(b"", true);
+    assert_eq!(rs, cs, "empty final status");
+    assert_eq!(re, ce, "empty final error");
+
+    // Whitespace only
+    let mut r = Parser::new(None).unwrap();
+    let rs = r.parse(b"   \n\t  ", true) as u32;
+    let re = r.error_code() as u32;
+    let c = CParser::new(None).unwrap();
+    let (cs, ce) = c.parse(b"   \n\t  ", true);
+    assert_eq!(rs, cs, "ws-only final status");
+    assert_eq!(re, ce, "ws-only final error");
+}
+
+// ============================================================================
+// 61. CDATA section unclosed at final
+// ============================================================================
+
+#[test]
+fn cov90_cdata_unclosed_final() {
+    let cases: &[&[u8]] = &[
+        b"<r><![CDATA[data",
+        b"<r><![CDATA[",
+        b"<r><![CDATA[data]",
+        b"<r><![CDATA[data]]",
+    ];
+    for case in cases {
+        compare(
+            case,
+            &format!("cdata_unclosed {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 62. LEAD2 partial paths in all scan functions
+// ============================================================================
+
+#[test]
+fn cov90_lead2_all_positions() {
+    // 2-byte char (é = C3 A9) in all positions — incremental to hit LEAD2 partials
+    let docs: &[&[u8]] = &[
+        "<é/>".as_bytes(),
+        "<é>x</é>".as_bytes(),
+        "<r>é</r>".as_bytes(),
+        "<r><![CDATA[é]]></r>".as_bytes(),
+        "<r><!-- é --></r>".as_bytes(),
+        "<r><?pi é?></r>".as_bytes(),
+        "<!DOCTYPE r [<!ENTITY e 'é'>]><r>&e;</r>".as_bytes(),
+        "<r a=\"é\"/>".as_bytes(),
+        "<r a='é'/>".as_bytes(),
+    ];
+    for doc in docs {
+        compare_incr(doc, &format!("lead2@{}", doc.len()));
+    }
+}
