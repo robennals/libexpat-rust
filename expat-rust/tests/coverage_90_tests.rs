@@ -1552,3 +1552,122 @@ fn cov90_parse_edge_cases() {
         assert_eq!(r.error_code() as u32, 0, "small chunk {chunk_size}");
     }
 }
+
+// ============================================================================
+// 50. 3-byte and 4-byte UTF-8 in EVERY scanner position — incremental
+// ============================================================================
+
+#[test]
+fn cov90_3byte_in_all_positions() {
+    let docs: &[&[u8]] = &[
+        "<日/>".as_bytes(),
+        "<日>x</日>".as_bytes(),
+        "<r>日</r>".as_bytes(),
+        "<r><![CDATA[日]]></r>".as_bytes(),
+        "<r><!-- 日 --></r>".as_bytes(),
+        "<r><?pi 日?></r>".as_bytes(),
+        "<!DOCTYPE r [<!ENTITY e '日'>]><r>&e;</r>".as_bytes(),
+        "<r a=\"日\"/>".as_bytes(),
+        "<r a='日'/>".as_bytes(),
+    ];
+    for doc in docs {
+        compare_incr(doc, &format!("3byte@{}", doc.len()));
+    }
+}
+
+#[test]
+fn cov90_4byte_in_all_positions() {
+    let docs: &[&[u8]] = &[
+        "<r>😀</r>".as_bytes(),
+        "<r><![CDATA[😀]]></r>".as_bytes(),
+        "<r><!-- 😀 --></r>".as_bytes(),
+        "<r><?pi 😀?></r>".as_bytes(),
+        "<!DOCTYPE r [<!ENTITY e '😀'>]><r>&e;</r>".as_bytes(),
+        "<r a=\"😀\"/>".as_bytes(),
+        "<r a='😀'/>".as_bytes(),
+    ];
+    for doc in docs {
+        compare_incr(doc, &format!("4byte@{}", doc.len()));
+    }
+}
+
+// ============================================================================
+// 51-56. More targeted tests
+// ============================================================================
+
+#[test]
+fn cov90_scan_percent_in_entity() {
+    let cases: &[&[u8]] = &[
+        b"<!DOCTYPE r [<!ENTITY % pe 'text'><!ELEMENT r EMPTY>]><r/>",
+        b"<!DOCTYPE r [<!ENTITY % pe SYSTEM 'file.dtd'><!ELEMENT r EMPTY>]><r/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("percent {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+#[test]
+fn cov90_deep_attr_values() {
+    let cases: &[&[u8]] = &[
+        b"<r a=\"a\tb\nc\rd\r\ne\"/>",
+        b"<r a=\"&amp;&lt;&#65;&#x42;&gt;&apos;&quot;\"/>",
+        b"<r a='a\tb\nc\rd\r\ne'/>",
+        b"<r a='&amp;&lt;&#65;&#x42;&gt;&apos;&quot;'/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("deep_attr {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+#[test]
+fn cov90_entity_value_all_tokens() {
+    let cases: &[&[u8]] = &[
+        b"<!DOCTYPE r [<!ENTITY e 'a&#65;b'>]><r>&e;</r>",
+        b"<!DOCTYPE r [<!ENTITY e 'a&#x41;b'>]><r>&e;</r>",
+        b"<!DOCTYPE r [<!ENTITY e 'a&amp;b'>]><r>&e;</r>",
+        b"<!DOCTYPE r [<!ENTITY e 'a\rb'>]><r>&e;</r>",
+        b"<!DOCTYPE r [<!ENTITY e 'a\nb'>]><r>&e;</r>",
+        b"<!DOCTYPE r [<!ENTITY e 'a\r\nb'>]><r>&e;</r>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("ev {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+#[test]
+fn cov90_prolog_partial_tokens() {
+    let cases: &[&[u8]] = &[
+        b"<!DOCTYPE root SYSTEM 'sys.dtd' [<!ENTITY e 'v'>]><root/>",
+        b"<!DOCTYPE root PUBLIC '-//T//EN' 'sys.dtd' [<!ATTLIST root a CDATA #IMPLIED>]><root/>",
+        b"<!-- c1 --><?pi d?><!-- c2 --><root/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("prolog_partial {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+#[test]
+fn cov90_content_cdata_resume() {
+    let xml = b"<r><![CDATA[data]]>more<![CDATA[data2]]></r>";
+    for split in (5..xml.len() - 5).step_by(5) {
+        let mut r = Parser::new(None).unwrap();
+        r.parse(&xml[..split], false);
+        let rs = r.parse(&xml[split..], true) as u32;
+        let c = CParser::new(None).unwrap();
+        c.parse(&xml[..split], false);
+        let (cs, _) = c.parse(&xml[split..], true);
+        assert_eq!(rs, cs, "cdata split @{split}");
+    }
+}
