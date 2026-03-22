@@ -313,6 +313,20 @@ pub struct Parser {
     doctype_public_id: Option<String>,
     /// Whether the start_doctype_decl_handler has been called for the current DOCTYPE
     doctype_handler_called: bool,
+    /// Number of explicitly specified attributes in the most recent start element
+    n_specified_atts: i32,
+    /// Index of the ID-type attribute in the most recent start element (-1 if none)
+    id_att_index: i32,
+    /// ATTLIST type info: element → attr_name → type string (e.g. "ID", "IDREF", "CDATA")
+    attlist_types: HashMap<String, HashMap<String, String>>,
+    /// Current ATTLIST attribute type being processed
+    current_attlist_type: Option<String>,
+    /// Whether to call external entity handler even without DOCTYPE
+    foreign_dtd: bool,
+    /// Billion laughs: maximum amplification factor (0.0 = use default)
+    billion_laughs_max_amplification: f32,
+    /// Billion laughs: activation threshold in bytes (0 = use default)
+    billion_laughs_activation_threshold: u64,
     /// XML role state machine for prolog parsing
     prolog_state: XmlRoleState,
 
@@ -393,6 +407,13 @@ impl Parser {
             doctype_system_id: None,
             doctype_public_id: None,
             doctype_handler_called: false,
+            n_specified_atts: 0,
+            id_att_index: -1,
+            attlist_types: HashMap::new(),
+            current_attlist_type: None,
+            foreign_dtd: false,
+            billion_laughs_max_amplification: 0.0,
+            billion_laughs_activation_threshold: 0,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
@@ -468,6 +489,13 @@ impl Parser {
             doctype_system_id: None,
             doctype_public_id: None,
             doctype_handler_called: false,
+            n_specified_atts: 0,
+            id_att_index: -1,
+            attlist_types: HashMap::new(),
+            current_attlist_type: None,
+            foreign_dtd: false,
+            billion_laughs_max_amplification: 0.0,
+            billion_laughs_activation_threshold: 0,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
@@ -1030,6 +1058,46 @@ impl Parser {
                 // Attribute in ATTLIST — remember attribute name
                 let attr_name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.current_attlist_attr = Some(attr_name);
+                self.current_attlist_type = None;
+                XmlError::None
+            }
+            Role::AttributeTypeCdata
+            | Role::AttributeTypeId
+            | Role::AttributeTypeIdref
+            | Role::AttributeTypeIdrefs
+            | Role::AttributeTypeEntity
+            | Role::AttributeTypeEntities
+            | Role::AttributeTypeNmtoken
+            | Role::AttributeTypeNmtokens => {
+                // Store the attribute type for ID tracking
+                let type_name = match role {
+                    Role::AttributeTypeCdata => "CDATA",
+                    Role::AttributeTypeId => "ID",
+                    Role::AttributeTypeIdref => "IDREF",
+                    Role::AttributeTypeIdrefs => "IDREFS",
+                    Role::AttributeTypeEntity => "ENTITY",
+                    Role::AttributeTypeEntities => "ENTITIES",
+                    Role::AttributeTypeNmtoken => "NMTOKEN",
+                    Role::AttributeTypeNmtokens => "NMTOKENS",
+                    _ => "CDATA",
+                };
+                self.current_attlist_type = Some(type_name.to_string());
+                if let (Some(ref elem), Some(ref attr)) =
+                    (&self.current_attlist_element, &self.current_attlist_attr)
+                {
+                    self.attlist_types
+                        .entry(elem.clone())
+                        .or_default()
+                        .insert(attr.clone(), type_name.to_string());
+                }
+                XmlError::None
+            }
+            Role::AttributeEnumValue | Role::AttributeNotationValue => {
+                // Enumeration values — no special handling needed
+                XmlError::None
+            }
+            Role::ImpliedAttributeValue | Role::RequiredAttributeValue => {
+                // #IMPLIED or #REQUIRED — no default value to store
                 XmlError::None
             }
             Role::ElementName => {
@@ -1505,12 +1573,24 @@ impl Parser {
                         Vec::new()
                     };
 
-                    // Apply ATTLIST defaults for missing attributes
+                    // Apply ATTLIST defaults and track attribute info
                     let mut attrs = attrs;
+                    let specified_count = attrs.len() as i32;
                     if let Some(defaults) = self.attlist_defaults.get(tag_name) {
                         for (dname, dval) in defaults {
                             if !attrs.iter().any(|(n, _)| n == dname) {
                                 attrs.push((dname.clone(), dval.clone()));
+                            }
+                        }
+                    }
+                    self.n_specified_atts = specified_count * 2; // C counts name+value pairs
+                                                                 // Find ID attribute index
+                    self.id_att_index = -1;
+                    if let Some(types) = self.attlist_types.get(tag_name) {
+                        for (i, (name, _)) in attrs.iter().enumerate() {
+                            if types.get(name.as_str()).map(|t| t == "ID").unwrap_or(false) {
+                                self.id_att_index = (i * 2) as i32;
+                                break;
                             }
                         }
                     }
@@ -1546,11 +1626,22 @@ impl Parser {
                         Vec::new()
                     };
 
-                    // Apply ATTLIST defaults for missing attributes
+                    // Apply ATTLIST defaults and track attribute info
+                    let specified_count = attrs.len() as i32;
                     if let Some(defaults) = self.attlist_defaults.get(&tag_name) {
                         for (dname, dval) in defaults {
                             if !attrs.iter().any(|(n, _)| n == dname) {
                                 attrs.push((dname.clone(), dval.clone()));
+                            }
+                        }
+                    }
+                    self.n_specified_atts = specified_count * 2;
+                    self.id_att_index = -1;
+                    if let Some(types) = self.attlist_types.get(&tag_name) {
+                        for (i, (name, _)) in attrs.iter().enumerate() {
+                            if types.get(name.as_str()).map(|t| t == "ID").unwrap_or(false) {
+                                self.id_att_index = (i * 2) as i32;
+                                break;
                             }
                         }
                     }
@@ -2461,11 +2552,19 @@ impl Parser {
         Some(&mut self.buffer)
     }
 
-    /// Parse data from the internal buffer
+    /// Parse data from the internal buffer (previously obtained via get_buffer).
     ///
-    /// Equivalent to XML_ParseBuffer(parser, len, isFinal) in C
-    pub fn parse_buffer(&mut self, _len: usize, _is_final: bool) -> XmlStatus {
-        XmlStatus::Error // not implemented
+    /// Equivalent to XML_ParseBuffer(parser, len, isFinal) in C.
+    /// The caller should have written `len` bytes into the buffer returned
+    /// by `get_buffer`, then call this to parse them.
+    pub fn parse_buffer(&mut self, len: usize, is_final: bool) -> XmlStatus {
+        let data = if len <= self.buffer.len() {
+            self.buffer[..len].to_vec()
+        } else {
+            self.buffer.clone()
+        };
+        self.buffer.clear();
+        self.parse(&data, is_final)
     }
 
     /// Stop parsing (suspendable or abort)
@@ -2666,9 +2765,15 @@ impl Parser {
 
     /// Use foreign DTD
     ///
-    /// Equivalent to XML_UseForeignDTD(parser, useDTD) in C
-    pub fn use_foreign_dtd(&mut self, _use_dtd: bool) -> XmlError {
-        XmlError::None // no-op
+    /// Equivalent to XML_UseForeignDTD(parser, useDTD) in C.
+    /// When enabled, the parser will call the external entity ref handler
+    /// at the start of parsing, even if the document has no DOCTYPE.
+    pub fn use_foreign_dtd(&mut self, use_dtd: bool) -> XmlError {
+        if self.parsing_state != ParsingState::Initialized {
+            return XmlError::CantChangeFeatureOnceParsing;
+        }
+        self.foreign_dtd = use_dtd;
+        XmlError::None
     }
 
     /// Set the encoding (before parsing starts)
@@ -2684,16 +2789,19 @@ impl Parser {
 
     /// Get the number of specified attributes in the last element
     ///
-    /// Equivalent to XML_GetSpecifiedAttributeCount(parser) in C
+    /// Equivalent to XML_GetSpecifiedAttributeCount(parser) in C.
+    /// Returns the number of attributes that were explicitly specified
+    /// (not defaulted from ATTLIST declarations).
     pub fn specified_attribute_count(&self) -> i32 {
-        0 // stub
+        self.n_specified_atts
     }
 
     /// Get the index of the ID attribute in the last element
     ///
-    /// Equivalent to XML_GetIdAttributeIndex(parser) in C
+    /// Equivalent to XML_GetIdAttributeIndex(parser) in C.
+    /// Returns -1 if there is no ID-type attribute.
     pub fn id_attribute_index(&self) -> i32 {
-        0 // stub
+        self.id_att_index
     }
 
     /// Register a callback invoked at the start of each element.
@@ -2881,19 +2989,30 @@ impl Parser {
     }
 
     /// Set the billion laughs attack protection maximum amplification
+    ///
+    /// Equivalent to XML_SetBillionLaughsAttackProtectionMaximumAmplification in C.
+    /// Controls the maximum ratio of output text to input text during entity expansion.
     pub fn set_billion_laughs_attack_protection_maximum_amplification(
         &mut self,
-        _factor: f32,
+        factor: f32,
     ) -> bool {
-        true // no-op
+        if factor < 1.0 && factor != 0.0 {
+            return false;
+        }
+        self.billion_laughs_max_amplification = factor;
+        true
     }
 
     /// Set the billion laughs attack protection activation threshold
+    ///
+    /// Equivalent to XML_SetBillionLaughsAttackProtectionActivationThreshold in C.
+    /// Entity expansion limits only activate after this many bytes of input.
     pub fn set_billion_laughs_attack_protection_activation_threshold(
         &mut self,
-        _threshold: u64,
+        threshold: u64,
     ) -> bool {
-        true // no-op
+        self.billion_laughs_activation_threshold = threshold;
+        true
     }
 
     /// Set reparse deferral enabled

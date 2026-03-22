@@ -2407,8 +2407,8 @@ fn cov90_api_coverage() {
     p.set_reparse_deferral_enabled(true);
     // use_foreign_dtd
     let _ = p.use_foreign_dtd(false);
-    // parse_buffer (stub)
-    let _ = p.parse_buffer(0, true);
+    // parse_buffer — use non-final so we can still parse after
+    let _ = p.parse_buffer(0, false);
 
     let s = p.parse(b"<r/>", true);
     assert_eq!(s, XmlStatus::Ok);
@@ -2605,4 +2605,96 @@ fn cov90_default_handler_expand() {
     let c = CParser::new(None).unwrap();
     let (cs, _) = c.parse(xml, true);
     assert_eq!(rs, cs, "default expand");
+}
+
+// ============================================================================
+// 95. C comparison: specified_attribute_count and id_attribute_index
+// ============================================================================
+
+#[test]
+fn cov90_specified_attr_count_comparison() {
+    // Parse with ATTLIST that has default attrs, compare counts
+    let xml = b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED b CDATA 'def'>]><r a='x'/>";
+
+    // Rust
+    let mut r = Parser::new(None).unwrap();
+    let r_count = std::cell::Cell::new(0i32);
+    let rc = &r_count as *const std::cell::Cell<i32>;
+    r.set_start_element_handler(Some(Box::new(move |_, _| unsafe {
+        // Can't access parser from handler in Rust API — count tracked internally
+    })));
+    r.parse(xml, true);
+    let r_specified = r.specified_attribute_count();
+
+    // C
+    let c = CParser::new(None).unwrap();
+    unsafe {
+        expat_sys::XML_SetElementHandler(c.raw_parser(), None, None);
+    }
+    c.parse(xml, true);
+    let c_specified = unsafe { expat_sys::XML_GetSpecifiedAttributeCount(c.raw_parser()) };
+
+    assert_eq!(r_specified, c_specified as i32, "specified attr count");
+}
+
+#[test]
+fn cov90_id_attribute_index_comparison() {
+    let xml = b"<!DOCTYPE r [<!ATTLIST r myid ID #IMPLIED>]><r myid='id1'/>";
+
+    let mut r = Parser::new(None).unwrap();
+    r.set_start_element_handler(Some(Box::new(|_, _| {})));
+    r.parse(xml, true);
+    let r_idx = r.id_attribute_index();
+
+    let c = CParser::new(None).unwrap();
+    unsafe {
+        expat_sys::XML_SetElementHandler(c.raw_parser(), None, None);
+    }
+    c.parse(xml, true);
+    let c_idx = unsafe { expat_sys::XML_GetIdAttributeIndex(c.raw_parser()) };
+
+    assert_eq!(r_idx, c_idx as i32, "id attr index");
+}
+
+// ============================================================================
+// 96. C comparison: billion laughs config
+// ============================================================================
+
+#[test]
+fn cov90_billion_laughs_comparison() {
+    let mut r = Parser::new(None).unwrap();
+    let r_ok = r.set_billion_laughs_attack_protection_maximum_amplification(100.0);
+    let r_ok2 = r.set_billion_laughs_attack_protection_activation_threshold(8192);
+
+    let c = CParser::new(None).unwrap();
+    let c_ok = unsafe {
+        expat_sys::XML_SetBillionLaughsAttackProtectionMaximumAmplification(c.raw_parser(), 100.0)
+    };
+    let c_ok2 = unsafe {
+        expat_sys::XML_SetBillionLaughsAttackProtectionActivationThreshold(c.raw_parser(), 8192)
+    };
+
+    assert_eq!(r_ok as i32, c_ok as i32, "billion laughs max amp");
+    assert_eq!(r_ok2 as i32, c_ok2 as i32, "billion laughs threshold");
+
+    // Both should still parse correctly
+    let rs = r.parse(b"<r/>", true) as u32;
+    let (cs, _) = c.parse(b"<r/>", true);
+    assert_eq!(rs, cs, "billion laughs parse status");
+}
+
+// ============================================================================
+// 97. C comparison: use_foreign_dtd
+// ============================================================================
+
+#[test]
+fn cov90_use_foreign_dtd_comparison() {
+    // Before parsing — should succeed
+    let mut r = Parser::new(None).unwrap();
+    let r_err = r.use_foreign_dtd(true) as u32;
+
+    let c = CParser::new(None).unwrap();
+    let c_err = unsafe { expat_sys::XML_UseForeignDTD(c.raw_parser(), 1) };
+
+    assert_eq!(r_err, c_err, "use_foreign_dtd before parse");
 }
