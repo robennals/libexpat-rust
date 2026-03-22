@@ -4,10 +4,29 @@
 
 | Metric | Value | Target | Notes |
 |--------|-------|--------|-------|
-| **C test suite pass rate** | 196/290 (67.6%) | 285/290 (98.3%) | 5 tests N/A |
-| **Rust comparison tests** | 1020/1212 (84%) | 100% | Ignored tests need implementation |
-| **Rust line coverage** | 80.3% (3249/4046) | 90%+ | Down from ~90% due to new uncovered code |
+| **C test suite (against Rust)** | 196/290 (67.6%) | 285/290 (98.3%) | 5 tests N/A |
+| **C line coverage (native C tests)** | **92.3%** xmlparse.c, 86.2% xmltok_impl.c, 84.6% xmlrole.c | — | Baseline: what C covers of itself |
+| **Rust comparison tests** | 1020/1212 (84%) | 100% | SAX event comparison for simple XML |
+| **Rust line coverage** | 80.3% (3249/4046) | 90%+ | Down from ~90% due to new untested code |
 | **Rust code size vs C** | 7903 / 12341 lines (64%) | ~100% | Missing ~4400 lines of C functionality |
+
+## How to Measure Coverage
+
+```bash
+# Rust line coverage
+cargo install cargo-tarpaulin
+cargo tarpaulin -p expat-rust --skip-clean --timeout 300
+
+# C line coverage (native C tests against C libexpat)
+cd expat/expat && mkdir -p build-cov
+cd build-cov && cmake .. -DCMAKE_C_FLAGS="--coverage" -DCMAKE_BUILD_TYPE=Debug
+make -j4 && ./tests/runtests -q
+cd CMakeFiles/runtests.dir/lib && gcov xmlparse.c.gcda xmltok.c.gcda xmlrole.c.gcda
+
+# C tests against Rust (pass/fail count)
+cargo build -p c-tests-runner
+./target/debug/c-tests-runner 2>/dev/null | grep -c "^PASS:"
+```
 
 ## Why These Numbers Don't Tell the Whole Story
 
