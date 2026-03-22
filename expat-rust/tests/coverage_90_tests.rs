@@ -2387,3 +2387,150 @@ fn cov90_exact_multibyte_splits() {
     let xml3 = "<!DOCTYPE r [<!ENTITY e 'é日'>]><r>&e;</r>".as_bytes();
     compare_incr(xml3, "multibyte entity splits");
 }
+
+// ============================================================================
+// 86. Parser API coverage — exercise remaining uncovered API methods
+// ============================================================================
+
+#[test]
+fn cov90_api_coverage() {
+    let mut p = Parser::new(None).unwrap();
+    // current_byte_count
+    let _ = p.current_byte_count();
+    // specified_attribute_count
+    let _ = p.specified_attribute_count();
+    // id_attribute_index
+    let _ = p.id_attribute_index();
+    // use_parser_as_handler_arg
+    p.use_parser_as_handler_arg();
+    // set_reparse_deferral_enabled
+    p.set_reparse_deferral_enabled(true);
+    // use_foreign_dtd
+    let _ = p.use_foreign_dtd(false);
+    // parse_buffer (stub)
+    let _ = p.parse_buffer(0, true);
+
+    let s = p.parse(b"<r/>", true);
+    assert_eq!(s, XmlStatus::Ok);
+}
+
+// ============================================================================
+// 87. Various error types incremental (cover error dispatch paths)
+// ============================================================================
+
+#[test]
+fn cov90_error_types_incremental() {
+    let cases: &[&[u8]] = &[
+        // Tag mismatch
+        b"<a></b>",
+        // Unclosed at various depths
+        b"<a><b><c>",
+        // Double attribute
+        b"<r a='1' a='2'/>",
+        // Invalid character
+        b"<r>\x00</r>",
+        // ]]> in content
+        b"<r>x]]>y</r>",
+        // PI after root
+        b"<r/><?pi d?>extra",
+        // Multiple roots
+        b"<r/><s/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("err_type {:?}", std::str::from_utf8(case).unwrap_or("?")),
+        );
+    }
+}
+
+// ============================================================================
+// 88. Content processor edge — empty document final
+// ============================================================================
+
+#[test]
+fn cov90_content_processor_empty_final() {
+    // Parse some content non-final, then empty final
+    let mut r = Parser::new(None).unwrap();
+    r.parse(b"<r>text</r>", false);
+    let rs = r.parse(b"", true) as u32;
+    let c = CParser::new(None).unwrap();
+    c.parse(b"<r>text</r>", false);
+    let (cs, _) = c.parse(b"", true);
+    assert_eq!(rs, cs, "content empty final");
+}
+
+// ============================================================================
+// 89. Prolog with CR/LF whitespace patterns
+// ============================================================================
+
+#[test]
+fn cov90_prolog_cr_lf() {
+    let cases: &[&[u8]] = &[
+        b"\r<r/>",
+        b"\n<r/>",
+        b"\r\n<r/>",
+        b"\r\n\r\n<r/>",
+        b" \r \n \r\n <r/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("prolog_crlf {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 90. Complete document with all feature combinations
+// ============================================================================
+
+#[test]
+fn cov90_complete_kitchen_sink() {
+    let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!DOCTYPE root [
+  <!ELEMENT root (#PCDATA|a|b|c)*>
+  <!ELEMENT a ((x|y),z)>
+  <!ELEMENT b EMPTY>
+  <!ELEMENT c ANY>
+  <!ELEMENT x EMPTY>
+  <!ELEMENT y EMPTY>
+  <!ELEMENT z EMPTY>
+  <!ATTLIST root
+    id ID #REQUIRED
+    class CDATA "default"
+    type (t1|t2|t3) "t1"
+    ver NMTOKEN #IMPLIED
+    fixed CDATA #FIXED "v1"
+  >
+  <!ATTLIST a href CDATA #IMPLIED>
+  <!ENTITY int1 "internal &#169;">
+  <!ENTITY int2 "&amp; entity">
+  <!ENTITY ext SYSTEM "ext.xml">
+  <!ENTITY ext2 PUBLIC "-//Test//EN" "ext2.xml">
+  <!ENTITY % pe "EMPTY">
+  <!NOTATION jpeg SYSTEM "viewer.exe">
+  <!NOTATION png PUBLIC "-//Test//PNG//EN" "viewer">
+  <!ENTITY logo SYSTEM "logo.jpg" NDATA jpeg>
+  <!-- DTD comment -->
+  <?dtd-pi instruction data here?>
+]>
+<!-- prolog comment -->
+<?app-info version=2?>
+<root id="r1" class="main" type="t2" ver="v1">
+  Hello &amp; World! &int1; &int2;
+  &#65;&#x42;&#169;
+  <a href="http://example.com"><x/><z/></a>
+  <b/>
+  <c>anything <b/> goes</c>
+  <!-- content comment -->
+  <?processor instruction?>
+  <![CDATA[raw <data> & "stuff" with ] and ]] brackets]]>
+  more text
+</root>
+<!-- epilog -->
+<?post done?>
+"#;
+    compare_events(xml, "kitchen sink");
+    compare_incr(xml, "kitchen sink incremental");
+}
