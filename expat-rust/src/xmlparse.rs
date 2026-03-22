@@ -282,8 +282,16 @@ pub struct Parser {
     byte_offset: u64,
     /// Pending byte from incomplete UTF-16 code unit across chunk boundaries
     utf16_pending_byte: Option<u8>,
+    /// Buffer for partial encoding detection (BOM bytes received across calls)
+    encoding_detection_buf: Vec<u8>,
     /// Internal entity definitions — maps entity name to replacement text
     internal_entities: HashMap<String, String>,
+    /// ATTLIST default attributes: element_name → [(attr_name, default_value)]
+    attlist_defaults: HashMap<String, Vec<(String, String)>>,
+    /// Current ATTLIST element name being processed
+    current_attlist_element: Option<String>,
+    /// Current ATTLIST attribute name being processed
+    current_attlist_attr: Option<String>,
     /// External entity definitions — maps entity name to (system_id, public_id)
     external_entities: HashMap<String, (Option<String>, Option<String>)>,
     /// Set of currently open (being expanded) entities for recursion detection
@@ -364,7 +372,11 @@ impl Parser {
             dtd_standalone: false,
             byte_offset: 0,
             utf16_pending_byte: None,
+            encoding_detection_buf: Vec::new(),
             internal_entities: HashMap::new(),
+            attlist_defaults: HashMap::new(),
+            current_attlist_element: None,
+            current_attlist_attr: None,
             external_entities: HashMap::new(),
             open_entities: std::collections::HashSet::new(),
             current_entity_name: None,
@@ -433,7 +445,11 @@ impl Parser {
             dtd_standalone: false,
             byte_offset: 0,
             utf16_pending_byte: None,
+            encoding_detection_buf: Vec::new(),
             internal_entities: HashMap::new(),
+            attlist_defaults: HashMap::new(),
+            current_attlist_element: None,
+            current_attlist_attr: None,
             external_entities: HashMap::new(),
             open_entities: std::collections::HashSet::new(),
             current_entity_name: None,
@@ -492,6 +508,7 @@ impl Parser {
         self.seen_xml_decl = false;
         self.detected_encoding = None;
         self.byte_offset = 0;
+        self.encoding_detection_buf.clear();
         self.internal_entities.clear();
         self.prolog_state = XmlRoleState::new();
         true
@@ -992,11 +1009,16 @@ impl Parser {
                 XmlError::None
             }
             Role::AttlistElementName => {
-                // Start of ATTLIST declaration
+                // Start of ATTLIST declaration — remember element name
+                let elem_name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.current_attlist_element = Some(elem_name);
+                self.current_attlist_attr = None;
                 XmlError::None
             }
             Role::AttributeName => {
-                // Attribute in ATTLIST
+                // Attribute in ATTLIST — remember attribute name
+                let attr_name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.current_attlist_attr = Some(attr_name);
                 XmlError::None
             }
             Role::ElementName => {
@@ -1018,11 +1040,26 @@ impl Parser {
                 XmlError::None
             }
             Role::DefaultAttributeValue | Role::FixedAttributeValue => {
-                // ATTLIST default value — validate it
+                // ATTLIST default value — validate and store
                 // tok_text has quotes stripped
                 if let Err(e) = self.validate_attribute_value(tok_text) {
                     self.event_pos = pos;
                     return e;
+                }
+                // Store the default value for this element/attribute
+                if let (Some(ref elem), Some(ref attr)) =
+                    (&self.current_attlist_element, &self.current_attlist_attr)
+                {
+                    let value =
+                        Self::normalize_attribute_value(tok_text, &self.internal_entities);
+                    let defaults = self
+                        .attlist_defaults
+                        .entry(elem.clone())
+                        .or_insert_with(Vec::new);
+                    // Only store if not already defined (first declaration wins)
+                    if !defaults.iter().any(|(n, _)| n == attr) {
+                        defaults.push((attr.clone(), value));
+                    }
                 }
                 XmlError::None
             }
@@ -1461,6 +1498,16 @@ impl Parser {
                         Vec::new()
                     };
 
+                    // Apply ATTLIST defaults for missing attributes
+                    let mut attrs = attrs;
+                    if let Some(defaults) = self.attlist_defaults.get(tag_name) {
+                        for (dname, dval) in defaults {
+                            if !attrs.iter().any(|(n, _)| n == dname) {
+                                attrs.push((dname.clone(), dval.clone()));
+                            }
+                        }
+                    }
+
                     self.tag_stack.push(tag_name.to_string());
 
                     if let Some(handler) = &mut self.start_element_handler {
@@ -1483,7 +1530,7 @@ impl Parser {
 
                     self.seen_root = true;
 
-                    let attrs = if tok == XmlTok::EmptyElementWithAtts {
+                    let mut attrs = if tok == XmlTok::EmptyElementWithAtts {
                         match self.extract_attrs(enc, data, pos, next) {
                             Ok(a) => a,
                             Err(e) => return (e, pos),
@@ -1491,6 +1538,15 @@ impl Parser {
                     } else {
                         Vec::new()
                     };
+
+                    // Apply ATTLIST defaults for missing attributes
+                    if let Some(defaults) = self.attlist_defaults.get(&tag_name) {
+                        for (dname, dval) in defaults {
+                            if !attrs.iter().any(|(n, _)| n == dname) {
+                                attrs.push((dname.clone(), dval.clone()));
+                            }
+                        }
+                    }
 
                     if let Some(handler) = &mut self.start_element_handler {
                         let attr_refs: Vec<(&str, &str)> = attrs
@@ -1755,6 +1811,11 @@ impl Parser {
     /// Extract attributes from a start tag token span.
     /// Uses get_atts from xmltok_impl.
     /// Returns Err(XmlError::DuplicateAttribute) if any attribute name appears twice.
+    /// Performs XML attribute value normalization per spec section 3.3.3:
+    /// - Expand character references (&#NN; &#xNN;)
+    /// - Expand predefined entity references (&amp; &lt; &gt; &apos; &quot;)
+    /// - Expand internal general entity references
+    /// - Normalize whitespace (\t, \n, \r, \r\n → space)
     fn extract_attrs<E: Encoding>(
         &self,
         enc: &E,
@@ -1770,15 +1831,98 @@ impl Parser {
             let name = std::str::from_utf8(&data[attr.name..attr.name_end])
                 .unwrap_or("")
                 .to_string();
-            let value = std::str::from_utf8(&data[attr.value_ptr..attr.value_end])
-                .unwrap_or("")
-                .to_string();
+            let raw_value = &data[attr.value_ptr..attr.value_end];
+            // Always normalize: expand refs, normalize \t \n \r → space
+            let value = Self::normalize_attribute_value(raw_value, &self.internal_entities);
             if !seen.insert(name.clone()) {
                 return Err(XmlError::DuplicateAttribute);
             }
             result.push((name, value));
         }
         Ok(result)
+    }
+
+    /// Normalize an attribute value per XML spec section 3.3.3:
+    /// - Replace \t, \n, \r with space; \r\n with single space
+    /// - Expand character references (&#NN; &#xNN;)
+    /// - Expand predefined entity references (&amp; &lt; &gt; &apos; &quot;)
+    /// - Expand internal general entity references
+    fn normalize_attribute_value(
+        raw: &[u8],
+        entities: &std::collections::HashMap<String, String>,
+    ) -> String {
+        let mut result = Vec::with_capacity(raw.len());
+        let mut i = 0;
+        while i < raw.len() {
+            match raw[i] {
+                b'&' => {
+                    // Find the semicolon
+                    if let Some(semi_offset) = raw[i + 1..].iter().position(|&b| b == b';') {
+                        let ref_content = &raw[i + 1..i + 1 + semi_offset];
+                        if ref_content.starts_with(b"#x") || ref_content.starts_with(b"#X") {
+                            // Hex character reference
+                            if let Ok(s) = std::str::from_utf8(&ref_content[2..]) {
+                                if let Ok(n) = u32::from_str_radix(s, 16) {
+                                    if let Some(c) = char::from_u32(n) {
+                                        let mut buf = [0u8; 4];
+                                        result.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                                    }
+                                }
+                            }
+                        } else if ref_content.starts_with(b"#") {
+                            // Decimal character reference
+                            if let Ok(s) = std::str::from_utf8(&ref_content[1..]) {
+                                if let Ok(n) = s.parse::<u32>() {
+                                    if let Some(c) = char::from_u32(n) {
+                                        let mut buf = [0u8; 4];
+                                        result.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                                    }
+                                }
+                            }
+                        } else if let Ok(name) = std::str::from_utf8(ref_content) {
+                            // Named entity reference
+                            match name {
+                                "amp" => result.push(b'&'),
+                                "lt" => result.push(b'<'),
+                                "gt" => result.push(b'>'),
+                                "apos" => result.push(b'\''),
+                                "quot" => result.push(b'"'),
+                                _ => {
+                                    // Internal general entity
+                                    if let Some(value) = entities.get(name) {
+                                        result.extend_from_slice(value.as_bytes());
+                                    } else {
+                                        // Unknown entity — keep as-is
+                                        result.extend_from_slice(&raw[i..i + 2 + semi_offset]);
+                                    }
+                                }
+                            }
+                        }
+                        i = i + 2 + semi_offset;
+                    } else {
+                        result.push(raw[i]);
+                        i += 1;
+                    }
+                }
+                b'\r' => {
+                    result.push(b' ');
+                    i += 1;
+                    // \r\n → single space
+                    if i < raw.len() && raw[i] == b'\n' {
+                        i += 1;
+                    }
+                }
+                b'\n' | b'\t' => {
+                    result.push(b' ');
+                    i += 1;
+                }
+                _ => {
+                    result.push(raw[i]);
+                    i += 1;
+                }
+            }
+        }
+        String::from_utf8(result).unwrap_or_default()
     }
 
     /// Report a processing instruction — corresponds to C reportProcessingInstruction()
@@ -2148,6 +2292,38 @@ impl Parser {
     /// Check if the input starts with a UTF-16 BOM and transcode if needed.
     /// Returns the (possibly transcoded) data and the detected encoding name.
     fn detect_and_transcode(&mut self, data: &[u8]) -> Result<Vec<u8>, XmlError> {
+        // If we have a pending partial BOM/encoding detection, combine with new data
+        if !self.encoding_detection_buf.is_empty() {
+            let mut combined = std::mem::take(&mut self.encoding_detection_buf);
+            combined.extend_from_slice(data);
+            return self.detect_and_transcode_impl(&combined);
+        }
+
+        // If non-final and too few bytes to determine encoding, buffer for later
+        if !self.is_final && data.len() < 4 {
+            // Check if first bytes could be a BOM prefix
+            let could_be_bom = match data.len() {
+                0 => true,
+                1 => data[0] == 0xFF || data[0] == 0xFE || data[0] == 0xEF || data[0] == 0x00,
+                2 | 3 => {
+                    (data[0] == 0xFF && data[1] == 0xFE)
+                        || (data[0] == 0xFE && data[1] == 0xFF)
+                        || (data[0] == 0xEF && (data.len() < 3 || data[1] == 0xBB))
+                        || data[0] == 0x00
+                        || data[1] == 0x00
+                }
+                _ => false,
+            };
+            if could_be_bom {
+                self.encoding_detection_buf = data.to_vec();
+                return Ok(Vec::new());
+            }
+        }
+
+        self.detect_and_transcode_impl(data)
+    }
+
+    fn detect_and_transcode_impl(&mut self, data: &[u8]) -> Result<Vec<u8>, XmlError> {
         if data.len() >= 2 {
             // UTF-16 BE BOM: FE FF
             if data[0] == 0xFE && data[1] == 0xFF {
@@ -2159,7 +2335,7 @@ impl Parser {
                     }
                 }
                 self.detected_encoding = Some("UTF-16BE".to_string());
-                return self.transcode_utf16(&data[2..], true);
+                return self.transcode_utf16_with_pending(&data[2..], true);
             }
             // UTF-16 LE BOM: FF FE
             if data[0] == 0xFF && data[1] == 0xFE {
@@ -2170,19 +2346,19 @@ impl Parser {
                     }
                 }
                 self.detected_encoding = Some("UTF-16LE".to_string());
-                return self.transcode_utf16(&data[2..], false);
+                return self.transcode_utf16_with_pending(&data[2..], false);
             }
             // Check for UTF-16 without BOM (NUL byte pattern)
             if data.len() >= 4 {
                 if data[0] == 0 && data[1] == b'<' {
                     // UTF-16 BE without BOM
                     self.detected_encoding = Some("UTF-16BE".to_string());
-                    return self.transcode_utf16(data, true);
+                    return self.transcode_utf16_with_pending(data, true);
                 }
                 if data[0] == b'<' && data[1] == 0 {
                     // UTF-16 LE without BOM
                     self.detected_encoding = Some("UTF-16LE".to_string());
-                    return self.transcode_utf16(data, false);
+                    return self.transcode_utf16_with_pending(data, false);
                 }
             }
         }
@@ -2191,6 +2367,21 @@ impl Parser {
             return Ok(data[3..].to_vec());
         }
         Ok(data.to_vec())
+    }
+
+    /// Transcode UTF-16 data to UTF-8, saving any odd trailing byte
+    fn transcode_utf16_with_pending(
+        &mut self,
+        data: &[u8],
+        big_endian: bool,
+    ) -> Result<Vec<u8>, XmlError> {
+        let (to_transcode, leftover) = if data.len() % 2 != 0 {
+            (&data[..data.len() - 1], Some(data[data.len() - 1]))
+        } else {
+            (data, None)
+        };
+        self.utf16_pending_byte = leftover;
+        self.transcode_utf16(to_transcode, big_endian)
     }
 
     /// Transcode UTF-16 data to UTF-8
