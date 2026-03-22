@@ -89,6 +89,24 @@ make -C expat-ffi/tests
 
 Tests cover parser lifecycle, all handler types (elements, character data, comments, PIs, CDATA, XML declarations, DOCTYPE), error handling, incremental parsing, parser reset, and configuration.
 
+## Implementation Notes
+
+### Memory management APIs
+
+The C libexpat API includes `XML_MemMalloc`, `XML_MemRealloc`, and `XML_MemFree`, which let C code allocate memory through the parser's allocator. In C libexpat, parsers can be created with a custom allocator via `XML_ParserCreate_MM`, and these functions use that custom allocator.
+
+In our Rust implementation, the parser uses Rust's standard allocator — there is no custom allocator support. The `XML_MemMalloc`/`XML_MemRealloc`/`XML_MemFree` functions are implemented in the FFI layer by forwarding directly to libc `malloc`/`realloc`/`free`. They exist solely for C API compatibility (some C code, including libexpat's own test suite, calls them). The Rust `Parser` struct has no knowledge of these functions.
+
+Similarly, `XML_ParserCreate_MM` accepts a `XML_Memory_Handling_Suite` parameter but ignores it — the Rust parser always uses its own allocator. The 5 C test failures related to custom allocators (`test_misc_alloc_*`, `test_accounting_*`, `test_amplification_*`) are expected and documented as not applicable.
+
+### ParserHandle layout
+
+The `ParserHandle` struct uses `#[repr(C)]` with `user_data` as its first field. This is required because the C macro `XML_GetUserData(parser)` is defined as `(*(void **)(parser))`, which reads the first word of the struct directly.
+
+### Handler user_data timing
+
+All handler closures read `user_data` from the `ParserHandle` at call time (via a raw pointer to the handle), not at registration time. This matches C behavior where `XML_SetUserData` can be called after handler registration.
+
 ## Building from source
 
 ```bash
