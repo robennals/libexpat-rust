@@ -2317,3 +2317,73 @@ fn cov90_notation_states() {
         );
     }
 }
+
+// ============================================================================
+// 83. Malformed XML declarations (exercise parse_xml_decl error paths)
+// ============================================================================
+
+#[test]
+fn cov90_malformed_xml_decl() {
+    let cases: &[&[u8]] = &[
+        // Missing version
+        b"<?xml encoding='UTF-8'?><r/>",
+        // Bad attribute name
+        b"<?xml badattr='1.0'?><r/>",
+        // Missing value
+        b"<?xml version?><r/>",
+        // Missing closing ?>
+        b"<?xml version='1.0'><r/>",
+        // No equals
+        b"<?xml version '1.0'?><r/>",
+        // No quote
+        b"<?xml version=1.0?><r/>",
+        // Mismatched quotes
+        b"<?xml version='1.0\"?><r/>",
+        // standalone without encoding (valid per spec)
+        b"<?xml version='1.0' standalone='yes'?><r/>",
+    ];
+    for case in cases {
+        compare(
+            case,
+            &format!("malformed_decl {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 84. Edge: text declaration (is_text_decl path)
+// ============================================================================
+
+#[test]
+fn cov90_text_decl_edge() {
+    // Text declarations are used in external parsed entities
+    // Can't easily test directly, but malformed xml decls exercise similar paths
+    let cases: &[&[u8]] = &[
+        b"<?xml version='1.0' encoding='UTF-8'?><r/>",
+        b"<?xml version='1.1'?><r/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("text_decl {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 85. More incremental tests at exact multi-byte boundaries
+// ============================================================================
+
+#[test]
+fn cov90_exact_multibyte_splits() {
+    // Document designed to have multi-byte chars at specific positions
+    let xml = "<r>aé日😀b</r>".as_bytes(); // a(1) é(2) 日(3) 😀(4) b(1) = offsets 3,4,5,6,7,8,9,10,11,12,13,14
+    compare_incr(xml, "exact multibyte splits");
+
+    // Same in various contexts
+    let xml2 = "<r a=\"é日\"/>".as_bytes();
+    compare_incr(xml2, "multibyte attr splits");
+
+    let xml3 = "<!DOCTYPE r [<!ENTITY e 'é日'>]><r>&e;</r>".as_bytes();
+    compare_incr(xml3, "multibyte entity splits");
+}
