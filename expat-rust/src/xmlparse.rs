@@ -1016,6 +1016,15 @@ impl Parser {
                     }
                     self.doctype_handler_called = true;
                 }
+                // If the document references an external subset and is not standalone,
+                // invoke the not-standalone handler (matches C doProlog behavior)
+                if self.has_param_entity_refs && !self.dtd_standalone {
+                    if let Some(handler) = &mut self.not_standalone_handler {
+                        if !handler() {
+                            return XmlError::NotStandalone;
+                        }
+                    }
+                }
                 // End of DOCTYPE
                 if let Some(handler) = &mut self.end_doctype_decl_handler {
                     handler();
