@@ -141,7 +141,11 @@ fn collect_c_events(xml: &[u8]) -> (u32, Vec<String>) {
     let events: RefCell<Vec<String>> = RefCell::new(Vec::new());
     let c_parser = CParser::new(None).unwrap();
 
-    unsafe extern "C" fn c_start_el(ud: *mut c_void, name: *const c_char, atts: *mut *const c_char) {
+    unsafe extern "C" fn c_start_el(
+        ud: *mut c_void,
+        name: *const c_char,
+        atts: *mut *const c_char,
+    ) {
         let ev = &*(ud as *const RefCell<Vec<String>>);
         let n = CStr::from_ptr(name).to_str().unwrap();
         let mut s = format!("SE:{}", n);
@@ -310,10 +314,7 @@ fn cov_pi_before_root() {
 
 #[test]
 fn cov_pi_multiple() {
-    compare_events(
-        b"<?pi1 d1?><r><?pi2 d2?></r><?pi3 d3?>",
-        "multiple PIs",
-    );
+    compare_events(b"<?pi1 d1?><r><?pi2 d2?></r><?pi3 d3?>", "multiple PIs");
 }
 
 // ============================================================================
@@ -332,10 +333,7 @@ fn cov_comment_empty() {
 
 #[test]
 fn cov_comment_multiline() {
-    compare_events(
-        b"<r><!-- line1\nline2\nline3 --></r>",
-        "multiline comment",
-    );
+    compare_events(b"<r><!-- line1\nline2\nline3 --></r>", "multiline comment");
 }
 
 #[test]
@@ -372,10 +370,7 @@ fn cov_cdata_with_special_chars() {
 
 #[test]
 fn cov_cdata_with_brackets() {
-    compare_events(
-        b"<r><![CDATA[text]more]]></r>",
-        "CDATA with single bracket",
-    );
+    compare_events(b"<r><![CDATA[text]more]]></r>", "CDATA with single bracket");
 }
 
 #[test]
@@ -393,10 +388,7 @@ fn cov_cdata_incremental() {
 
 #[test]
 fn cov_cdata_with_newlines_in_content() {
-    compare_events(
-        b"<r><![CDATA[\r\n\r]]></r>",
-        "CDATA with CR/LF",
-    );
+    compare_events(b"<r><![CDATA[\r\n\r]]></r>", "CDATA with CR/LF");
 }
 
 // ============================================================================
@@ -405,10 +397,7 @@ fn cov_cdata_with_newlines_in_content() {
 
 #[test]
 fn cov_doctype_simple() {
-    compare_events(
-        b"<!DOCTYPE root><root/>",
-        "simple DOCTYPE",
-    );
+    compare_events(b"<!DOCTYPE root><root/>", "simple DOCTYPE");
 }
 
 #[test]
@@ -477,18 +466,12 @@ fn cov_notation_public_system() {
 
 #[test]
 fn cov_element_empty() {
-    compare(
-        b"<!DOCTYPE r [<!ELEMENT r EMPTY>]><r/>",
-        "ELEMENT EMPTY",
-    );
+    compare(b"<!DOCTYPE r [<!ELEMENT r EMPTY>]><r/>", "ELEMENT EMPTY");
 }
 
 #[test]
 fn cov_element_any() {
-    compare(
-        b"<!DOCTYPE r [<!ELEMENT r ANY>]><r/>",
-        "ELEMENT ANY",
-    );
+    compare(b"<!DOCTYPE r [<!ELEMENT r ANY>]><r/>", "ELEMENT ANY");
 }
 
 #[test]
@@ -641,10 +624,7 @@ fn cov_entity_unparsed() {
 
 #[test]
 fn cov_attr_with_char_ref() {
-    compare_events(
-        b"<r a=\"&#65;&#x42;\"/>",
-        "attribute with char refs (A, B)",
-    );
+    compare_events(b"<r a=\"&#65;&#x42;\"/>", "attribute with char refs (A, B)");
 }
 
 #[test]
@@ -665,26 +645,17 @@ fn cov_attr_with_newlines() {
 
 #[test]
 fn cov_attr_with_cr() {
-    compare_events(
-        b"<r a=\"hello\rworld\"/>",
-        "attribute with CR",
-    );
+    compare_events(b"<r a=\"hello\rworld\"/>", "attribute with CR");
 }
 
 #[test]
 fn cov_attr_with_crlf() {
-    compare_events(
-        b"<r a=\"hello\r\nworld\"/>",
-        "attribute with CRLF",
-    );
+    compare_events(b"<r a=\"hello\r\nworld\"/>", "attribute with CRLF");
 }
 
 #[test]
 fn cov_attr_with_tab() {
-    compare_events(
-        b"<r a=\"hello\tworld\"/>",
-        "attribute with tab",
-    );
+    compare_events(b"<r a=\"hello\tworld\"/>", "attribute with tab");
 }
 
 // ============================================================================
@@ -1039,10 +1010,7 @@ fn cov_entity_recursive() {
 
 #[test]
 fn cov_entity_predefined() {
-    compare_events(
-        b"<r>&amp;&lt;&gt;&apos;&quot;</r>",
-        "predefined entities",
-    );
+    compare_events(b"<r>&amp;&lt;&gt;&apos;&quot;</r>", "predefined entities");
 }
 
 // ============================================================================
@@ -1181,18 +1149,12 @@ fn cov_usascii_declared() {
 
 #[test]
 fn cov_prolog_comment() {
-    compare(
-        b"<!-- c1 --><!-- c2 --><r/>",
-        "multiple prolog comments",
-    );
+    compare(b"<!-- c1 --><!-- c2 --><r/>", "multiple prolog comments");
 }
 
 #[test]
 fn cov_prolog_pi() {
-    compare(
-        b"<?pi1 d1?><?pi2 d2?><r/>",
-        "multiple prolog PIs",
-    );
+    compare(b"<?pi1 d1?><?pi2 d2?><r/>", "multiple prolog PIs");
 }
 
 #[test]
@@ -1231,18 +1193,12 @@ fn cov_dtd_comment_in_subset() {
 
 #[test]
 fn cov_dtd_pi_in_subset() {
-    compare(
-        b"<!DOCTYPE r [<?dtd-pi data?>]><r/>",
-        "PI in DTD subset",
-    );
+    compare(b"<!DOCTYPE r [<?dtd-pi data?>]><r/>", "PI in DTD subset");
 }
 
 #[test]
 fn cov_dtd_whitespace_in_subset() {
-    compare(
-        b"<!DOCTYPE r [\n  \n]><r/>",
-        "whitespace in DTD subset",
-    );
+    compare(b"<!DOCTYPE r [\n  \n]><r/>", "whitespace in DTD subset");
 }
 
 #[test]
@@ -1280,12 +1236,18 @@ fn cov_attlist_default_with_entity() {
 #[test]
 fn cov_utf8_2byte_content() {
     // First test without entities to isolate the issue
-    compare_events("<r>café</r>".as_bytes(), "2-byte UTF-8 in content no entity");
+    compare_events(
+        "<r>café</r>".as_bytes(),
+        "2-byte UTF-8 in content no entity",
+    );
 }
 
 #[test]
 fn cov_utf8_2byte_entity() {
-    compare_events("<!DOCTYPE r [<!ENTITY e 'ñ'>]><r>&e;</r>".as_bytes(), "2-byte UTF-8 entity value");
+    compare_events(
+        "<!DOCTYPE r [<!ENTITY e 'ñ'>]><r>&e;</r>".as_bytes(),
+        "2-byte UTF-8 entity value",
+    );
 }
 
 #[test]

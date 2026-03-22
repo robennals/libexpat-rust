@@ -1061,12 +1061,8 @@ impl Parser {
                 if let (Some(ref elem), Some(ref attr)) =
                     (&self.current_attlist_element, &self.current_attlist_attr)
                 {
-                    let value =
-                        Self::normalize_attribute_value(tok_text, &self.internal_entities);
-                    let defaults = self
-                        .attlist_defaults
-                        .entry(elem.clone())
-                        .or_insert_with(Vec::new);
+                    let value = Self::normalize_attribute_value(tok_text, &self.internal_entities);
+                    let defaults = self.attlist_defaults.entry(elem.clone()).or_default();
                     // Only store if not already defined (first declaration wins)
                     if !defaults.iter().any(|(n, _)| n == attr) {
                         defaults.push((attr.clone(), value));
@@ -1876,7 +1872,8 @@ impl Parser {
                                 if let Ok(n) = u32::from_str_radix(s, 16) {
                                     if let Some(c) = char::from_u32(n) {
                                         let mut buf = [0u8; 4];
-                                        result.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                                        result
+                                            .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
                                     }
                                 }
                             }
@@ -1886,7 +1883,8 @@ impl Parser {
                                 if let Ok(n) = s.parse::<u32>() {
                                     if let Some(c) = char::from_u32(n) {
                                         let mut buf = [0u8; 4];
-                                        result.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                                        result
+                                            .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
                                     }
                                 }
                             }
@@ -2582,7 +2580,15 @@ impl Parser {
                     };
 
                     // Count UTF-8 bytes this code point produces
-                    let utf8_len = if cp < 0x80 { 1 } else if cp < 0x800 { 2 } else if cp < 0x10000 { 3 } else { 4 };
+                    let utf8_len = if cp < 0x80 {
+                        1
+                    } else if cp < 0x800 {
+                        2
+                    } else if cp < 0x10000 {
+                        3
+                    } else {
+                        4
+                    };
                     utf8_pos += utf8_len;
                 }
 

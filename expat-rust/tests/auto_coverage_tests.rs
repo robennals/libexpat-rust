@@ -84,7 +84,9 @@ fn collect_c_events_full(xml: &[u8]) -> (u32, u32, Vec<String>) {
         let mut i = 0;
         loop {
             let key = *atts.add(i);
-            if key.is_null() { break; }
+            if key.is_null() {
+                break;
+            }
             let val = *atts.add(i + 1);
             let k = CStr::from_ptr(key).to_str().unwrap();
             let v = CStr::from_ptr(val).to_str().unwrap();
@@ -95,22 +97,29 @@ fn collect_c_events_full(xml: &[u8]) -> (u32, u32, Vec<String>) {
     }
     unsafe extern "C" fn ee(ud: *mut c_void, name: *const c_char) {
         let ev = &*(ud as *const RefCell<Vec<String>>);
-        ev.borrow_mut().push(format!("EE:{}", CStr::from_ptr(name).to_str().unwrap()));
+        ev.borrow_mut()
+            .push(format!("EE:{}", CStr::from_ptr(name).to_str().unwrap()));
     }
     unsafe extern "C" fn cd(ud: *mut c_void, s: *const c_char, len: c_int) {
         let ev = &*(ud as *const RefCell<Vec<String>>);
         let sl = std::slice::from_raw_parts(s as *const u8, len as usize);
-        ev.borrow_mut().push(format!("CD:{}", std::str::from_utf8(sl).unwrap_or("<bin>")));
+        ev.borrow_mut()
+            .push(format!("CD:{}", std::str::from_utf8(sl).unwrap_or("<bin>")));
     }
     unsafe extern "C" fn pi(ud: *mut c_void, target: *const c_char, data: *const c_char) {
         let ev = &*(ud as *const RefCell<Vec<String>>);
         let t = CStr::from_ptr(target).to_str().unwrap();
-        let d = if data.is_null() { "" } else { CStr::from_ptr(data).to_str().unwrap() };
+        let d = if data.is_null() {
+            ""
+        } else {
+            CStr::from_ptr(data).to_str().unwrap()
+        };
         ev.borrow_mut().push(format!("PI:{}:{}", t, d));
     }
     unsafe extern "C" fn cm(ud: *mut c_void, text: *const c_char) {
         let ev = &*(ud as *const RefCell<Vec<String>>);
-        ev.borrow_mut().push(format!("CM:{}", CStr::from_ptr(text).to_str().unwrap()));
+        ev.borrow_mut()
+            .push(format!("CM:{}", CStr::from_ptr(text).to_str().unwrap()));
     }
     unsafe extern "C" fn scd(ud: *mut c_void) {
         let ev = &*(ud as *const RefCell<Vec<String>>);
@@ -121,14 +130,26 @@ fn collect_c_events_full(xml: &[u8]) -> (u32, u32, Vec<String>) {
         ev.borrow_mut().push("ECD".into());
     }
     unsafe extern "C" fn sdt(
-        ud: *mut c_void, name: *const c_char, sysid: *const c_char,
-        pubid: *const c_char, has_internal: c_int,
+        ud: *mut c_void,
+        name: *const c_char,
+        sysid: *const c_char,
+        pubid: *const c_char,
+        has_internal: c_int,
     ) {
         let ev = &*(ud as *const RefCell<Vec<String>>);
         let n = CStr::from_ptr(name).to_str().unwrap();
-        let s = if sysid.is_null() { "" } else { CStr::from_ptr(sysid).to_str().unwrap() };
-        let p = if pubid.is_null() { "" } else { CStr::from_ptr(pubid).to_str().unwrap() };
-        ev.borrow_mut().push(format!("SDT:{}:{}:{}:{}", n, s, p, has_internal != 0));
+        let s = if sysid.is_null() {
+            ""
+        } else {
+            CStr::from_ptr(sysid).to_str().unwrap()
+        };
+        let p = if pubid.is_null() {
+            ""
+        } else {
+            CStr::from_ptr(pubid).to_str().unwrap()
+        };
+        ev.borrow_mut()
+            .push(format!("SDT:{}:{}:{}:{}", n, s, p, has_internal != 0));
     }
     unsafe extern "C" fn edt(ud: *mut c_void) {
         let ev = &*(ud as *const RefCell<Vec<String>>);
@@ -205,7 +226,9 @@ fn assert_incremental_equivalent(xml: &[u8], desc: &str) {
         let r1 = r.parse(&xml[..split], false);
         let r_final = if r1 == XmlStatus::Ok {
             r.parse(&xml[split..], true)
-        } else { r1 };
+        } else {
+            r1
+        };
         let r_err = r.error_code();
 
         let c = CParser::new(None).unwrap();
@@ -219,7 +242,8 @@ fn assert_incremental_equivalent(xml: &[u8], desc: &str) {
         assert!(
             r_final as u32 == c_final && r_err as u32 == c_err,
             "INCR MISMATCH {desc} @{split}: R s={} e={}, C s={c_final} e={c_err}",
-            r_final as u32, r_err as u32
+            r_final as u32,
+            r_err as u32
         );
     }
 }
@@ -250,7 +274,10 @@ fn valid_xml_corpus() -> Vec<(Vec<u8>, &'static str)> {
         (b"<r a='v'/>".to_vec(), "single-quoted attr"),
         (b"<r a=\"1\" b=\"2\" c=\"3\"/>".to_vec(), "multiple attrs"),
         (b"<r a = \"v\" />".to_vec(), "spaced attr"),
-        (b"<r a=\"&amp;&lt;&gt;&apos;&quot;\"/>".to_vec(), "entity refs in attr"),
+        (
+            b"<r a=\"&amp;&lt;&gt;&apos;&quot;\"/>".to_vec(),
+            "entity refs in attr",
+        ),
         (b"<r a=\"&#65;&#x42;\"/>".to_vec(), "char refs in attr"),
         (b"<r a=\"hello\tworld\"/>".to_vec(), "tab in attr"),
         (b"<r a=\"hello\nworld\"/>".to_vec(), "newline in attr"),
@@ -267,68 +294,184 @@ fn valid_xml_corpus() -> Vec<(Vec<u8>, &'static str)> {
         (b"<r><!-- c --></r>".to_vec(), "comment in content"),
         (b"<r/><!-- c -->".to_vec(), "comment in epilog"),
         (b"<r><!----></r>".to_vec(), "empty comment"),
-        (b"<r><!-- multi\nline\ncomment --></r>".to_vec(), "multiline comment"),
+        (
+            b"<r><!-- multi\nline\ncomment --></r>".to_vec(),
+            "multiline comment",
+        ),
         // CDATA
         (b"<r><![CDATA[text]]></r>".to_vec(), "CDATA"),
         (b"<r><![CDATA[]]></r>".to_vec(), "empty CDATA"),
-        (b"<r><![CDATA[<not>&xml;]]></r>".to_vec(), "CDATA with markup"),
+        (
+            b"<r><![CDATA[<not>&xml;]]></r>".to_vec(),
+            "CDATA with markup",
+        ),
         (b"<r><![CDATA[a]b]]></r>".to_vec(), "CDATA with ]"),
         (b"<r><![CDATA[a]]b]]></r>".to_vec(), "CDATA with ]]"),
         (b"<r><![CDATA[\r\n\r]]></r>".to_vec(), "CDATA with crlf"),
         // Entities
-        (b"<r>&amp;&lt;&gt;&apos;&quot;</r>".to_vec(), "predefined entities"),
+        (
+            b"<r>&amp;&lt;&gt;&apos;&quot;</r>".to_vec(),
+            "predefined entities",
+        ),
         (b"<r>&#65;&#66;</r>".to_vec(), "decimal char refs"),
         (b"<r>&#x41;&#x42;</r>".to_vec(), "hex char refs"),
         (b"<r>&#x20AC;</r>".to_vec(), "euro sign char ref"),
         // XML declaration
         (b"<?xml version='1.0'?><r/>".to_vec(), "xml decl"),
-        (b"<?xml version='1.0' encoding='UTF-8'?><r/>".to_vec(), "xml decl encoding"),
-        (b"<?xml version='1.0' standalone='yes'?><r/>".to_vec(), "xml decl standalone=yes"),
-        (b"<?xml version='1.0' standalone='no'?><r/>".to_vec(), "xml decl standalone=no"),
-        (b"<?xml version='1.0' encoding='UTF-8' standalone='yes'?><r/>".to_vec(), "xml decl full"),
+        (
+            b"<?xml version='1.0' encoding='UTF-8'?><r/>".to_vec(),
+            "xml decl encoding",
+        ),
+        (
+            b"<?xml version='1.0' standalone='yes'?><r/>".to_vec(),
+            "xml decl standalone=yes",
+        ),
+        (
+            b"<?xml version='1.0' standalone='no'?><r/>".to_vec(),
+            "xml decl standalone=no",
+        ),
+        (
+            b"<?xml version='1.0' encoding='UTF-8' standalone='yes'?><r/>".to_vec(),
+            "xml decl full",
+        ),
         // DOCTYPE
         (b"<!DOCTYPE r><r/>".to_vec(), "simple DOCTYPE"),
-        (b"<!DOCTYPE r SYSTEM \"t.dtd\"><r/>".to_vec(), "DOCTYPE SYSTEM"),
-        (b"<!DOCTYPE r PUBLIC \"-//T//EN\" \"t.dtd\"><r/>".to_vec(), "DOCTYPE PUBLIC"),
-        (b"<!DOCTYPE r [<!ELEMENT r (#PCDATA)>]><r/>".to_vec(), "DOCTYPE ELEMENT PCDATA"),
-        (b"<!DOCTYPE r [<!ELEMENT r EMPTY>]><r/>".to_vec(), "DOCTYPE ELEMENT EMPTY"),
-        (b"<!DOCTYPE r [<!ELEMENT r ANY>]><r/>".to_vec(), "DOCTYPE ELEMENT ANY"),
-        (b"<!DOCTYPE r [<!ENTITY e 'v'>]><r>&e;</r>".to_vec(), "internal entity"),
-        (b"<!DOCTYPE r [<!ENTITY a '1'><!ENTITY b '2'>]><r>&a;&b;</r>".to_vec(), "multiple entities"),
-        (b"<!DOCTYPE r [<!ENTITY e SYSTEM \"f.xml\">]><r/>".to_vec(), "external entity SYSTEM"),
-        (b"<!DOCTYPE r [<!ENTITY e PUBLIC \"-//T//EN\" \"f.xml\">]><r/>".to_vec(), "external entity PUBLIC"),
-        (b"<!DOCTYPE r [<!NOTATION n SYSTEM \"x\">]><r/>".to_vec(), "NOTATION SYSTEM"),
-        (b"<!DOCTYPE r [<!NOTATION n PUBLIC \"-//T//EN\">]><r/>".to_vec(), "NOTATION PUBLIC"),
-        (b"<!DOCTYPE r [<!NOTATION n PUBLIC \"-//T//EN\" \"x\">]><r/>".to_vec(), "NOTATION PUB+SYS"),
-        (b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED>]><r a=\"v\"/>".to_vec(), "ATTLIST IMPLIED"),
-        (b"<!DOCTYPE r [<!ATTLIST r a CDATA #REQUIRED>]><r a=\"v\"/>".to_vec(), "ATTLIST REQUIRED"),
-        (b"<!DOCTYPE r [<!ATTLIST r a CDATA \"dv\">]><r/>".to_vec(), "ATTLIST default"),
-        (b"<!DOCTYPE r [<!ATTLIST r a CDATA #FIXED \"fv\">]><r/>".to_vec(), "ATTLIST FIXED"),
-        (b"<!DOCTYPE r [<!ATTLIST r a (x|y|z) #IMPLIED>]><r a=\"x\"/>".to_vec(), "ATTLIST enum"),
-        (b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED b CDATA \"d\">]><r a=\"1\"/>".to_vec(), "ATTLIST mixed"),
+        (
+            b"<!DOCTYPE r SYSTEM \"t.dtd\"><r/>".to_vec(),
+            "DOCTYPE SYSTEM",
+        ),
+        (
+            b"<!DOCTYPE r PUBLIC \"-//T//EN\" \"t.dtd\"><r/>".to_vec(),
+            "DOCTYPE PUBLIC",
+        ),
+        (
+            b"<!DOCTYPE r [<!ELEMENT r (#PCDATA)>]><r/>".to_vec(),
+            "DOCTYPE ELEMENT PCDATA",
+        ),
+        (
+            b"<!DOCTYPE r [<!ELEMENT r EMPTY>]><r/>".to_vec(),
+            "DOCTYPE ELEMENT EMPTY",
+        ),
+        (
+            b"<!DOCTYPE r [<!ELEMENT r ANY>]><r/>".to_vec(),
+            "DOCTYPE ELEMENT ANY",
+        ),
+        (
+            b"<!DOCTYPE r [<!ENTITY e 'v'>]><r>&e;</r>".to_vec(),
+            "internal entity",
+        ),
+        (
+            b"<!DOCTYPE r [<!ENTITY a '1'><!ENTITY b '2'>]><r>&a;&b;</r>".to_vec(),
+            "multiple entities",
+        ),
+        (
+            b"<!DOCTYPE r [<!ENTITY e SYSTEM \"f.xml\">]><r/>".to_vec(),
+            "external entity SYSTEM",
+        ),
+        (
+            b"<!DOCTYPE r [<!ENTITY e PUBLIC \"-//T//EN\" \"f.xml\">]><r/>".to_vec(),
+            "external entity PUBLIC",
+        ),
+        (
+            b"<!DOCTYPE r [<!NOTATION n SYSTEM \"x\">]><r/>".to_vec(),
+            "NOTATION SYSTEM",
+        ),
+        (
+            b"<!DOCTYPE r [<!NOTATION n PUBLIC \"-//T//EN\">]><r/>".to_vec(),
+            "NOTATION PUBLIC",
+        ),
+        (
+            b"<!DOCTYPE r [<!NOTATION n PUBLIC \"-//T//EN\" \"x\">]><r/>".to_vec(),
+            "NOTATION PUB+SYS",
+        ),
+        (
+            b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED>]><r a=\"v\"/>".to_vec(),
+            "ATTLIST IMPLIED",
+        ),
+        (
+            b"<!DOCTYPE r [<!ATTLIST r a CDATA #REQUIRED>]><r a=\"v\"/>".to_vec(),
+            "ATTLIST REQUIRED",
+        ),
+        (
+            b"<!DOCTYPE r [<!ATTLIST r a CDATA \"dv\">]><r/>".to_vec(),
+            "ATTLIST default",
+        ),
+        (
+            b"<!DOCTYPE r [<!ATTLIST r a CDATA #FIXED \"fv\">]><r/>".to_vec(),
+            "ATTLIST FIXED",
+        ),
+        (
+            b"<!DOCTYPE r [<!ATTLIST r a (x|y|z) #IMPLIED>]><r a=\"x\"/>".to_vec(),
+            "ATTLIST enum",
+        ),
+        (
+            b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED b CDATA \"d\">]><r a=\"1\"/>".to_vec(),
+            "ATTLIST mixed",
+        ),
         // Content model quantifiers
-        (b"<!DOCTYPE r [<!ELEMENT r (a)*><!ELEMENT a EMPTY>]><r><a/><a/></r>".to_vec(), "ELEMENT (a)*"),
-        (b"<!DOCTYPE r [<!ELEMENT r (a)?><!ELEMENT a EMPTY>]><r/>".to_vec(), "ELEMENT (a)?"),
-        (b"<!DOCTYPE r [<!ELEMENT r (a)+><!ELEMENT a EMPTY>]><r><a/></r>".to_vec(), "ELEMENT (a)+"),
-        (b"<!DOCTYPE r [<!ELEMENT r (a,b)><!ELEMENT a EMPTY><!ELEMENT b EMPTY>]><r><a/><b/></r>".to_vec(), "ELEMENT seq"),
-        (b"<!DOCTYPE r [<!ELEMENT r (a|b)><!ELEMENT a EMPTY><!ELEMENT b EMPTY>]><r><a/></r>".to_vec(), "ELEMENT choice"),
-        (b"<!DOCTYPE r [<!ELEMENT r (#PCDATA|a)*><!ELEMENT a EMPTY>]><r>text<a/>more</r>".to_vec(), "ELEMENT mixed"),
+        (
+            b"<!DOCTYPE r [<!ELEMENT r (a)*><!ELEMENT a EMPTY>]><r><a/><a/></r>".to_vec(),
+            "ELEMENT (a)*",
+        ),
+        (
+            b"<!DOCTYPE r [<!ELEMENT r (a)?><!ELEMENT a EMPTY>]><r/>".to_vec(),
+            "ELEMENT (a)?",
+        ),
+        (
+            b"<!DOCTYPE r [<!ELEMENT r (a)+><!ELEMENT a EMPTY>]><r><a/></r>".to_vec(),
+            "ELEMENT (a)+",
+        ),
+        (
+            b"<!DOCTYPE r [<!ELEMENT r (a,b)><!ELEMENT a EMPTY><!ELEMENT b EMPTY>]><r><a/><b/></r>"
+                .to_vec(),
+            "ELEMENT seq",
+        ),
+        (
+            b"<!DOCTYPE r [<!ELEMENT r (a|b)><!ELEMENT a EMPTY><!ELEMENT b EMPTY>]><r><a/></r>"
+                .to_vec(),
+            "ELEMENT choice",
+        ),
+        (
+            b"<!DOCTYPE r [<!ELEMENT r (#PCDATA|a)*><!ELEMENT a EMPTY>]><r>text<a/>more</r>"
+                .to_vec(),
+            "ELEMENT mixed",
+        ),
         // DTD misc
-        (b"<!DOCTYPE r [<!-- dtd comment -->]><r/>".to_vec(), "DTD comment"),
+        (
+            b"<!DOCTYPE r [<!-- dtd comment -->]><r/>".to_vec(),
+            "DTD comment",
+        ),
         (b"<!DOCTYPE r [<?dtd-pi data?>]><r/>".to_vec(), "DTD PI"),
         (b"<!DOCTYPE r [\n  \n]><r/>".to_vec(), "DTD whitespace"),
         // Unparsed entity with NDATA
-        (b"<!DOCTYPE r [<!NOTATION n SYSTEM \"x\"><!ENTITY e SYSTEM \"f\" NDATA n>]><r/>".to_vec(), "unparsed entity"),
+        (
+            b"<!DOCTYPE r [<!NOTATION n SYSTEM \"x\"><!ENTITY e SYSTEM \"f\" NDATA n>]><r/>"
+                .to_vec(),
+            "unparsed entity",
+        ),
         // Entity with char ref in value
-        (b"<!DOCTYPE r [<!ENTITY e '&#65;&#x42;'>]><r>&e;</r>".to_vec(), "entity with char refs"),
+        (
+            b"<!DOCTYPE r [<!ENTITY e '&#65;&#x42;'>]><r>&e;</r>".to_vec(),
+            "entity with char refs",
+        ),
         // Entity expanded in attribute
-        (b"<!DOCTYPE r [<!ENTITY e 'val'>]><r a=\"&e;\"/>".to_vec(), "entity in attr"),
+        (
+            b"<!DOCTYPE r [<!ENTITY e 'val'>]><r a=\"&e;\"/>".to_vec(),
+            "entity in attr",
+        ),
         // Multiple entities expanded
-        (b"<!DOCTYPE r [<!ENTITY e 'x'>]><r>&e;&e;&e;</r>".to_vec(), "entity multi expand"),
+        (
+            b"<!DOCTYPE r [<!ENTITY e 'x'>]><r>&e;&e;&e;</r>".to_vec(),
+            "entity multi expand",
+        ),
         // Empty entity
-        (b"<!DOCTYPE r [<!ENTITY e ''>]><r>&e;</r>".to_vec(), "empty entity"),
+        (
+            b"<!DOCTYPE r [<!ENTITY e ''>]><r>&e;</r>".to_vec(),
+            "empty entity",
+        ),
         // All handlers test
-        (br#"<?xml version="1.0"?>
+        (
+            br#"<?xml version="1.0"?>
 <!DOCTYPE doc SYSTEM "t.dtd" [
   <!ELEMENT doc (#PCDATA|a)*>
   <!ELEMENT a EMPTY>
@@ -345,24 +488,45 @@ fn valid_xml_corpus() -> Vec<(Vec<u8>, &'static str)> {
   <a/>
   <![CDATA[cdata]]>
 </doc>
-<!-- epilog -->"#.to_vec(), "all features combined"),
+<!-- epilog -->"#
+                .to_vec(),
+            "all features combined",
+        ),
         // UTF-8 multi-byte
-        ("<!DOCTYPE r [<!ENTITY e 'ñ'>]><r>&e;</r>".as_bytes().to_vec(), "entity 2-byte UTF-8"),
+        (
+            "<!DOCTYPE r [<!ENTITY e 'ñ'>]><r>&e;</r>"
+                .as_bytes()
+                .to_vec(),
+            "entity 2-byte UTF-8",
+        ),
         ("<r>日本語</r>".as_bytes().to_vec(), "CJK content"),
         ("<r>😀</r>".as_bytes().to_vec(), "emoji content"),
         ("<r a=\"日本語\"/>".as_bytes().to_vec(), "CJK in attr"),
-        ("<r><!-- 日本語 --></r>".as_bytes().to_vec(), "CJK in comment"),
+        (
+            "<r><!-- 日本語 --></r>".as_bytes().to_vec(),
+            "CJK in comment",
+        ),
         // Encoding declarations
-        (b"<?xml version='1.0' encoding='ISO-8859-1'?><r/>".to_vec(), "latin1 encoding"),
-        (b"<?xml version='1.0' encoding='US-ASCII'?><r/>".to_vec(), "ascii encoding"),
+        (
+            b"<?xml version='1.0' encoding='ISO-8859-1'?><r/>".to_vec(),
+            "latin1 encoding",
+        ),
+        (
+            b"<?xml version='1.0' encoding='US-ASCII'?><r/>".to_vec(),
+            "ascii encoding",
+        ),
         // BOM
         (b"\xEF\xBB\xBF<r/>".to_vec(), "UTF-8 BOM"),
-        (b"\xEF\xBB\xBF<?xml version='1.0'?><r/>".to_vec(), "UTF-8 BOM + xmldecl"),
+        (
+            b"\xEF\xBB\xBF<?xml version='1.0'?><r/>".to_vec(),
+            "UTF-8 BOM + xmldecl",
+        ),
         // Whitespace around root
         (b"  \n  <r/>  \n  ".to_vec(), "whitespace around root"),
         (b"<r/>  \n\t  ".to_vec(), "whitespace epilog"),
         // Complex documents
-        (br#"<?xml version="1.0"?>
+        (
+            br#"<?xml version="1.0"?>
 <!DOCTYPE doc [
   <!ELEMENT doc (#PCDATA|p)*>
   <!ELEMENT p (#PCDATA)>
@@ -374,7 +538,10 @@ fn valid_xml_corpus() -> Vec<(Vec<u8>, &'static str)> {
   <p>Hello &amp; &copy;</p>
   <?app info?>
   <![CDATA[raw <data>]]>
-</doc>"#.to_vec(), "complex document"),
+</doc>"#
+                .to_vec(),
+            "complex document",
+        ),
     ]
 }
 
@@ -411,12 +578,18 @@ fn error_xml_corpus() -> Vec<(Vec<u8>, &'static str)> {
         (b"<r>]]></r>".to_vec(), "]]> in content"),
         (b"<?XML bad?>".to_vec(), "reserved PI target"),
         (b"<?xMl bad?>".to_vec(), "reserved PI target mixed"),
-        (b"<!DOCTYPE r PUBLIC \"bad{char\" \"t.dtd\"><r/>".to_vec(), "bad publicid"),
+        (
+            b"<!DOCTYPE r PUBLIC \"bad{char\" \"t.dtd\"><r/>".to_vec(),
+            "bad publicid",
+        ),
         (b"<r>\r".to_vec(), "trailing CR"),
         (b"<r>\xC3".to_vec(), "partial UTF-8 2-byte"),
         (b"<r>\xE4\xB8".to_vec(), "partial UTF-8 3-byte"),
         // Entity recursion
-        (b"<!DOCTYPE r [<!ENTITY a '&b;'><!ENTITY b '&a;'>]><r>&a;</r>".to_vec(), "recursive entity"),
+        (
+            b"<!DOCTYPE r [<!ENTITY a '&b;'><!ENTITY b '&a;'>]><r>&a;</r>".to_vec(),
+            "recursive entity",
+        ),
     ]
 }
 
@@ -526,7 +699,9 @@ fn auto_incremental_utf16() {
                 let r1 = r.parse(&xml[..split], false);
                 let r_final = if r1 == XmlStatus::Ok {
                     r.parse(&xml[split..], true)
-                } else { r1 };
+                } else {
+                    r1
+                };
                 let r_err = r.error_code();
 
                 let c = CParser::new(None).unwrap();
@@ -540,7 +715,8 @@ fn auto_incremental_utf16() {
                 assert!(
                     r_final as u32 == c_final && r_err as u32 == c_err,
                     "INCR MISMATCH {desc} @{split}: R s={} e={}, C s={c_final} e={c_err}",
-                    r_final as u32, r_err as u32
+                    r_final as u32,
+                    r_err as u32
                 );
             }
         }
@@ -644,10 +820,7 @@ fn auto_entity_expansion() {
     ];
 
     for (name, value) in &entity_values {
-        let xml = format!(
-            "<!DOCTYPE r [<!ENTITY e '{}'>]><r>&e;</r>",
-            value
-        );
+        let xml = format!("<!DOCTYPE r [<!ENTITY e '{}'>]><r>&e;</r>", value);
         assert_equivalent(xml.as_bytes(), &format!("entity {}", name));
     }
 }
@@ -659,9 +832,17 @@ fn auto_entity_expansion() {
 #[test]
 fn auto_whitespace_combinations() {
     let contents = [
-        "a\nb", "a\rb", "a\r\nb", "a\r\n\rb",
-        "\n", "\r", "\r\n", "\t",
-        "  a  ", "\n\n\n", "\r\r\r",
+        "a\nb",
+        "a\rb",
+        "a\r\nb",
+        "a\r\n\rb",
+        "\n",
+        "\r",
+        "\r\n",
+        "\t",
+        "  a  ",
+        "\n\n\n",
+        "\r\r\r",
         "a\r\nb\rc\nd",
     ];
 
@@ -678,9 +859,17 @@ fn auto_whitespace_combinations() {
 #[test]
 fn auto_cdata_combinations() {
     let cdata_contents = [
-        "", "text", "<not>xml</not>", "&amp;", "a]b", "a]]b",
-        "line1\nline2", "line1\rline2", "line1\r\nline2",
-        "   ", "\t\t\t",
+        "",
+        "text",
+        "<not>xml</not>",
+        "&amp;",
+        "a]b",
+        "a]]b",
+        "line1\nline2",
+        "line1\rline2",
+        "line1\r\nline2",
+        "   ",
+        "\t\t\t",
     ];
 
     for content in &cdata_contents {
@@ -696,8 +885,12 @@ fn auto_cdata_combinations() {
 #[test]
 fn auto_comment_combinations() {
     let comment_contents = [
-        " ", "simple", " multi\nline ", "  spaced  ",
-        " a-b-c ", " 1234 ",
+        " ",
+        "simple",
+        " multi\nline ",
+        "  spaced  ",
+        " a-b-c ",
+        " 1234 ",
     ];
 
     for content in &comment_contents {
@@ -784,8 +977,12 @@ fn auto_long_content() {
 #[test]
 fn auto_epilog_combinations() {
     let epilogs = [
-        " ", "\n", "\t", "  \n  ",
-        "<!-- c -->", "<?pi d?>",
+        " ",
+        "\n",
+        "\t",
+        "  \n  ",
+        "<!-- c -->",
+        "<?pi d?>",
         "<!-- c1 -->\n<!-- c2 -->",
         "<?p1 d1?>\n<?p2 d2?>",
         "\n<!-- c -->\n<?pi d?>\n",
@@ -827,25 +1024,50 @@ fn auto_error_string_coverage() {
     use expat_rust::xmlparse::error_string;
     // Exercise every error code through error_string
     let errors = [
-        XmlError::None, XmlError::NoMemory, XmlError::Syntax,
-        XmlError::NoElements, XmlError::InvalidToken, XmlError::UnclosedToken,
-        XmlError::PartialChar, XmlError::TagMismatch, XmlError::DuplicateAttribute,
-        XmlError::JunkAfterDocElement, XmlError::ParamEntityRef,
-        XmlError::UndefinedEntity, XmlError::RecursiveEntityRef,
-        XmlError::AsyncEntity, XmlError::BadCharRef, XmlError::BinaryEntityRef,
-        XmlError::AttributeExternalEntityRef, XmlError::MisplacedXmlPi,
-        XmlError::UnknownEncoding, XmlError::IncorrectEncoding,
-        XmlError::UnclosedCdataSection, XmlError::ExternalEntityHandling,
-        XmlError::NotStandalone, XmlError::UnexpectedState,
-        XmlError::EntityDeclaredInPe, XmlError::FeatureRequiresXmlDtd,
-        XmlError::CantChangeFeatureOnceParsing, XmlError::UnboundPrefix,
-        XmlError::UndeclaringPrefix, XmlError::IncompletePe,
-        XmlError::XmlDecl, XmlError::TextDecl, XmlError::Publicid,
-        XmlError::Suspended, XmlError::NotSuspended, XmlError::Aborted,
-        XmlError::Finished, XmlError::SuspendPe,
-        XmlError::ReservedPrefixXml, XmlError::ReservedPrefixXmlns,
-        XmlError::ReservedNamespaceUri, XmlError::InvalidArgument,
-        XmlError::NoBuffer, XmlError::AmplificationLimitBreach,
+        XmlError::None,
+        XmlError::NoMemory,
+        XmlError::Syntax,
+        XmlError::NoElements,
+        XmlError::InvalidToken,
+        XmlError::UnclosedToken,
+        XmlError::PartialChar,
+        XmlError::TagMismatch,
+        XmlError::DuplicateAttribute,
+        XmlError::JunkAfterDocElement,
+        XmlError::ParamEntityRef,
+        XmlError::UndefinedEntity,
+        XmlError::RecursiveEntityRef,
+        XmlError::AsyncEntity,
+        XmlError::BadCharRef,
+        XmlError::BinaryEntityRef,
+        XmlError::AttributeExternalEntityRef,
+        XmlError::MisplacedXmlPi,
+        XmlError::UnknownEncoding,
+        XmlError::IncorrectEncoding,
+        XmlError::UnclosedCdataSection,
+        XmlError::ExternalEntityHandling,
+        XmlError::NotStandalone,
+        XmlError::UnexpectedState,
+        XmlError::EntityDeclaredInPe,
+        XmlError::FeatureRequiresXmlDtd,
+        XmlError::CantChangeFeatureOnceParsing,
+        XmlError::UnboundPrefix,
+        XmlError::UndeclaringPrefix,
+        XmlError::IncompletePe,
+        XmlError::XmlDecl,
+        XmlError::TextDecl,
+        XmlError::Publicid,
+        XmlError::Suspended,
+        XmlError::NotSuspended,
+        XmlError::Aborted,
+        XmlError::Finished,
+        XmlError::SuspendPe,
+        XmlError::ReservedPrefixXml,
+        XmlError::ReservedPrefixXmlns,
+        XmlError::ReservedNamespaceUri,
+        XmlError::InvalidArgument,
+        XmlError::NoBuffer,
+        XmlError::AmplificationLimitBreach,
         XmlError::NotStarted,
     ];
     for e in errors {
@@ -920,7 +1142,8 @@ fn auto_incremental_utf8_literal() {
 
 #[test]
 fn auto_incremental_utf8_mixed() {
-    let xml = "<?xml version='1.0'?><!-- コメント --><r a=\"値\">テキスト<![CDATA[データ]]></r>".as_bytes();
+    let xml = "<?xml version='1.0'?><!-- コメント --><r a=\"値\">テキスト<![CDATA[データ]]></r>"
+        .as_bytes();
     assert_incremental_equivalent(xml, "UTF-8 mixed incremental");
 }
 
@@ -1030,13 +1253,12 @@ fn auto_content_cr_combinations() {
 #[test]
 fn auto_content_incremental_cr() {
     // CR at chunk boundaries
-    let cases: &[&[u8]] = &[
-        b"<r>a\rb</r>",
-        b"<r>\r\n</r>",
-        b"<r>text\r</r>",
-    ];
+    let cases: &[&[u8]] = &[b"<r>a\rb</r>", b"<r>\r\n</r>", b"<r>text\r</r>"];
     for case in cases {
-        assert_incremental_equivalent(case, &format!("cr incr {:?}", std::str::from_utf8(case).unwrap()));
+        assert_incremental_equivalent(
+            case,
+            &format!("cr incr {:?}", std::str::from_utf8(case).unwrap()),
+        );
     }
 }
 
@@ -1098,7 +1320,10 @@ fn auto_cdata_incremental() {
         b"<r><![CDATA[a]b]]></r>",
     ];
     for case in cases {
-        assert_incremental_equivalent(case, &format!("cdata incr {:?}", std::str::from_utf8(case).unwrap()));
+        assert_incremental_equivalent(
+            case,
+            &format!("cdata incr {:?}", std::str::from_utf8(case).unwrap()),
+        );
     }
 }
 
@@ -1118,7 +1343,10 @@ fn auto_prolog_incremental_edges() {
         b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED>]><r/>",
     ];
     for case in cases {
-        assert_incremental_equivalent(case, &format!("prolog incr {:?}", std::str::from_utf8(case).unwrap()));
+        assert_incremental_equivalent(
+            case,
+            &format!("prolog incr {:?}", std::str::from_utf8(case).unwrap()),
+        );
     }
 }
 
@@ -1222,7 +1450,7 @@ fn auto_epilog_edges() {
 fn auto_cdata_cross_boundary() {
     let xml = b"<r><![CDATA[hello world this is a longer cdata section]]></r>";
     // Split in various positions to exercise cdata_section_processor
-    for split in (10..xml.len()-5).step_by(7) {
+    for split in (10..xml.len() - 5).step_by(7) {
         let mut r = Parser::new(None).unwrap();
         let _ = r.parse(&xml[..split], false);
         let rs = r.parse(&xml[split..], true) as u32;
@@ -1245,7 +1473,10 @@ fn auto_handler_setters_combined() {
     p.set_element_handlers(Some(Box::new(|_, _| {})), Some(Box::new(|_| {})));
     p.set_cdata_section_handlers(Some(Box::new(|| {})), Some(Box::new(|| {})));
     p.set_doctype_decl_handlers(Some(Box::new(|_, _, _, _| {})), Some(Box::new(|| {})));
-    p.set_namespace_decl_handlers(Some(Box::new(|_: Option<&str>, _: &str| {})), Some(Box::new(|_: Option<&str>| {})));
+    p.set_namespace_decl_handlers(
+        Some(Box::new(|_: Option<&str>, _: &str| {})),
+        Some(Box::new(|_: Option<&str>| {})),
+    );
     p.set_default_handler_expand(Some(Box::new(|_: &[u8]| {})));
     let s = p.parse(b"<!DOCTYPE r [<!ELEMENT r EMPTY>]><r/>", true);
     assert_eq!(s, XmlStatus::Ok);
@@ -1272,14 +1503,17 @@ fn auto_new_ns_with_namespace() {
     // C namespace parser
     let c = unsafe {
         let p = expat_sys::XML_ParserCreateNS(std::ptr::null(), b'\n' as i8);
-        if p.is_null() { panic!("null"); }
+        if p.is_null() {
+            panic!("null");
+        }
         p
     };
-    let cs = unsafe {
-        expat_sys::XML_Parse(c, xml.as_ptr() as *const c_char, xml.len() as c_int, 1)
-    };
+    let cs =
+        unsafe { expat_sys::XML_Parse(c, xml.as_ptr() as *const c_char, xml.len() as c_int, 1) };
     let ce = unsafe { expat_sys::XML_GetErrorCode(c) };
-    unsafe { expat_sys::XML_ParserFree(c); }
+    unsafe {
+        expat_sys::XML_ParserFree(c);
+    }
     assert_eq!(rs, cs, "ns parser status");
     assert_eq!(re, ce, "ns parser error");
 }
@@ -1308,13 +1542,26 @@ fn auto_handler_setters() {
     p.set_end_doctype_decl_handler(Some(Box::new(|| {})));
     p.set_doctype_decl_handlers(Some(Box::new(|_, _, _, _| {})), Some(Box::new(|| {})));
     p.set_element_decl_handler(Some(Box::new(|_, _| {})));
-    p.set_attlist_decl_handler(Some(Box::new(|_: &str, _: &str, _: &str, _: Option<&str>, _: Option<&str>, _: bool| {})));
-    p.set_xml_decl_handler(Some(Box::new(|_: Option<&str>, _: Option<&str>, _: Option<i32>| {})));
-    p.set_unparsed_entity_decl_handler(Some(Box::new(|_: &str, _: Option<&str>, _: &str, _: Option<&str>| {})));
-    p.set_notation_decl_handler(Some(Box::new(|_: &str, _: Option<&str>, _: &str, _: Option<&str>| {})));
+    p.set_attlist_decl_handler(Some(Box::new(
+        |_: &str, _: &str, _: &str, _: Option<&str>, _: Option<&str>, _: bool| {},
+    )));
+    p.set_xml_decl_handler(Some(Box::new(
+        |_: Option<&str>, _: Option<&str>, _: Option<i32>| {},
+    )));
+    p.set_unparsed_entity_decl_handler(Some(Box::new(
+        |_: &str, _: Option<&str>, _: &str, _: Option<&str>| {},
+    )));
+    p.set_notation_decl_handler(Some(Box::new(
+        |_: &str, _: Option<&str>, _: &str, _: Option<&str>| {},
+    )));
     p.set_start_namespace_decl_handler(Some(Box::new(|_: Option<&str>, _: &str| {})));
-    p.set_namespace_decl_handlers(Some(Box::new(|_: Option<&str>, _: &str| {})), Some(Box::new(|_: Option<&str>| {})));
-    p.set_external_entity_ref_handler(Some(Box::new(|_: &str, _: Option<&str>, _: Option<&str>, _: Option<&str>| true)));
+    p.set_namespace_decl_handlers(
+        Some(Box::new(|_: Option<&str>, _: &str| {})),
+        Some(Box::new(|_: Option<&str>| {})),
+    );
+    p.set_external_entity_ref_handler(Some(Box::new(
+        |_: &str, _: Option<&str>, _: Option<&str>, _: Option<&str>| true,
+    )));
     p.set_skipped_entity_handler(Some(Box::new(|_: &str, _: bool| {})));
 
     // Parse something to verify handlers work
@@ -1522,10 +1769,7 @@ fn auto_entity_multiple_expansion() {
 
 #[test]
 fn auto_entity_empty() {
-    assert_equivalent(
-        b"<!DOCTYPE r [<!ENTITY e ''>]><r>&e;</r>",
-        "empty entity",
-    );
+    assert_equivalent(b"<!DOCTYPE r [<!ENTITY e ''>]><r>&e;</r>", "empty entity");
 }
 
 // ============================================================================
@@ -1569,11 +1813,17 @@ fn auto_xmldecl_handler() {
         let re = &mut r_encoding as *mut String;
         let rs = &mut r_standalone as *mut Option<i32>;
         let mut p = Parser::new(None).unwrap();
-        p.set_xml_decl_handler(Some(Box::new(move |ver: Option<&str>, enc: Option<&str>, sa: Option<i32>| unsafe {
-            if let Some(v) = ver { (*rv).push_str(v); }
-            if let Some(e) = enc { (*re).push_str(e); }
-            *rs = sa;
-        })));
+        p.set_xml_decl_handler(Some(Box::new(
+            move |ver: Option<&str>, enc: Option<&str>, sa: Option<i32>| unsafe {
+                if let Some(v) = ver {
+                    (*rv).push_str(v);
+                }
+                if let Some(e) = enc {
+                    (*re).push_str(e);
+                }
+                *rs = sa;
+            },
+        )));
         p.parse(xml, true);
     }
 
@@ -1615,7 +1865,11 @@ fn auto_xmldecl_handler() {
 
     assert_eq!(r_version, *c_data.version.borrow(), "xmldecl version");
     assert_eq!(r_encoding, *c_data.encoding.borrow(), "xmldecl encoding");
-    assert_eq!(r_standalone.unwrap_or(-1), *c_data.standalone.borrow(), "xmldecl standalone");
+    assert_eq!(
+        r_standalone.unwrap_or(-1),
+        *c_data.standalone.borrow(),
+        "xmldecl standalone"
+    );
 }
 
 // ============================================================================
@@ -1706,4 +1960,3 @@ fn auto_byte_index_incremental() {
 
     assert_eq!(r_idx, c_idx, "byte index incremental");
 }
-

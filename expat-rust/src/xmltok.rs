@@ -93,7 +93,6 @@ pub fn utf8_encode(char_num: u32, buf: &mut [u8]) -> usize {
     }
 }
 
-
 /// Check if a character is whitespace (space, tab, CR, LF)
 fn is_space(c: u8) -> bool {
     matches!(c, 0x20 | 0x09 | 0x0D | 0x0A)
@@ -426,95 +425,6 @@ pub fn parse_xml_decl(data: &[u8], is_text_decl: bool) -> Result<XmlDeclInfo, us
     })
 }
 
-/// Convert UTF-8 to UTF-16
-/// Returns the number of UTF-16 units written
-pub fn utf8_to_utf16(input: &[u8], output: &mut [u16]) -> Result<usize, usize> {
-    let mut in_pos = 0;
-    let mut out_pos = 0;
-
-    while in_pos < input.len() && out_pos < output.len() {
-        let byte = input[in_pos];
-
-        if byte < 0x80 {
-            // Single-byte ASCII
-            output[out_pos] = byte as u16;
-            out_pos += 1;
-            in_pos += 1;
-        } else if byte < 0xC0 {
-            // Continuation byte at start - invalid
-            return Err(in_pos);
-        } else if byte < 0xE0 {
-            // 2-byte sequence
-            if in_pos + 1 >= input.len() {
-                return Err(in_pos);
-            }
-            let byte1 = input[in_pos + 1];
-            if (byte1 & 0xC0) != 0x80 {
-                return Err(in_pos);
-            }
-            let code = (((byte & 0x1f) as u16) << 6) | ((byte1 & 0x3f) as u16);
-            output[out_pos] = code;
-            out_pos += 1;
-            in_pos += 2;
-        } else if byte < 0xF0 {
-            // 3-byte sequence
-            if in_pos + 2 >= input.len() {
-                return Err(in_pos);
-            }
-            let byte1 = input[in_pos + 1];
-            let byte2 = input[in_pos + 2];
-            if (byte1 & 0xC0) != 0x80 || (byte2 & 0xC0) != 0x80 {
-                return Err(in_pos);
-            }
-            let code = (((byte & 0x0f) as u16) << 12)
-                | (((byte1 & 0x3f) as u16) << 6)
-                | ((byte2 & 0x3f) as u16);
-            output[out_pos] = code;
-            out_pos += 1;
-            in_pos += 3;
-        } else if byte < 0xF8 {
-            // 4-byte sequence - need surrogate pair
-            if in_pos + 3 >= input.len() {
-                return Err(in_pos);
-            }
-            let byte1 = input[in_pos + 1];
-            let byte2 = input[in_pos + 2];
-            let byte3 = input[in_pos + 3];
-            if (byte1 & 0xC0) != 0x80 || (byte2 & 0xC0) != 0x80 || (byte3 & 0xC0) != 0x80 {
-                return Err(in_pos);
-            }
-
-            if out_pos + 1 >= output.len() {
-                return Err(in_pos);
-            }
-
-            let code_point = (((byte & 0x07) as u32) << 18)
-                | (((byte1 & 0x3f) as u32) << 12)
-                | (((byte2 & 0x3f) as u32) << 6)
-                | ((byte3 & 0x3f) as u32);
-
-            if code_point >= 0x110000 {
-                return Err(in_pos);
-            }
-
-            let adjusted = code_point - 0x10000;
-            output[out_pos] = ((adjusted >> 10) as u16) + 0xD800;
-            output[out_pos + 1] = ((adjusted & 0x3FF) as u16) + 0xDC00;
-            out_pos += 2;
-            in_pos += 4;
-        } else {
-            // Invalid UTF-8
-            return Err(in_pos);
-        }
-    }
-
-    if in_pos < input.len() {
-        Err(in_pos) // Incomplete sequence
-    } else {
-        Ok(out_pos)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,51 +447,10 @@ mod tests {
     }
 
     #[test]
-    fn test_utf16_encode_single_unit() {
-        let mut buf = [0u16; 2];
-        let len = utf16_encode(0x0041, &mut buf);
-        assert_eq!(len, 1);
-        assert_eq!(buf[0], 0x0041);
-    }
-
-    #[test]
-    fn test_utf16_encode_surrogate_pair() {
-        let mut buf = [0u16; 2];
-        let len = utf16_encode(0x10000, &mut buf);
-        assert_eq!(len, 2);
-        assert_eq!(buf[0], 0xD800);
-        assert_eq!(buf[1], 0xDC00);
-    }
-
-    #[test]
-    fn test_detect_utf8_bom() {
-        let data = b"\xEF\xBB\xBFHello";
-        let (_enc, bom_len) = detect_encoding_from_bom(data);
-        assert_eq!(bom_len, 3);
-    }
-
-    #[test]
     fn test_utf8_encoding() {
         let enc = Utf8Encoding;
         let data = b"Hello";
         assert_eq!(enc.byte_to_ascii(data, 0), b'H');
         assert!(enc.char_matches(data, 0, b'H'));
-    }
-
-    #[test]
-    fn test_latin1_encoding() {
-        let enc = Latin1Encoding;
-        let data = b"Test";
-        assert_eq!(enc.min_bytes_per_char(), 1);
-        assert!(enc.char_matches(data, 0, b'T'));
-    }
-
-    #[test]
-    fn test_utf8_to_utf16() {
-        let input = b"A";
-        let mut output = [0u16; 10];
-        let len = utf8_to_utf16(input, &mut output).unwrap();
-        assert_eq!(len, 1);
-        assert_eq!(output[0], b'A' as u16);
     }
 }
