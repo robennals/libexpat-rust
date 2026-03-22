@@ -2045,6 +2045,17 @@ impl Parser {
                         Vec::new()
                     };
 
+                    // Apply ATTLIST defaults BEFORE namespace processing
+                    // (so xmlns:prefix defaults are picked up)
+                    let specified_count = attrs.len() as i32;
+                    if let Some(defaults) = self.attlist_defaults.get(tag_name) {
+                        for (dname, dval) in defaults {
+                            if !attrs.iter().any(|(n, _)| n == dname) {
+                                attrs.push((dname.clone(), dval.clone()));
+                            }
+                        }
+                    }
+
                     // Process namespaces if enabled
                     let effective_tag_name = if self.ns_enabled {
                         match self.process_namespaces(tag_name, &mut attrs) {
@@ -2055,15 +2066,6 @@ impl Parser {
                         tag_name.to_string()
                     };
 
-                    // Apply ATTLIST defaults and track attribute info
-                    let specified_count = attrs.len() as i32;
-                    if let Some(defaults) = self.attlist_defaults.get(tag_name) {
-                        for (dname, dval) in defaults {
-                            if !attrs.iter().any(|(n, _)| n == dname) {
-                                attrs.push((dname.clone(), dval.clone()));
-                            }
-                        }
-                    }
                     // Normalize tokenized attribute values per XML spec §3.3.3
                     // NMTOKENS, IDREFS, ENTITIES types get whitespace collapsed
                     if let Some(type_map) = self.attlist_types.get(tag_name) {
@@ -2135,8 +2137,17 @@ impl Parser {
                         Vec::new()
                     };
 
-                    // For namespace processing, we need to temporarily bump tag_level
-                    // to track namespace bindings, but we'll restore it after processing
+                    // Apply ATTLIST defaults BEFORE namespace processing
+                    let specified_count = attrs.len() as i32;
+                    if let Some(defaults) = self.attlist_defaults.get(&tag_name) {
+                        for (dname, dval) in defaults {
+                            if !attrs.iter().any(|(n, _)| n == dname) {
+                                attrs.push((dname.clone(), dval.clone()));
+                            }
+                        }
+                    }
+
+                    // For namespace processing, bump tag_level to track bindings
                     if self.ns_enabled {
                         self.tag_level += 1;
                     }
@@ -2150,16 +2161,6 @@ impl Parser {
                     } else {
                         tag_name.clone()
                     };
-
-                    // Apply ATTLIST defaults and track attribute info
-                    let specified_count = attrs.len() as i32;
-                    if let Some(defaults) = self.attlist_defaults.get(&tag_name) {
-                        for (dname, dval) in defaults {
-                            if !attrs.iter().any(|(n, _)| n == dname) {
-                                attrs.push((dname.clone(), dval.clone()));
-                            }
-                        }
-                    }
                     self.n_specified_atts = specified_count * 2;
                     self.id_att_index = -1;
                     if let Some(types) = self.attlist_types.get(&tag_name) {
