@@ -334,7 +334,12 @@ pub unsafe extern "C" fn XML_Parse(
         return XML_STATUS_ERROR;
     }
     let handle = &mut *parser;
-    let data = if s.is_null() || len <= 0 {
+    // Negative len is an error (XML_ERROR_INVALID_ARGUMENT)
+    if len < 0 {
+        handle.parser.set_error(XmlError::InvalidArgument);
+        return XML_STATUS_ERROR;
+    }
+    let data = if s.is_null() || len == 0 {
         &[]
     } else {
         std::slice::from_raw_parts(s as *const u8, len as usize)
@@ -358,10 +363,14 @@ pub unsafe extern "C" fn XML_GetBuffer(parser: XML_Parser, len: c_int) -> *mut c
 #[no_mangle]
 pub unsafe extern "C" fn XML_ParseBuffer(
     parser: XML_Parser,
-    _len: c_int,
+    len: c_int,
     _is_final: c_int,
 ) -> XML_Status_t {
     if parser.is_null() {
+        return XML_STATUS_ERROR;
+    }
+    if len < 0 {
+        (*parser).parser.set_error(XmlError::InvalidArgument);
         return XML_STATUS_ERROR;
     }
     // parse_buffer is a stub in the Rust parser — return error

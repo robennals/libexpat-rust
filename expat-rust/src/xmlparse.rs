@@ -2121,8 +2121,22 @@ impl Parser {
             return XmlStatus::Error;
         }
 
-        // If final, mark as finished
+        // If final, check for incomplete document and mark as finished
         if is_final {
+            // If we never saw a root element, that's an error
+            if !self.seen_root && self.error_code == XmlError::None {
+                self.error_code = XmlError::NoElements;
+                self.parsing_state = ParsingState::Finished;
+                return XmlStatus::Error;
+            }
+            // If root element was opened but not closed, that's unclosed token
+            if self.seen_root && !self.root_closed && self.tag_level > 0
+                && self.error_code == XmlError::None
+            {
+                self.error_code = XmlError::UnclosedToken;
+                self.parsing_state = ParsingState::Finished;
+                return XmlStatus::Error;
+            }
             self.parsing_state = ParsingState::Finished;
         }
 
@@ -2319,6 +2333,11 @@ impl Parser {
     /// Equivalent to XML_GetErrorCode(parser) in C
     pub fn error_code(&self) -> XmlError {
         self.error_code
+    }
+
+    /// Set the error code directly (used by FFI layer for argument validation)
+    pub fn set_error(&mut self, error: XmlError) {
+        self.error_code = error;
     }
 
     /// Get the current line number in the parse
