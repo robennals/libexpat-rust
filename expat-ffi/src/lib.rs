@@ -1897,7 +1897,32 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
                     convert: None,
                     release: None,
                 };
-                handler_fn(enc_data, nb.as_ptr() as _, &mut enc) != 0
+                if handler_fn(enc_data, nb.as_ptr() as _, &mut enc) == 0 {
+                    return false;
+                }
+                // Validate the encoding map (matches C xmltok.c XmlInitUnknownEncoding)
+                let has_converter = enc.convert.is_some();
+                for i in 0..256 {
+                    let c = enc.map[i];
+                    if c == -1 {
+                        if i >= 0x80 && !has_converter {
+                            return false; // High bytes need converter
+                        }
+                    } else if c < -4 {
+                        return false; // Invalid multi-byte indicator
+                    } else if c < 0 {
+                        if !has_converter {
+                            return false; // Multi-byte needs converter
+                        }
+                    } else if c > 0xFFFF {
+                        return false; // Out of Unicode range
+                    } else if c as u32 >= 0xD800 && c as u32 <= 0xDFFF {
+                        return false; // Surrogates invalid
+                    } else if i < 128 && c != i as i32 {
+                        return false; // ASCII must be identity mapped
+                    }
+                }
+                true
             })));
     } else {
         handle.parser.set_unknown_encoding_handler(None);
