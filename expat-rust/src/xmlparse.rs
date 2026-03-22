@@ -508,8 +508,40 @@ impl Parser {
         self.seen_xml_decl = false;
         self.detected_encoding = None;
         self.byte_offset = 0;
+        self.event_cur_byte_count = 0;
+        self.has_param_entity_refs = false;
+        self.dtd_standalone = false;
         self.internal_entities.clear();
+        self.external_entities.clear();
+        self.open_entities.clear();
+        self.get_buffer_data.clear();
+        self.suspended_data.clear();
+        self.suspended_is_final = false;
         self.prolog_state = XmlRoleState::new();
+        // Clear all handlers (matches C parserInit behavior)
+        self.start_element_handler = None;
+        self.end_element_handler = None;
+        self.character_data_handler = None;
+        self.processing_instruction_handler = None;
+        self.comment_handler = None;
+        self.start_cdata_section_handler = None;
+        self.end_cdata_section_handler = None;
+        self.default_handler = None;
+        self.default_handler_expand = None;
+        self.start_doctype_decl_handler = None;
+        self.end_doctype_decl_handler = None;
+        self.element_decl_handler = None;
+        self.attlist_decl_handler = None;
+        self.xml_decl_handler = None;
+        self.entity_decl_handler = None;
+        self.unparsed_entity_decl_handler = None;
+        self.notation_decl_handler = None;
+        self.start_namespace_decl_handler = None;
+        self.end_namespace_decl_handler = None;
+        self.not_standalone_handler = None;
+        self.external_entity_ref_handler = None;
+        self.skipped_entity_handler = None;
+        self.unknown_encoding_handler = None;
         true
     }
 
