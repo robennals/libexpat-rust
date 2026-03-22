@@ -3968,11 +3968,24 @@ impl Parser {
     /// Equivalent to XML_ExternalEntityParserCreate(parser, context, encoding) in C
     pub fn create_external_entity_parser(
         &self,
-        _context: &str,
+        context: &str,
         encoding: Option<&str>,
     ) -> Option<Parser> {
-        // Create a new parser with the specified encoding
-        Parser::new(encoding)
+        let mut child = if self.ns_enabled {
+            Parser::new_ns(encoding, self.ns_separator)?
+        } else {
+            Parser::new(encoding)?
+        };
+        // Inherit DTD state from parent
+        child.internal_entities = self.internal_entities.clone();
+        child.external_entities = self.external_entities.clone();
+        child.attlist_defaults = self.attlist_defaults.clone();
+        child.attlist_types = self.attlist_types.clone();
+        child.dtd_standalone = self.dtd_standalone;
+        child.param_entity_parsing = self.param_entity_parsing;
+        // External entities can start with an XML text declaration
+        // so they stay in prolog mode to handle that, then transition to content
+        Some(child)
     }
 }
 

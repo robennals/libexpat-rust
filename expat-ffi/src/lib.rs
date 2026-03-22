@@ -54,6 +54,18 @@ struct ParserHandle {
     c_end_ns_handler: XML_EndNamespaceDeclHandler,
     c_unknown_encoding_handler: XML_UnknownEncodingHandler,
     c_unknown_encoding_data: *mut c_void,
+    // Content handlers (needed for ext entity parser inheritance)
+    c_start_element_handler: XML_StartElementHandler,
+    c_end_element_handler: XML_EndElementHandler,
+    c_character_data_handler: XML_CharacterDataHandler,
+    c_processing_instruction_handler: XML_ProcessingInstructionHandler,
+    c_comment_handler: XML_CommentHandler,
+    c_default_handler: XML_DefaultHandler,
+    c_start_cdata_handler: XML_StartCdataSectionHandler,
+    c_end_cdata_handler: XML_EndCdataSectionHandler,
+    c_xml_decl_handler: XML_XmlDeclHandler,
+    c_start_doctype_handler: XML_StartDoctypeDeclHandler,
+    c_end_doctype_handler: XML_EndDoctypeDeclHandler,
 }
 
 type XML_Parser = *mut ParserHandle;
@@ -246,6 +258,17 @@ fn new_handle(parser: Parser) -> XML_Parser {
         c_end_ns_handler: None,
         c_unknown_encoding_handler: None,
         c_unknown_encoding_data: ptr::null_mut(),
+        c_start_element_handler: None,
+        c_end_element_handler: None,
+        c_character_data_handler: None,
+        c_processing_instruction_handler: None,
+        c_comment_handler: None,
+        c_default_handler: None,
+        c_start_cdata_handler: None,
+        c_end_cdata_handler: None,
+        c_xml_decl_handler: None,
+        c_start_doctype_handler: None,
+        c_end_doctype_handler: None,
     });
     Box::into_raw(handle)
 }
@@ -706,6 +729,7 @@ pub unsafe extern "C" fn XML_SetStartElementHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_start_element_handler = handler;
 
     if let Some(start_fn) = handler {
         let parser_ptr = parser;
@@ -749,6 +773,7 @@ pub unsafe extern "C" fn XML_SetEndElementHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_end_element_handler = handler;
 
     if let Some(end_fn) = handler {
         let parser_ptr = parser;
@@ -776,6 +801,7 @@ pub unsafe extern "C" fn XML_SetCharacterDataHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_character_data_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -802,6 +828,7 @@ pub unsafe extern "C" fn XML_SetProcessingInstructionHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_processing_instruction_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -829,6 +856,7 @@ pub unsafe extern "C" fn XML_SetCommentHandler(parser: XML_Parser, handler: XML_
         return;
     }
     let handle = &mut *parser;
+    handle.c_comment_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -866,6 +894,7 @@ pub unsafe extern "C" fn XML_SetStartCdataSectionHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_start_cdata_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -888,6 +917,7 @@ pub unsafe extern "C" fn XML_SetEndCdataSectionHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_end_cdata_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -907,6 +937,7 @@ pub unsafe extern "C" fn XML_SetDefaultHandler(parser: XML_Parser, handler: XML_
         return;
     }
     let handle = &mut *parser;
+    handle.c_default_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -972,6 +1003,7 @@ pub unsafe extern "C" fn XML_SetStartDoctypeDeclHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_start_doctype_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -1021,6 +1053,7 @@ pub unsafe extern "C" fn XML_SetEndDoctypeDeclHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_end_doctype_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -1040,6 +1073,7 @@ pub unsafe extern "C" fn XML_SetXmlDeclHandler(parser: XML_Parser, handler: XML_
         return;
     }
     let handle = &mut *parser;
+    handle.c_xml_decl_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -1216,6 +1250,49 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
             // Copy user_data and handler settings from parent (matches C behavior)
             (*new_ptr).user_data = handle.user_data;
             (*new_ptr).use_parser_as_handler_arg = handle.use_parser_as_handler_arg;
+
+            // Copy ext_entity_ref_handler_arg
+            if handle.ext_entity_ref_handler_arg == parser as *mut c_void {
+                (*new_ptr).ext_entity_ref_handler_arg = new_ptr as *mut c_void;
+            } else {
+                (*new_ptr).ext_entity_ref_handler_arg = handle.ext_entity_ref_handler_arg;
+            }
+
+            // Copy content handlers
+            (*new_ptr).c_start_element_handler = handle.c_start_element_handler;
+            (*new_ptr).c_end_element_handler = handle.c_end_element_handler;
+            (*new_ptr).c_character_data_handler = handle.c_character_data_handler;
+            (*new_ptr).c_processing_instruction_handler = handle.c_processing_instruction_handler;
+            (*new_ptr).c_comment_handler = handle.c_comment_handler;
+            (*new_ptr).c_default_handler = handle.c_default_handler;
+            (*new_ptr).c_start_cdata_handler = handle.c_start_cdata_handler;
+            (*new_ptr).c_end_cdata_handler = handle.c_end_cdata_handler;
+            (*new_ptr).c_xml_decl_handler = handle.c_xml_decl_handler;
+            (*new_ptr).c_start_doctype_handler = handle.c_start_doctype_handler;
+            (*new_ptr).c_end_doctype_handler = handle.c_end_doctype_handler;
+
+            // Re-register handlers on child parser (creates closures with correct parser pointer)
+            XML_SetElementHandler(new_ptr, handle.c_start_element_handler, handle.c_end_element_handler);
+            XML_SetCharacterDataHandler(new_ptr, handle.c_character_data_handler);
+            XML_SetProcessingInstructionHandler(new_ptr, handle.c_processing_instruction_handler);
+            XML_SetCommentHandler(new_ptr, handle.c_comment_handler);
+            if handle.c_default_handler.is_some() {
+                XML_SetDefaultHandler(new_ptr, handle.c_default_handler);
+            }
+            XML_SetCdataSectionHandler(new_ptr, handle.c_start_cdata_handler, handle.c_end_cdata_handler);
+            XML_SetXmlDeclHandler(new_ptr, handle.c_xml_decl_handler);
+            XML_SetStartDoctypeDeclHandler(new_ptr, handle.c_start_doctype_handler);
+            XML_SetEndDoctypeDeclHandler(new_ptr, handle.c_end_doctype_handler);
+            if handle.c_ext_entity_ref_handler.is_some() {
+                XML_SetExternalEntityRefHandler(new_ptr, handle.c_ext_entity_ref_handler);
+            }
+            if handle.c_not_standalone_handler.is_some() {
+                XML_SetNotStandaloneHandler(new_ptr, handle.c_not_standalone_handler);
+            }
+            if handle.c_skipped_entity_handler.is_some() {
+                XML_SetSkippedEntityHandler(new_ptr, handle.c_skipped_entity_handler);
+            }
+
             new_ptr
         }
         None => ptr::null_mut(),
