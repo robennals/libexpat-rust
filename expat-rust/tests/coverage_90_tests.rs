@@ -1800,3 +1800,188 @@ fn cov90_lead2_all_positions() {
         compare_incr(doc, &format!("lead2@{}", doc.len()));
     }
 }
+
+// ============================================================================
+// 63. DTD role state machine — very specific constructs for uncovered arms
+// ============================================================================
+
+#[test]
+fn cov90_dtd_role_edges() {
+    let cases: &[&[u8]] = &[
+        // ATTLIST with NOTATION type (exercises notation attlist state)
+        b"<!DOCTYPE r [<!NOTATION n SYSTEM 'x'><!ATTLIST r a NOTATION (n) #IMPLIED>]><r a='n'/>",
+        // Element with #PCDATA in mixed content
+        b"<!DOCTYPE r [<!ELEMENT r (#PCDATA|a)*><!ELEMENT a EMPTY>]><r>text<a/></r>",
+        // Element with nested group + or separator
+        b"<!DOCTYPE r [<!ELEMENT r (a|b)><!ELEMENT a EMPTY><!ELEMENT b EMPTY>]><r><b/></r>",
+        // Element with nested group + comma separator
+        b"<!DOCTYPE r [<!ELEMENT r (a,b)><!ELEMENT a EMPTY><!ELEMENT b EMPTY>]><r><a/><b/></r>",
+        // Element with deeper nesting
+        b"<!DOCTYPE r [<!ELEMENT r ((a|b),(c|d))><!ELEMENT a EMPTY><!ELEMENT b EMPTY><!ELEMENT c EMPTY><!ELEMENT d EMPTY>]><r><a/><c/></r>",
+        // ATTLIST with ID, IDREF, IDREFS
+        b"<!DOCTYPE r [<!ATTLIST r a ID #IMPLIED b IDREF #IMPLIED c IDREFS #IMPLIED>]><r a='id1' b='id1' c='id1'/>",
+        // ATTLIST with ENTITY, ENTITIES
+        b"<!DOCTYPE r [<!ATTLIST r a ENTITY #IMPLIED b ENTITIES #IMPLIED>]><r a='e' b='e1 e2'/>",
+        // ATTLIST with NMTOKEN, NMTOKENS
+        b"<!DOCTYPE r [<!ATTLIST r a NMTOKEN #IMPLIED b NMTOKENS #IMPLIED>]><r a='tok' b='tok1 tok2'/>",
+        // Multiple ELEMENT declarations with all content spec types
+        b"<!DOCTYPE r [<!ELEMENT r ANY><!ELEMENT a EMPTY><!ELEMENT b (#PCDATA)><!ELEMENT c (a|b)><!ELEMENT d (a,b)>]><r><a/><b>text</b></r>",
+        // Entity with NDATA
+        b"<!DOCTYPE r [<!NOTATION n SYSTEM 'x'><!ENTITY e SYSTEM 'f' NDATA n><!ATTLIST r a ENTITY #IMPLIED>]><r a='e'/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("role_edge {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 64. More content patterns — whitespace handling edges
+// ============================================================================
+
+#[test]
+fn cov90_content_ws_patterns() {
+    let cases: &[&[u8]] = &[
+        b"<r>\r\n</r>",
+        b"<r>\r</r>",
+        b"<r>\n</r>",
+        b"<r>\t</r>",
+        b"<r>  </r>",
+        b"<r>\r\n\r\n</r>",
+        b"<r>\r\r</r>",
+        b"<r>\n\n</r>",
+        b"<r>a\r\nb\r\nc</r>",
+        b"<r>text\rmore\nend</r>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("content_ws {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 65. Scan declaration LEAD paths — incremental
+// ============================================================================
+
+#[test]
+fn cov90_scan_decl_lead_paths() {
+    // DOCTYPE declarations with multi-byte chars in values (not names)
+    let cases: &[&[u8]] = &[
+        "<!DOCTYPE r [<!ENTITY e 'café'>]><r>&e;</r>".as_bytes(),
+        "<!DOCTYPE r [<!ENTITY e '日本語'>]><r>&e;</r>".as_bytes(),
+        "<!DOCTYPE r [<!ENTITY e '😀'>]><r>&e;</r>".as_bytes(),
+        "<!DOCTYPE r SYSTEM \"café.dtd\"><r/>".as_bytes(),
+        "<!DOCTYPE r PUBLIC \"-//Café//EN\" \"café.dtd\"><r/>".as_bytes(),
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("decl_lead {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 66. Handler dispatch — parse with handlers set to cover dispatch branches
+// ============================================================================
+
+#[test]
+fn cov90_all_handlers_active() {
+    // Parse a complex document with ALL handlers registered
+    let xml = br#"<?xml version="1.0"?>
+<!DOCTYPE doc [
+  <!ELEMENT doc (#PCDATA|child)*>
+  <!ELEMENT child EMPTY>
+  <!ENTITY e "hello">
+  <!ATTLIST doc id CDATA "def">
+]>
+<doc>
+  text &amp; &e;
+  <!-- comment -->
+  <?pi data?>
+  <child/>
+  <![CDATA[cdata]]>
+</doc>"#;
+
+    let ev: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let mut p = Parser::new(None).unwrap();
+    let e = &ev as *const RefCell<Vec<String>>;
+    p.set_start_element_handler(Some(Box::new(move |n, a| unsafe {
+        let mut s = format!("SE:{}", n);
+        for (k, v) in a {
+            s.push_str(&format!(" {}={}", k, v));
+        }
+        (*e).borrow_mut().push(s);
+    })));
+    let e2 = e;
+    p.set_end_element_handler(Some(Box::new(move |n| unsafe {
+        (*e2).borrow_mut().push(format!("EE:{}", n));
+    })));
+    let e3 = e;
+    p.set_character_data_handler(Some(Box::new(move |d: &[u8]| unsafe {
+        (*e3)
+            .borrow_mut()
+            .push(format!("CD:{}", std::str::from_utf8(d).unwrap_or("?")));
+    })));
+    let e4 = e;
+    p.set_processing_instruction_handler(Some(Box::new(move |t, d| unsafe {
+        (*e4).borrow_mut().push(format!("PI:{}:{}", t, d));
+    })));
+    let e5 = e;
+    p.set_comment_handler(Some(Box::new(move |t: &[u8]| unsafe {
+        (*e5)
+            .borrow_mut()
+            .push(format!("CM:{}", std::str::from_utf8(t).unwrap_or("?")));
+    })));
+    let e6 = e;
+    p.set_start_cdata_section_handler(Some(Box::new(move || unsafe {
+        (*e6).borrow_mut().push("SCD".into());
+    })));
+    let e7 = e;
+    p.set_end_cdata_section_handler(Some(Box::new(move || unsafe {
+        (*e7).borrow_mut().push("ECD".into());
+    })));
+    let e8 = e;
+    p.set_start_doctype_decl_handler(Some(Box::new(move |n, s, p2, h| unsafe {
+        (*e8).borrow_mut().push(format!(
+            "SDT:{}:{}:{}:{}",
+            n,
+            s.unwrap_or(""),
+            p2.unwrap_or(""),
+            h
+        ));
+    })));
+    let e9 = e;
+    p.set_end_doctype_decl_handler(Some(Box::new(move || unsafe {
+        (*e9).borrow_mut().push("EDT".into());
+    })));
+    let e10 = e;
+    p.set_xml_decl_handler(Some(Box::new(
+        move |v: Option<&str>, enc: Option<&str>, sa: Option<i32>| unsafe {
+            (*e10).borrow_mut().push(format!(
+                "XD:{}:{}:{:?}",
+                v.unwrap_or(""),
+                enc.unwrap_or(""),
+                sa
+            ));
+        },
+    )));
+
+    let rs = p.parse(xml, true) as u32;
+    let r_evts = ev.into_inner();
+
+    // Compare with C
+    let (cs, c_evts) = collect_c_events(xml);
+    // We have more events from xml_decl handler which C doesn't have in our comparison
+    // Just verify status matches and main events match
+    assert_eq!(rs, cs, "all handlers status");
+    assert_eq!(
+        merge_cd(&r_evts[1..]),
+        merge_cd(&c_evts),
+        "all handlers events (skip XD)"
+    );
+}

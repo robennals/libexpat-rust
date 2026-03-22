@@ -1074,10 +1074,3 @@ fn decl_close(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) ->
         _ => common(state, tok),
     }
 }
-
-pub fn prolog_state_init(state: &mut XmlRoleState) {
-    state.state = PrologState::Prolog0;
-    state.document_entity = true;
-    state.include_level = 0;
-    state.in_entity_value = false;
-}

@@ -2908,16 +2908,6 @@ impl Parser {
         todo!("not yet implemented")
     }
 
-    /// Set the alloc tracker maximum amplification
-    pub fn set_alloc_tracker_maximum_amplification(&mut self, _factor: f32) -> bool {
-        todo!("not yet implemented")
-    }
-
-    /// Set the alloc tracker activation threshold
-    pub fn set_alloc_tracker_activation_threshold(&mut self, _threshold: u64) -> bool {
-        todo!("not yet implemented")
-    }
-
     /// Set reparse deferral enabled
     pub fn set_reparse_deferral_enabled(&mut self, enabled: bool) -> bool {
         self.reparse_deferral_enabled = enabled;
@@ -2934,21 +2924,6 @@ impl Parser {
     ) -> Option<Parser> {
         // Create a new parser with the specified encoding
         Parser::new(encoding)
-    }
-
-    /// Allocate memory using the parser's memory management
-    pub fn mem_malloc(&mut self, _size: usize) -> Option<*mut u8> {
-        todo!("not yet implemented")
-    }
-
-    /// Reallocate memory using the parser's memory management
-    pub fn mem_realloc(&mut self, _ptr: *mut u8, _size: usize) -> Option<*mut u8> {
-        todo!("not yet implemented")
-    }
-
-    /// Free memory using the parser's memory management
-    pub fn mem_free(&mut self, _ptr: *mut u8) {
-        todo!("not yet implemented")
     }
 }
 
