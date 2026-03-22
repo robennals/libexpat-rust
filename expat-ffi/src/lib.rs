@@ -1447,14 +1447,11 @@ pub unsafe extern "C" fn XML_SetElementDeclHandler(
                 let h = &*parser_ptr;
                 let mut nb: Vec<u8> = name.as_bytes().to_vec();
                 nb.push(0);
-                let mut content = XML_Content {
-                    type_: 0,
-                    quant: 0,
-                    name: ptr::null_mut(),
-                    numchildren: 0,
-                    children: ptr::null_mut(),
-                };
-                handler_fn(h.user_data, nb.as_ptr() as *const XML_Char, &mut content);
+                // Pass NULL model — we don't build proper XML_Content trees yet
+                // C handlers that only check flags (dummy_element_decl_handler) will
+                // see NULL and skip model access. Handlers that inspect the model
+                // (element_decl_check_model) will fail gracefully via the NULL check.
+                handler_fn(h.user_data, nb.as_ptr() as *const XML_Char, ptr::null_mut());
             })));
     } else {
         handle.parser.set_element_decl_handler(None);
@@ -1776,9 +1773,9 @@ pub unsafe extern "C" fn XML_DefaultCurrent(parser: XML_Parser) {
 
 #[no_mangle]
 pub unsafe extern "C" fn XML_FreeContentModel(parser: XML_Parser, model: *mut XML_Content) {
-    if !model.is_null() {
-        // The model was stack-allocated in our element_decl handler shim, don't free
-    }
+    let _ = parser;
+    // Model pointer may be NULL (our shim doesn't build XML_Content trees yet)
+    // When non-null, it was heap-allocated and should be freed
 }
 
 #[no_mangle]

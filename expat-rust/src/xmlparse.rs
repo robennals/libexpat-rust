@@ -130,6 +130,15 @@ pub enum ContentQuant {
     Plus = 3,
 }
 
+/// Content model node — represents a node in the element declaration tree
+#[derive(Debug, Clone)]
+pub struct ContentNode {
+    pub content_type: ContentType,
+    pub quant: ContentQuant,
+    pub children: Vec<ContentNode>,
+    pub name: Option<String>,
+}
+
 /// Parameter entity parsing mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamEntityParsing {
@@ -347,6 +356,12 @@ pub struct Parser {
     billion_laughs_activation_threshold: u64,
     /// XML role state machine for prolog parsing
     prolog_state: XmlRoleState,
+    /// Current element declaration name being processed
+    current_element_decl_name: Option<String>,
+    /// Stack of content model groups being built (each is a ContentNode with children)
+    content_model_stack: Vec<ContentNode>,
+    /// Group connectors: 0=none, 1=comma/seq, 2=pipe/choice
+    group_connectors: Vec<u8>,
     /// Namespace bindings stack: each entry is (element_level, prefix, uri, previous_uri)
     /// When an element closes, we pop all bindings at that level
     ns_bindings: Vec<(u32, String, String, Option<String>)>,
@@ -450,6 +465,9 @@ impl Parser {
             billion_laughs_max_amplification: 0.0,
             billion_laughs_activation_threshold: 0,
             prolog_state: XmlRoleState::new(),
+            current_element_decl_name: None,
+            content_model_stack: Vec::new(),
+            group_connectors: Vec::new(),
             ns_bindings: Vec::new(),
             ns_map: HashMap::new(),
             ns_triplets: false,
@@ -549,6 +567,9 @@ impl Parser {
             billion_laughs_max_amplification: 0.0,
             billion_laughs_activation_threshold: 0,
             prolog_state: XmlRoleState::new(),
+            current_element_decl_name: None,
+            content_model_stack: Vec::new(),
+            group_connectors: Vec::new(),
             ns_bindings: Vec::new(),
             ns_map,
             ns_triplets: false,
@@ -615,6 +636,9 @@ impl Parser {
         self.suspended_data.clear();
         self.suspended_is_final = false;
         self.prolog_state = XmlRoleState::new();
+        self.current_element_decl_name = None;
+        self.content_model_stack.clear();
+        self.group_connectors.clear();
         // Reset namespace state
         self.ns_bindings.clear();
         self.ns_map.clear();
@@ -1357,7 +1381,87 @@ impl Parser {
                 XmlError::None
             }
             Role::ElementName => {
-                // Element in ELEMENT declaration
+                // Start of ELEMENT declaration
+                let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.current_element_decl_name = Some(name);
+                self.content_model_stack.clear();
+                self.group_connectors.clear();
+                XmlError::None
+            }
+            Role::ContentEmpty | Role::ContentAny => {
+                // ELEMENT name EMPTY or ANY — call handler immediately
+                if let Some(ref name) = self.current_element_decl_name.clone() {
+                    if let Some(handler) = &mut self.element_decl_handler {
+                        handler(name, "");
+                    }
+                }
+                self.current_element_decl_name = None;
+                XmlError::None
+            }
+            Role::ContentPcdata => {
+                self.content_model_stack.push(ContentNode {
+                    content_type: ContentType::Mixed, quant: ContentQuant::None,
+                    children: Vec::new(), name: None,
+                });
+                XmlError::None
+            }
+            Role::GroupOpen => {
+                self.group_connectors.push(0);
+                self.content_model_stack.push(ContentNode {
+                    content_type: ContentType::Seq, quant: ContentQuant::None,
+                    children: Vec::new(), name: None,
+                });
+                XmlError::None
+            }
+            Role::GroupSequence => {
+                if let Some(last) = self.group_connectors.last_mut() {
+                    if *last == 2 { return XmlError::Syntax; }
+                    *last = 1;
+                }
+                XmlError::None
+            }
+            Role::GroupChoice => {
+                if let Some(last) = self.group_connectors.last_mut() {
+                    if *last == 1 { return XmlError::Syntax; }
+                    *last = 2;
+                }
+                if let Some(node) = self.content_model_stack.last_mut() {
+                    if node.content_type == ContentType::Seq {
+                        node.content_type = ContentType::Choice;
+                    }
+                }
+                XmlError::None
+            }
+            Role::ContentElement => {
+                self.add_content_element(tok_text, ContentQuant::None);
+                XmlError::None
+            }
+            Role::ContentElementOpt => {
+                self.add_content_element(tok_text, ContentQuant::Opt);
+                XmlError::None
+            }
+            Role::ContentElementRep => {
+                self.add_content_element(tok_text, ContentQuant::Rep);
+                XmlError::None
+            }
+            Role::ContentElementPlus => {
+                self.add_content_element(tok_text, ContentQuant::Plus);
+                XmlError::None
+            }
+            Role::GroupClose => {
+                self.close_content_group(ContentQuant::None);
+                XmlError::None
+            }
+            Role::GroupCloseOpt => {
+                self.close_content_group(ContentQuant::Opt);
+                XmlError::None
+            }
+            Role::GroupCloseRep => {
+                self.close_content_group(ContentQuant::Rep);
+                XmlError::None
+            }
+            Role::GroupClosePlus => {
+                self.close_content_group(ContentQuant::Plus);
                 XmlError::None
             }
             Role::Pi => {
@@ -2363,6 +2467,42 @@ impl Parser {
             }
         }
         XmlError::Syntax
+    }
+
+    /// Add a content element child to the current group in the content model stack
+    fn add_content_element(&mut self, tok_text: &[u8], quant: ContentQuant) {
+        let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+        let child = ContentNode {
+            content_type: ContentType::Name, quant,
+            children: Vec::new(), name: Some(name),
+        };
+        if let Some(parent) = self.content_model_stack.last_mut() {
+            parent.children.push(child);
+        }
+    }
+
+    /// Close a content group and either nest it in parent or call the handler
+    fn close_content_group(&mut self, quant: ContentQuant) {
+        self.group_connectors.pop();
+        if self.content_model_stack.len() > 1 {
+            let mut group = self.content_model_stack.pop().unwrap();
+            group.quant = quant;
+            if let Some(parent) = self.content_model_stack.last_mut() {
+                parent.children.push(group);
+            }
+        } else if self.content_model_stack.len() == 1 {
+            // Outermost group — set quant and call handler
+            if let Some(group) = self.content_model_stack.last_mut() {
+                group.quant = quant;
+            }
+            if let Some(ref name) = self.current_element_decl_name.clone() {
+                if let Some(handler) = &mut self.element_decl_handler {
+                    handler(name, "");
+                }
+            }
+            self.current_element_decl_name = None;
+            self.content_model_stack.clear();
+        }
     }
 
     /// - Expand predefined entity references (&amp; &lt; &gt; &apos; &quot;)
