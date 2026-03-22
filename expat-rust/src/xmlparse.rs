@@ -282,6 +282,8 @@ pub struct Parser {
     reparse_deferral_enabled: bool,
     /// Stack of open tag names for mismatch detection
     tag_stack: Vec<String>,
+    /// Stack of flags indicating whether each tag was opened with ns_triplets=true
+    tag_triplet_flags: Vec<bool>,
     /// Whether we've seen the root element
     seen_root: bool,
     /// Whether the root element has been closed
@@ -430,6 +432,7 @@ impl Parser {
             param_entity_parsing: ParamEntityParsing::Never,
             reparse_deferral_enabled: false,
             tag_stack: Vec::new(),
+            tag_triplet_flags: Vec::new(),
             seen_root: false,
             root_closed: false,
             seen_xml_decl: false,
@@ -533,6 +536,7 @@ impl Parser {
             param_entity_parsing: ParamEntityParsing::Never,
             reparse_deferral_enabled: false,
             tag_stack: Vec::new(),
+            tag_triplet_flags: Vec::new(),
             seen_root: false,
             root_closed: false,
             seen_xml_decl: false,
@@ -2068,7 +2072,11 @@ impl Parser {
                 XmlTok::StartTagNoAtts | XmlTok::StartTagWithAtts => {
                     let minbpc = enc.min_bytes_per_char();
                     let raw_name_start = pos + minbpc; // skip '<'
-                    let raw_name_len = xmltok_impl::name_length(enc, data, raw_name_start);
+                    let raw_name_len = if self.ns_enabled {
+                        self.extract_qualified_name(enc, data, raw_name_start)
+                    } else {
+                        xmltok_impl::name_length(enc, data, raw_name_start)
+                    };
                     let tag_name =
                         std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len])
                             .unwrap_or("");
@@ -2146,6 +2154,7 @@ impl Parser {
                     }
 
                     self.tag_stack.push(effective_tag_name.clone());
+                    self.tag_triplet_flags.push(self.ns_triplets);
 
                     if let Some(handler) = &mut self.start_element_handler {
                         let attr_refs: Vec<(&str, &str)> = attrs
@@ -2161,7 +2170,11 @@ impl Parser {
                 XmlTok::EmptyElementNoAtts | XmlTok::EmptyElementWithAtts => {
                     let minbpc = enc.min_bytes_per_char();
                     let raw_name_start = pos + minbpc;
-                    let raw_name_len = xmltok_impl::name_length(enc, data, raw_name_start);
+                    let raw_name_len = if self.ns_enabled {
+                        self.extract_qualified_name(enc, data, raw_name_start)
+                    } else {
+                        xmltok_impl::name_length(enc, data, raw_name_start)
+                    };
                     let tag_name =
                         std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len])
                             .unwrap_or("")
@@ -2260,7 +2273,11 @@ impl Parser {
 
                     let minbpc = enc.min_bytes_per_char();
                     let raw_name_start = pos + minbpc * 2; // skip '</'
-                    let raw_name_len = xmltok_impl::name_length(enc, data, raw_name_start);
+                    let raw_name_len = if self.ns_enabled {
+                        self.extract_qualified_name(enc, data, raw_name_start)
+                    } else {
+                        xmltok_impl::name_length(enc, data, raw_name_start)
+                    };
                     let tag_name =
                         std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len])
                             .unwrap_or("");
@@ -2277,8 +2294,11 @@ impl Parser {
 
                     // Check tag mismatch — set event position to rawName
                     // (matches C: *eventPP = rawName)
+                    // Compare the canonical form (without triplet suffix) to handle ns_triplets changes
                     if let Some(expected) = self.tag_stack.last() {
-                        if expected != &effective_tag_name {
+                        let expected_canonical = self.strip_triplet(expected);
+                        let actual_canonical = self.strip_triplet(&effective_tag_name);
+                        if expected_canonical != actual_canonical {
                             self.event_pos = raw_name_start;
                             return (XmlError::TagMismatch, raw_name_start);
                         }
@@ -2288,10 +2308,30 @@ impl Parser {
                     }
 
                     self.tag_stack.pop();
+                    let was_triplet = self.tag_triplet_flags.pop().unwrap_or(false);
                     self.tag_level = self.tag_level.saturating_sub(1);
 
+                    // If the element was opened with ns_triplets=true, we should call the handler
+                    // with the triplet format, even if ns_triplets is now false
+                    let handler_name = if was_triplet && !self.ns_triplets && self.ns_separator != '\0' {
+                        // Need to add the prefix back
+                        // The effective_tag_name is in format "uri + sep + local"
+                        // We need to find the prefix from the raw tag name
+                        if let Some(colon_pos) = tag_name.find(':') {
+                            let prefix = &tag_name[..colon_pos];
+                            format!("{}{}{}", effective_tag_name, self.ns_separator, prefix)
+                        } else {
+                            effective_tag_name.clone()
+                        }
+                    } else if !was_triplet && self.ns_triplets && self.ns_separator != '\0' {
+                        // Need to remove the prefix
+                        self.strip_triplet(&effective_tag_name)
+                    } else {
+                        effective_tag_name.clone()
+                    };
+
                     if let Some(handler) = &mut self.end_element_handler {
-                        handler(&effective_tag_name);
+                        handler(&handler_name);
                     } else if self.default_handler.is_some() {
                         self.report_default(enc, data, pos, next);
                     }
@@ -3086,6 +3126,65 @@ impl Parser {
     fn report_default<E: Encoding>(&mut self, _enc: &E, data: &[u8], start: usize, end: usize) {
         if let Some(handler) = &mut self.default_handler {
             handler(&data[start..end]);
+        }
+    }
+
+    /// Strip the prefix from a namespace-expanded name
+    /// If the name is in format "uri + sep + local + sep + prefix", returns "uri + sep + local"
+    /// Otherwise returns the name as-is
+    fn strip_triplet(&self, name: &str) -> String {
+        // Count separator occurrences
+        let sep_count = name.matches(self.ns_separator).count();
+
+        // If we have exactly 2 separators, this is a triplet format
+        // Format: "uri + sep + local + sep + prefix"
+        // We want to return: "uri + sep + local"
+        if sep_count == 2 && self.ns_separator != '\0' {
+            // Find the last separator
+            if let Some(last_sep_pos) = name.rfind(self.ns_separator) {
+                return name[..last_sep_pos].to_string();
+            }
+        }
+
+        name.to_string()
+    }
+
+    /// Extract a qualified name including colons for namespace-qualified names
+    /// In non-namespace mode, uses standard name_length.
+    /// In namespace mode, includes colons as part of the name.
+    fn extract_qualified_name<E: Encoding>(&self, enc: &E, data: &[u8], pos: usize) -> usize {
+        if !self.ns_enabled {
+            return xmltok_impl::name_length(enc, data, pos);
+        }
+
+        // For namespace mode, extract name that may include colons
+        let start = pos;
+        let minbpc = enc.min_bytes_per_char();
+        let mut ptr = pos;
+
+        loop {
+            match enc.byte_type(data, ptr) {
+                crate::char_tables::ByteType::LEAD2 | crate::char_tables::ByteType::LEAD3 | crate::char_tables::ByteType::LEAD4 => {
+                    let n = match enc.byte_type(data, ptr) {
+                        crate::char_tables::ByteType::LEAD2 => 2,
+                        crate::char_tables::ByteType::LEAD3 => 3,
+                        crate::char_tables::ByteType::LEAD4 => 4,
+                        _ => unreachable!(),
+                    };
+                    ptr += n;
+                }
+                crate::char_tables::ByteType::NMSTRT
+                | crate::char_tables::ByteType::HEX
+                | crate::char_tables::ByteType::DIGIT
+                | crate::char_tables::ByteType::NAME
+                | crate::char_tables::ByteType::MINUS
+                | crate::char_tables::ByteType::COLON => {
+                    ptr += minbpc;
+                }
+                _ => {
+                    return ptr - start;
+                }
+            }
         }
     }
 
