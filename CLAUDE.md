@@ -6,7 +6,9 @@ A memory-safe, idiomatic Rust reimplementation of libexpat.
 
 ```
 expat-rust/       Main Rust crate (the parser)
+expat-ffi/        C-compatible FFI layer — drop-in libexpat replacement
 expat-sys/        FFI bindings to C libexpat (for comparison testing)
+c-tests-runner/   Runs the original C test suite against our Rust parser
 expat/            Git submodule — upstream libexpat at R_2_7_5
 meta/             Porting process artifacts (scripts, plans, agent prompts)
 docs/             Documentation (architecture, design decisions, porting process)
@@ -15,22 +17,71 @@ docs/             Documentation (architecture, design decisions, porting process
 ## Building and Testing
 
 ```bash
-# Build
+# Build everything
+cargo build
+
+# Build just the parser
 cargo build -p expat-rust
-
-# Run pure Rust tests (no C compiler needed)
-RUST_TEST_THREADS=1 cargo test -p expat-rust
-
-# Run FFI comparison tests (requires C compiler for expat-sys)
-RUST_TEST_THREADS=1 cargo test -p expat-rust --test c_comparison_tests
-RUST_TEST_THREADS=1 cargo test -p expat-rust --test comprehensive_comparison
-RUST_TEST_THREADS=1 cargo test -p expat-rust --test generated_comparison_tests
-
-# Run a single test
-RUST_TEST_THREADS=1 cargo test -p expat-rust --test basic_tests_0 test_name -- --exact
 ```
 
 Always use `RUST_TEST_THREADS=1` to avoid resource contention.
+
+### Test Suites
+
+There are four distinct test suites, each testing different aspects:
+
+#### 1. Pure Rust Unit Tests (`expat-rust`)
+Hand-written Rust tests exercising the parser's public API directly.
+```bash
+RUST_TEST_THREADS=1 cargo test -p expat-rust
+```
+
+#### 2. FFI Comparison Tests (`expat-rust` integration tests)
+Parse the same XML with both the Rust parser and C libexpat, compare
+(status, error_code). Catches behavioral divergences for ~399 inputs.
+Requires a C compiler (builds C libexpat via `expat-sys`).
+```bash
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test c_comparison_tests
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test comprehensive_comparison
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test generated_comparison_tests
+```
+
+#### 3. C Test Suite via FFI (`c-tests-runner`)
+Compiles the **original C libexpat test suite** (basic_tests.c, ns_tests.c,
+misc_tests.c, acc_tests.c — 303 tests excluding alloc tests) and links
+them against `expat-ffi` (our Rust parser's C API). This is the most
+comprehensive test — it verifies not just parse status but handler callback
+data, error positions, encoding handling, external entities, and more.
+```bash
+# Build the test runner
+cargo build -p c-tests-runner
+
+# Run (uses lldb to handle C assert() aborts gracefully):
+lldb -b -o "run" -o "quit" ./target/debug/c-tests-runner
+
+# Count results:
+lldb -b -o "run" -o "quit" ./target/debug/c-tests-runner 2>&1 | grep -c "^PASS:"
+lldb -b -o "run" -o "quit" ./target/debug/c-tests-runner 2>&1 | grep -c "^FAIL "
+```
+
+Current status: **75 pass, 56 fail** of 131 tests reached (process aborts
+at test #132 due to C `assert()`). The 56 failures break down as:
+- **21 Namespace** — namespace processing not fully implemented
+- **20 Parser bugs** — genuine behavioral differences from C libexpat
+- **7 Stubs** — features not implemented (accounting, custom allocators)
+- **3 Suspend/resume** — suspend within handler callbacks
+- **5 Alloc** — custom memory allocator enforcement (N/A for Rust)
+
+#### 4. expat-ffi C Integration Tests
+Small standalone C test file verifying the FFI layer works from C.
+```bash
+cd expat-ffi/tests && make test
+```
+
+### Running a Single Test
+```bash
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test basic_tests_0 test_name -- --exact
+```
 
 ## Architecture
 
@@ -44,6 +95,10 @@ expat-rust/src/
   char_tables.rs   Character classification tables
   nametab.rs       Name character lookup tables
   ascii.rs         ASCII character constants
+
+expat-ffi/src/
+  lib.rs           C ABI shim — wraps Parser with extern "C" functions
+                   matching the libexpat API (74 functions)
 ```
 
 Parse flow: `parse()` → `run_processor()` → processor (prolog/content/epilog) → tokenizer → handlers
@@ -52,10 +107,18 @@ See [docs/architecture.md](docs/architecture.md) for details.
 
 ## Key Rules
 
-1. **Match C behavior exactly** — The C library's actual behavior (via FFI comparison tests) is ground truth
+1. **Match C behavior exactly** — The C library's actual behavior (via FFI comparison tests and C test suite) is ground truth
 2. **Never edit xmlparse.rs with parallel agents** — They clobber each other's changes
 3. **Zero `unsafe`** — No unsafe blocks anywhere in expat-rust
 4. **Use Rust standard library types** — `String`/`Vec`/`HashMap`, not C-style pools or hash tables
+
+## expat-ffi Notes
+
+The FFI layer (`expat-ffi`) has two critical design requirements:
+
+1. **`user_data` must be the first field** of `ParserHandle` (`#[repr(C)]`) because the C macro `XML_GetUserData(parser)` reads `*(void**)(parser)` directly.
+
+2. **Handler closures must read `user_data` at call time** (via `(*parser_ptr).user_data`), not capture it at registration time. C code commonly calls `XML_SetUserData()` after `XML_SetElementHandler()`.
 
 ## Porting Tools (in meta/)
 

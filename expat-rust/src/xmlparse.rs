@@ -2110,6 +2110,11 @@ impl Parser {
             }
         }
 
+        // If the parser was suspended during a handler callback, return Suspended
+        if self.parsing_state == ParsingState::Suspended {
+            return XmlStatus::Suspended;
+        }
+
         // If an error occurred during processing, return error
         if self.error_code != XmlError::None {
             self.parsing_state = ParsingState::Finished;
@@ -2273,6 +2278,18 @@ impl Parser {
         if self.parsing_state == ParsingState::Finished {
             self.error_code = XmlError::Finished;
             return XmlStatus::Error;
+        }
+
+        if self.parsing_state == ParsingState::Suspended {
+            if resumable {
+                // Can't suspend an already-suspended parser
+                self.error_code = XmlError::Suspended;
+                return XmlStatus::Error;
+            } else {
+                // Aborting a suspended parser is allowed — just finish it
+                self.parsing_state = ParsingState::Finished;
+                return XmlStatus::Ok;
+            }
         }
 
         if resumable {

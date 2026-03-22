@@ -1692,16 +1692,25 @@ pub unsafe extern "C" fn testingAccountingGetCountBytesIndirect(_parser: XML_Par
 #[no_mangle]
 pub unsafe extern "C" fn unsignedCharToPrintable(c: u8) -> *const c_char {
     static mut BUF: [u8; 8] = [0u8; 8];
-    if c >= 0x20 && c < 0x7f {
-        BUF[0] = c;
-        BUF[1] = 0;
-    } else {
-        let hex = b"0123456789ABCDEF";
-        BUF[0] = b'\\';
-        BUF[1] = b'x';
-        BUF[2] = hex[(c >> 4) as usize];
-        BUF[3] = hex[(c & 0xf) as usize];
-        BUF[4] = 0;
+    match c {
+        0 => return b"\\0\0".as_ptr() as *const c_char,
+        9 => return b"\\t\0".as_ptr() as *const c_char,
+        10 => return b"\\n\0".as_ptr() as *const c_char,
+        13 => return b"\\r\0".as_ptr() as *const c_char,
+        b'\\' => return b"\\\\\0".as_ptr() as *const c_char,
+        b'"' => return b"\\\"\0".as_ptr() as *const c_char,
+        0x20..=0x7e => {
+            BUF[0] = c;
+            BUF[1] = 0;
+        }
+        _ => {
+            let hex = b"0123456789ABCDEF";
+            BUF[0] = b'\\';
+            BUF[1] = b'x';
+            BUF[2] = hex[(c >> 4) as usize];
+            BUF[3] = hex[(c & 0xf) as usize];
+            BUF[4] = 0;
+        }
     }
     BUF.as_ptr() as *const c_char
 }
