@@ -1191,10 +1191,3 @@ pub fn prolog_state_init(state: &mut XmlRoleState) {
     state.include_level = 0;
     state.in_entity_value = false;
 }
-
-pub fn prolog_state_init_external_entity(state: &mut XmlRoleState) {
-    state.state = PrologState::ExternalSubset0;
-    state.document_entity = false;
-    state.include_level = 0;
-    state.in_entity_value = false;
-}
