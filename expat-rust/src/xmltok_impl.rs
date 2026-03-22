@@ -117,10 +117,7 @@ const ASCII_M: u8 = 0x6D;
 const ASCII_L: u8 = 0x6C;
 const ASCII_GT: u8 = 0x3E;
 const ASCII_RSQB: u8 = 0x5D;
-const ASCII_LSQB: u8 = 0x5B;
-const ASCII_EXCL: u8 = 0x21;
 const ASCII_SEMI: u8 = 0x3B;
-const ASCII_TAB: u8 = 0x09;
 const ASCII_QUOT: u8 = 0x22;
 const ASCII_APOS: u8 = 0x27;
 
@@ -365,12 +362,42 @@ pub fn scan_pi<E: Encoding>(
         });
     }
 
-    if !is_nmstrt_char(enc.byte_type(data, pos)) {
-        return Err(pos);
-    }
-
     let target = pos;
-    pos += enc.min_bytes_per_char();
+    match enc.byte_type(data, pos) {
+        ByteType::LEAD2 => {
+            if end - pos < 2 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            pos += 2;
+        }
+        ByteType::LEAD3 => {
+            if end - pos < 3 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            pos += 3;
+        }
+        ByteType::LEAD4 => {
+            if end - pos < 4 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            pos += 4;
+        }
+        bt if is_nmstrt_char(bt) => {
+            pos += enc.min_bytes_per_char();
+        }
+        _ => {
+            return Err(pos);
+        }
+    }
 
     while enc.has_char(data, pos, end) {
         match enc.byte_type(data, pos) {
@@ -458,6 +485,33 @@ pub fn scan_pi<E: Encoding>(
                 }
                 return Err(pos);
             }
+            ByteType::LEAD2 => {
+                if end - pos < 2 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                pos += 2;
+            }
+            ByteType::LEAD3 => {
+                if end - pos < 3 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                pos += 3;
+            }
+            ByteType::LEAD4 => {
+                if end - pos < 4 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                pos += 4;
+            }
             _ if is_name_char(enc.byte_type(data, pos)) => {
                 pos += enc.min_bytes_per_char();
             }
@@ -507,7 +561,7 @@ pub fn cdata_section_tok<E: Encoding>(
     enc: &E,
     data: &[u8],
     mut pos: usize,
-    mut end: usize,
+    end: usize,
 ) -> Result<TokenResult, usize> {
     let minbpc = enc.min_bytes_per_char();
 
@@ -516,20 +570,6 @@ pub fn cdata_section_tok<E: Encoding>(
             token: XmlTok::None,
             next_pos: pos,
         });
-    }
-
-    if minbpc > 1 {
-        let n = end - pos;
-        if n & (minbpc - 1) != 0 {
-            let n = n & !(minbpc - 1);
-            if n == 0 {
-                return Ok(TokenResult {
-                    token: XmlTok::Partial,
-                    next_pos: pos,
-                });
-            }
-            end = pos + n;
-        }
     }
 
     match enc.byte_type(data, pos) {
@@ -1366,7 +1406,7 @@ pub fn content_tok<E: Encoding>(
     enc: &E,
     data: &[u8],
     mut pos: usize,
-    mut end: usize,
+    end: usize,
 ) -> Result<TokenResult, usize> {
     let minbpc = enc.min_bytes_per_char();
 
@@ -1375,20 +1415,6 @@ pub fn content_tok<E: Encoding>(
             token: XmlTok::None,
             next_pos: pos,
         });
-    }
-
-    if minbpc > 1 {
-        let n = end - pos;
-        if n & (minbpc - 1) != 0 {
-            let n = n & !(minbpc - 1);
-            if n == 0 {
-                return Ok(TokenResult {
-                    token: XmlTok::Partial,
-                    next_pos: pos,
-                });
-            }
-            end = pos + n;
-        }
     }
 
     match enc.byte_type(data, pos) {
@@ -1731,7 +1757,7 @@ pub fn prolog_tok<E: Encoding>(
     enc: &E,
     data: &[u8],
     mut pos: usize,
-    mut end: usize,
+    end: usize,
 ) -> Result<TokenResult, usize> {
     let minbpc = enc.min_bytes_per_char();
 
@@ -1740,20 +1766,6 @@ pub fn prolog_tok<E: Encoding>(
             token: XmlTok::None,
             next_pos: pos,
         });
-    }
-
-    if minbpc > 1 {
-        let n = end - pos;
-        if n & (minbpc - 1) != 0 {
-            let n = n & !(minbpc - 1);
-            if n == 0 {
-                return Ok(TokenResult {
-                    token: XmlTok::Partial,
-                    next_pos: pos,
-                });
-            }
-            end = pos + n;
-        }
     }
 
     match enc.byte_type(data, pos) {
@@ -2289,155 +2301,6 @@ pub fn entity_value_tok<E: Encoding>(
     })
 }
 
-/// Scan ignore section token (DTD only)
-pub fn ignore_section_tok<E: Encoding>(
-    enc: &E,
-    data: &[u8],
-    mut pos: usize,
-    mut end: usize,
-) -> Result<TokenResult, usize> {
-    let minbpc = enc.min_bytes_per_char();
-
-    if minbpc > 1 {
-        let n = end - pos;
-        if n & (minbpc - 1) != 0 {
-            let n = n & !(minbpc - 1);
-            end = pos + n;
-        }
-    }
-
-    let mut level = 0;
-
-    while enc.has_char(data, pos, end) {
-        match enc.byte_type(data, pos) {
-            ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
-                return Err(pos);
-            }
-            ByteType::LT => {
-                pos += minbpc;
-                if !enc.has_char(data, pos, end) {
-                    return Ok(TokenResult {
-                        token: XmlTok::Partial,
-                        next_pos: pos,
-                    });
-                }
-                if enc.char_matches(data, pos, ASCII_EXCL) {
-                    pos += minbpc;
-                    if !enc.has_char(data, pos, end) {
-                        return Ok(TokenResult {
-                            token: XmlTok::Partial,
-                            next_pos: pos,
-                        });
-                    }
-                    if enc.char_matches(data, pos, ASCII_LSQB) {
-                        level += 1;
-                        pos += minbpc;
-                    }
-                }
-            }
-            ByteType::RSQB => {
-                pos += minbpc;
-                if !enc.has_char(data, pos, end) {
-                    return Ok(TokenResult {
-                        token: XmlTok::Partial,
-                        next_pos: pos,
-                    });
-                }
-                if enc.char_matches(data, pos, ASCII_RSQB) {
-                    pos += minbpc;
-                    if !enc.has_char(data, pos, end) {
-                        return Ok(TokenResult {
-                            token: XmlTok::Partial,
-                            next_pos: pos,
-                        });
-                    }
-                    if enc.char_matches(data, pos, ASCII_GT) {
-                        pos += minbpc;
-                        if level == 0 {
-                            return Ok(TokenResult {
-                                token: XmlTok::IgnoreSect,
-                                next_pos: pos,
-                            });
-                        }
-                        level -= 1;
-                    }
-                }
-            }
-            _ => {
-                pos += minbpc;
-            }
-        }
-    }
-
-    Ok(TokenResult {
-        token: XmlTok::Partial,
-        next_pos: pos,
-    })
-}
-
-/// Check if a character is valid in a public ID
-pub fn is_public_id<E: Encoding>(
-    enc: &E,
-    data: &[u8],
-    mut ptr: usize,
-    mut end: usize,
-) -> (bool, usize) {
-    let minbpc = enc.min_bytes_per_char();
-    ptr += minbpc;
-    end -= minbpc;
-
-    while enc.has_char(data, ptr, end) {
-        match enc.byte_type(data, ptr) {
-            ByteType::DIGIT
-            | ByteType::HEX
-            | ByteType::MINUS
-            | ByteType::APOS
-            | ByteType::LPAR
-            | ByteType::RPAR
-            | ByteType::PLUS
-            | ByteType::COMMA
-            | ByteType::SOL
-            | ByteType::EQUALS
-            | ByteType::QUEST
-            | ByteType::CR
-            | ByteType::LF
-            | ByteType::SEMI
-            | ByteType::EXCL
-            | ByteType::AST
-            | ByteType::PERCNT
-            | ByteType::NUM => {
-                ptr += minbpc;
-            }
-            ByteType::S => {
-                if enc.char_matches(data, ptr, ASCII_TAB) {
-                    return (false, ptr);
-                }
-                ptr += minbpc;
-            }
-            ByteType::NAME | ByteType::NMSTRT => {
-                if (enc.byte_to_ascii(data, ptr) & 0x80) == 0 {
-                    ptr += minbpc;
-                } else {
-                    return (false, ptr);
-                }
-            }
-            _ => {
-                let c = enc.byte_to_ascii(data, ptr);
-                match c {
-                    0x24 | 0x40 => {
-                        ptr += minbpc;
-                    }
-                    _ => {
-                        return (false, ptr);
-                    }
-                }
-            }
-        }
-    }
-
-    (true, ptr)
-}
-
 /// Get character reference number
 pub fn char_ref_number<E: Encoding>(enc: &E, data: &[u8], mut pos: usize) -> i32 {
     let mut result: i32 = 0;
@@ -2547,29 +2410,6 @@ pub fn predefined_entity_name<E: Encoding>(enc: &E, data: &[u8], ptr: usize, end
         },
         _ => 0,
     }
-}
-
-/// Check if name matches ASCII string
-pub fn name_matches_ascii<E: Encoding>(
-    enc: &E,
-    data: &[u8],
-    mut ptr1: usize,
-    end1: usize,
-    ptr2: &[u8],
-) -> bool {
-    let minbpc = enc.min_bytes_per_char();
-
-    for &c in ptr2 {
-        if end1 - ptr1 < minbpc {
-            return false;
-        }
-        if !enc.char_matches(data, ptr1, c) {
-            return false;
-        }
-        ptr1 += minbpc;
-    }
-
-    ptr1 == end1
 }
 
 /// Get length of a name
