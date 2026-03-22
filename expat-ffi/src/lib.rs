@@ -9,6 +9,14 @@
 //! ```
 //!
 //! This produces `libexpat.so` (Linux), `libexpat.dylib` (macOS), or `expat.dll` (Windows).
+//!
+//! ## Known limitations
+//!
+//! - **`XML_GetCurrentByteIndex` / `XML_GetCurrentByteCount`**: For non-UTF-8 input
+//!   (UTF-16, ISO-8859-1), byte offsets refer to the internally transcoded UTF-8 stream,
+//!   not the original input bytes. The Rust parser transcodes all input to UTF-8 before
+//!   tokenizing (see `docs/architecture.md` for rationale). For UTF-8 input (>99% of
+//!   real-world XML), byte offsets are identical to C libexpat.
 
 #![allow(non_camel_case_types, non_snake_case, dead_code, private_interfaces)]
 
