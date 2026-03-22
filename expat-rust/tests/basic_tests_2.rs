@@ -81,7 +81,11 @@ fn test_set_base() {
     let new_base = "/local/file/name.xml";
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
-    assert_eq!(parser.set_base(new_base), XmlStatus::Ok, "Failed to set base");
+    assert_eq!(
+        parser.set_base(new_base),
+        XmlStatus::Ok,
+        "Failed to set base"
+    );
     assert_eq!(parser.base(), Some(new_base), "Base setting not correct");
 }
 
@@ -210,7 +214,11 @@ fn test_trailing_cr() {
 
     let result = parser.parse(text, true);
     // C expects this to fail - unclosed <doc> tag on final parse
-    assert_eq!(result, XmlStatus::Error, "Should fault unclosed doc on trailing CR");
+    assert_eq!(
+        result,
+        XmlStatus::Error,
+        "Should fault unclosed doc on trailing CR"
+    );
 }
 
 // Test 122: test_ext_entity_trailing_cr
@@ -379,7 +387,11 @@ fn test_not_predefined_entities() {
     // This should fail because &alpha; is not a predefined entity
     let result = parser.parse(text, true);
     assert_ne!(result, XmlStatus::Ok, "Should fail on undefined entity");
-    assert_eq!(parser.error_code(), XmlError::UndefinedEntity, "Wrong error code");
+    assert_eq!(
+        parser.error_code(),
+        XmlError::UndefinedEntity,
+        "Wrong error code"
+    );
 }
 
 // Test 140: test_ignore_section
@@ -446,7 +458,11 @@ fn test_bad_public_doctype() {
     let mut parser = Parser::new(None).expect("Parser creation failed");
 
     let result = parser.parse(text, true);
-    assert_ne!(result, XmlStatus::Ok, "Should fail on bad PUBLIC identifier");
+    assert_ne!(
+        result,
+        XmlStatus::Ok,
+        "Should fail on bad PUBLIC identifier"
+    );
 }
 
 // Test 149: test_attribute_enum_value

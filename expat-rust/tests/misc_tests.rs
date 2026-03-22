@@ -43,7 +43,10 @@ fn test_misc_version() {
     assert!(!version_text.is_empty(), "Could not obtain version text");
 
     // Basic sanity check that version text contains expected format
-    assert!(version_text.contains("expat"), "Version text should contain 'expat'");
+    assert!(
+        version_text.contains("expat"),
+        "Version text should contain 'expat'"
+    );
 }
 
 // Test feature information
@@ -120,7 +123,11 @@ fn test_misc_stop_during_end_handler_issue_240_1() {
     );
 
     let result = parser.parse(doc, true);
-    assert_eq!(result, XmlStatus::Error, "Stopping the parser did not work as expected");
+    assert_eq!(
+        result,
+        XmlStatus::Error,
+        "Stopping the parser did not work as expected"
+    );
 }
 
 // Test stopping parser during end handler (issue 240, case 2)
@@ -136,7 +143,11 @@ fn test_misc_stop_during_end_handler_issue_240_2() {
     );
 
     let result = parser.parse(doc, true);
-    assert_eq!(result, XmlStatus::Error, "Stopping the parser did not work as expected");
+    assert_eq!(
+        result,
+        XmlStatus::Error,
+        "Stopping the parser did not work as expected"
+    );
 }
 
 // Deny internal entity closing doctype (issue 317)
@@ -155,14 +166,26 @@ fn test_misc_tag_mismatch_reset_leak() {
 
     let result = parser.parse(text.as_bytes(), true);
     assert_ne!(result, XmlStatus::Ok, "Call to parse was expected to fail");
-    assert_eq!(parser.error_code(), XmlError::TagMismatch, "Expected TAG_MISMATCH error");
+    assert_eq!(
+        parser.error_code(),
+        XmlError::TagMismatch,
+        "Expected TAG_MISMATCH error"
+    );
 
     // Reset and try again
     parser.reset(None);
 
     let result = parser.parse(text.as_bytes(), true);
-    assert_ne!(result, XmlStatus::Ok, "Call to parse was expected to fail after reset");
-    assert_eq!(parser.error_code(), XmlError::TagMismatch, "Expected TAG_MISMATCH error after reset");
+    assert_ne!(
+        result,
+        XmlStatus::Ok,
+        "Call to parse was expected to fail after reset"
+    );
+    assert_eq!(
+        parser.error_code(),
+        XmlError::TagMismatch,
+        "Expected TAG_MISMATCH error after reset"
+    );
 }
 
 // Test creating external entity parser with null context
@@ -240,11 +263,23 @@ fn test_misc_stopparser_rejects_unstarted_parser() {
     for resumable in &cases {
         let mut parser = Parser::new(None).expect("Parser creation failed");
 
-        assert_eq!(parser.error_code(), XmlError::None, "New parser should have no error");
+        assert_eq!(
+            parser.error_code(),
+            XmlError::None,
+            "New parser should have no error"
+        );
 
         let stop_result = parser.stop(*resumable);
-        assert_eq!(stop_result, XmlStatus::Error, "Should reject stopping unstarted parser");
-        assert_eq!(parser.error_code(), XmlError::NotStarted, "Expected NOT_STARTED error");
+        assert_eq!(
+            stop_result,
+            XmlStatus::Error,
+            "Should reject stopping unstarted parser"
+        );
+        assert_eq!(
+            parser.error_code(),
+            XmlError::NotStarted,
+            "Expected NOT_STARTED error"
+        );
     }
 }
 
@@ -344,5 +379,9 @@ fn test_misc_no_infinite_loop_issue_1161() {
 
     // The test is mainly checking that parsing doesn't hang/infinite loop
     // and produces some reasonable error
-    assert_ne!(result, XmlStatus::Suspended, "Should not suspend indefinitely");
+    assert_ne!(
+        result,
+        XmlStatus::Suspended,
+        "Should not suspend indefinitely"
+    );
 }

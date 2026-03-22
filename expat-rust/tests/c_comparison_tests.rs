@@ -1,10 +1,10 @@
 //! Comparison tests: run the same XML through both the Rust port and the C library
 //! to verify behavioral equivalence.
 
-use expat_rust::xmlparse::{Parser, XmlStatus, XmlError};
+use expat_rust::xmlparse::{Parser, XmlError, XmlStatus};
 use expat_sys::CParser;
-use std::ffi::{c_char, c_int, c_void};
 use std::cell::RefCell;
+use std::ffi::{c_char, c_int, c_void};
 
 /// Parse XML with the Rust port and return (status, error_code, line, col)
 fn parse_rust(xml: &[u8]) -> (XmlStatus, XmlError, u64, u64) {
@@ -109,7 +109,7 @@ fn cmp_xml_declaration() {
 fn cmp_xml_declaration_encoding() {
     compare_parse(
         b"<?xml version=\"1.0\" encoding=\"utf-8\"?><a/>",
-        "xml declaration with encoding"
+        "xml declaration with encoding",
     );
 }
 
@@ -145,10 +145,7 @@ fn cmp_deeply_nested() {
 
 #[test]
 fn cmp_predefined_entities() {
-    compare_parse(
-        b"<a>&lt;&gt;&amp;&apos;&quot;</a>",
-        "predefined entities"
-    );
+    compare_parse(b"<a>&lt;&gt;&amp;&apos;&quot;</a>", "predefined entities");
 }
 
 #[test]
@@ -223,17 +220,14 @@ fn cmp_less_than_in_content() {
 
 #[test]
 fn cmp_simple_doctype() {
-    compare_status(
-        b"<!DOCTYPE root><root/>",
-        "simple DOCTYPE"
-    );
+    compare_status(b"<!DOCTYPE root><root/>", "simple DOCTYPE");
 }
 
 #[test]
 fn cmp_doctype_with_internal_subset() {
     compare_status(
         b"<!DOCTYPE root [<!ELEMENT root EMPTY>]><root/>",
-        "DOCTYPE with internal subset"
+        "DOCTYPE with internal subset",
     );
 }
 
@@ -241,7 +235,7 @@ fn cmp_doctype_with_internal_subset() {
 fn cmp_doctype_entity() {
     compare_status(
         b"<!DOCTYPE root [<!ENTITY e \"text\">]><root>&e;</root>",
-        "DOCTYPE with entity"
+        "DOCTYPE with entity",
     );
 }
 
@@ -260,11 +254,13 @@ fn cmp_incremental_parse() {
     let (c2, _) = c_parser.parse(b"lo</a>", true);
 
     assert_eq!(
-        rust_status_to_u32(r1), c1,
+        rust_status_to_u32(r1),
+        c1,
         "Incremental parse chunk 1 status mismatch"
     );
     assert_eq!(
-        rust_status_to_u32(r2), c2,
+        rust_status_to_u32(r2),
+        c2,
         "Incremental parse chunk 2 status mismatch"
     );
 }
@@ -273,17 +269,14 @@ fn cmp_incremental_parse() {
 
 #[test]
 fn cmp_simple_namespace() {
-    compare_status(
-        b"<a xmlns=\"http://example.com/\"/>",
-        "simple namespace"
-    );
+    compare_status(b"<a xmlns=\"http://example.com/\"/>", "simple namespace");
 }
 
 #[test]
 fn cmp_prefixed_namespace() {
     compare_status(
         b"<ns:a xmlns:ns=\"http://example.com/\"/>",
-        "prefixed namespace"
+        "prefixed namespace",
     );
 }
 
@@ -295,7 +288,7 @@ fn cmp_negative_len() {
     let c_parser = CParser::new(None).unwrap();
 
     // Both should handle negative length gracefully
-    let r_status = r_parser.parse(b"", false);  // Can't pass negative in Rust
+    let r_status = r_parser.parse(b"", false); // Can't pass negative in Rust
     let (c_status, _) = c_parser.parse(b"", false);
     // The Rust port uses usize so can't have negative; C uses int
     // Just verify they both handle empty data
@@ -316,16 +309,19 @@ unsafe extern "C" fn c_start_element(
 ) {
     let collector = &*(user_data as *const CElementCollector);
     let name_str = std::ffi::CStr::from_ptr(name).to_str().unwrap().to_owned();
-    collector.elements.borrow_mut().push(format!("start:{}", name_str));
+    collector
+        .elements
+        .borrow_mut()
+        .push(format!("start:{}", name_str));
 }
 
-unsafe extern "C" fn c_end_element(
-    user_data: *mut c_void,
-    name: *const c_char,
-) {
+unsafe extern "C" fn c_end_element(user_data: *mut c_void, name: *const c_char) {
     let collector = &*(user_data as *const CElementCollector);
     let name_str = std::ffi::CStr::from_ptr(name).to_str().unwrap().to_owned();
-    collector.elements.borrow_mut().push(format!("end:{}", name_str));
+    collector
+        .elements
+        .borrow_mut()
+        .push(format!("end:{}", name_str));
 }
 
 #[test]
@@ -337,11 +333,11 @@ fn cmp_element_events() {
     {
         let mut parser = Parser::new(None).unwrap();
         let r_ref = &mut r_elements as *mut Vec<String>;
-        parser.set_start_element_handler(Some(Box::new(move |name, _attrs| {
-            unsafe { (*r_ref).push(format!("start:{}", name)); }
+        parser.set_start_element_handler(Some(Box::new(move |name, _attrs| unsafe {
+            (*r_ref).push(format!("start:{}", name));
         })));
-        parser.set_end_element_handler(Some(Box::new(move |name| {
-            unsafe { (*r_ref).push(format!("end:{}", name)); }
+        parser.set_end_element_handler(Some(Box::new(move |name| unsafe {
+            (*r_ref).push(format!("end:{}", name));
         })));
         parser.parse(xml, true);
     }
@@ -432,7 +428,8 @@ fn debug_c_behavior() {
         eprintln!(
             "{desc:30} C: status={c_status} error={c_error} line={c_line} col={c_col} | \
              Rust: status={} error={} line={r_line} col={r_col}",
-            rust_status_to_u32(r_status), rust_error_to_u32(r_error)
+            rust_status_to_u32(r_status),
+            rust_error_to_u32(r_error)
         );
     }
 }
@@ -456,7 +453,10 @@ fn cmp_single_quote_attributes() {
 
 #[test]
 fn cmp_many_attributes() {
-    compare_parse(b"<a a=\"1\" b=\"2\" c=\"3\" d=\"4\" e=\"5\"/>", "many attributes");
+    compare_parse(
+        b"<a a=\"1\" b=\"2\" c=\"3\" d=\"4\" e=\"5\"/>",
+        "many attributes",
+    );
 }
 
 #[test]
@@ -496,7 +496,10 @@ fn cmp_sibling_elements() {
 
 #[test]
 fn cmp_mixed_content() {
-    compare_parse(b"<r>text<a/>more<b/>end</r>", "mixed text and element content");
+    compare_parse(
+        b"<r>text<a/>more<b/>end</r>",
+        "mixed text and element content",
+    );
 }
 
 #[test]
@@ -504,8 +507,16 @@ fn cmp_error_tag_mismatch() {
     let xml = b"<a></b>";
     let (r_status, r_error, _, _) = parse_rust(xml);
     let (c_status, c_error, _, _) = parse_c(xml);
-    assert_eq!(rust_status_to_u32(r_status), c_status, "Tag mismatch status");
-    assert_eq!(rust_error_to_u32(r_error), c_error, "Tag mismatch error code");
+    assert_eq!(
+        rust_status_to_u32(r_status),
+        c_status,
+        "Tag mismatch status"
+    );
+    assert_eq!(
+        rust_error_to_u32(r_error),
+        c_error,
+        "Tag mismatch error code"
+    );
 }
 
 #[test]
@@ -540,8 +551,8 @@ fn cmp_chardata_simple() {
     {
         let mut parser = Parser::new(None).unwrap();
         let r_ref = &mut r_data as *mut Vec<u8>;
-        parser.set_character_data_handler(Some(Box::new(move |data: &[u8]| {
-            unsafe { (*r_ref).extend_from_slice(data); }
+        parser.set_character_data_handler(Some(Box::new(move |data: &[u8]| unsafe {
+            (*r_ref).extend_from_slice(data);
         })));
         parser.parse(xml, true);
     }
@@ -569,8 +580,8 @@ fn cmp_chardata_entities() {
     {
         let mut parser = Parser::new(None).unwrap();
         let r_ref = &mut r_data as *mut Vec<u8>;
-        parser.set_character_data_handler(Some(Box::new(move |data: &[u8]| {
-            unsafe { (*r_ref).extend_from_slice(data); }
+        parser.set_character_data_handler(Some(Box::new(move |data: &[u8]| unsafe {
+            (*r_ref).extend_from_slice(data);
         })));
         parser.parse(xml, true);
     }

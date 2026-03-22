@@ -111,10 +111,8 @@ fn test_pi_handled_in_default() {
     let mut collected: Vec<u8> = Vec::new();
     let collected_ptr: *mut Vec<u8> = &mut collected as *mut _;
 
-    parser.set_default_handler(Some(Box::new(move |data: &[u8]| {
-        unsafe {
-            (*collected_ptr).extend_from_slice(data);
-        }
+    parser.set_default_handler(Some(Box::new(move |data: &[u8]| unsafe {
+        (*collected_ptr).extend_from_slice(data);
     })));
 
     match parser.parse(text, true) {
@@ -137,10 +135,8 @@ fn test_comment_handled_in_default() {
     let mut collected: Vec<u8> = Vec::new();
     let collected_ptr: *mut Vec<u8> = &mut collected as *mut _;
 
-    parser.set_default_handler(Some(Box::new(move |data: &[u8]| {
-        unsafe {
-            (*collected_ptr).extend_from_slice(data);
-        }
+    parser.set_default_handler(Some(Box::new(move |data: &[u8]| unsafe {
+        (*collected_ptr).extend_from_slice(data);
     })));
 
     match parser.parse(text, true) {
@@ -163,14 +159,14 @@ fn test_pi_yml() {
     let mut collected: Vec<u8> = Vec::new();
     let collected_ptr: *mut Vec<u8> = &mut collected as *mut _;
 
-    parser.set_processing_instruction_handler(Some(Box::new(move |target: &str, data: &str| {
-        unsafe {
+    parser.set_processing_instruction_handler(Some(Box::new(
+        move |target: &str, data: &str| unsafe {
             (*collected_ptr).extend_from_slice(target.as_bytes());
             (*collected_ptr).extend_from_slice(b": ");
             (*collected_ptr).extend_from_slice(data.as_bytes());
             (*collected_ptr).extend_from_slice(b"\n");
-        }
-    })));
+        },
+    )));
 
     match parser.parse(text, true) {
         XmlStatus::Ok => {
@@ -192,14 +188,14 @@ fn test_pi_xnl() {
     let mut collected: Vec<u8> = Vec::new();
     let collected_ptr: *mut Vec<u8> = &mut collected as *mut _;
 
-    parser.set_processing_instruction_handler(Some(Box::new(move |target: &str, data: &str| {
-        unsafe {
+    parser.set_processing_instruction_handler(Some(Box::new(
+        move |target: &str, data: &str| unsafe {
             (*collected_ptr).extend_from_slice(target.as_bytes());
             (*collected_ptr).extend_from_slice(b": ");
             (*collected_ptr).extend_from_slice(data.as_bytes());
             (*collected_ptr).extend_from_slice(b"\n");
-        }
-    })));
+        },
+    )));
 
     match parser.parse(text, true) {
         XmlStatus::Ok => {
@@ -221,14 +217,14 @@ fn test_pi_xmm() {
     let mut collected: Vec<u8> = Vec::new();
     let collected_ptr: *mut Vec<u8> = &mut collected as *mut _;
 
-    parser.set_processing_instruction_handler(Some(Box::new(move |target: &str, data: &str| {
-        unsafe {
+    parser.set_processing_instruction_handler(Some(Box::new(
+        move |target: &str, data: &str| unsafe {
             (*collected_ptr).extend_from_slice(target.as_bytes());
             (*collected_ptr).extend_from_slice(b": ");
             (*collected_ptr).extend_from_slice(data.as_bytes());
             (*collected_ptr).extend_from_slice(b"\n");
-        }
-    })));
+        },
+    )));
 
     match parser.parse(text, true) {
         XmlStatus::Ok => {
@@ -304,10 +300,8 @@ fn test_utf16_be_comment() {
     let mut collected: Vec<u8> = Vec::new();
     let collected_ptr: *mut Vec<u8> = &mut collected as *mut _;
 
-    parser.set_comment_handler(Some(Box::new(move |data: &[u8]| {
-        unsafe {
-            (*collected_ptr).extend_from_slice(data);
-        }
+    parser.set_comment_handler(Some(Box::new(move |data: &[u8]| unsafe {
+        (*collected_ptr).extend_from_slice(data);
     })));
 
     match parser.parse(text, true) {
@@ -330,10 +324,8 @@ fn test_utf16_le_comment() {
     let mut collected: Vec<u8> = Vec::new();
     let collected_ptr: *mut Vec<u8> = &mut collected as *mut _;
 
-    parser.set_comment_handler(Some(Box::new(move |data: &[u8]| {
-        unsafe {
-            (*collected_ptr).extend_from_slice(data);
-        }
+    parser.set_comment_handler(Some(Box::new(move |data: &[u8]| unsafe {
+        (*collected_ptr).extend_from_slice(data);
     })));
 
     match parser.parse(text, true) {
@@ -554,10 +546,8 @@ fn test_utf8_in_cdata_section() {
     let mut collected: Vec<u8> = Vec::new();
     let collected_ptr: *mut Vec<u8> = &mut collected as *mut _;
 
-    parser.set_character_data_handler(Some(Box::new(move |data: &[u8]| {
-        unsafe {
-            (*collected_ptr).extend_from_slice(data);
-        }
+    parser.set_character_data_handler(Some(Box::new(move |data: &[u8]| unsafe {
+        (*collected_ptr).extend_from_slice(data);
     })));
 
     match parser.parse(text, true) {
@@ -580,10 +570,8 @@ fn test_utf8_in_cdata_section_2() {
     let mut collected: Vec<u8> = Vec::new();
     let collected_ptr: *mut Vec<u8> = &mut collected as *mut _;
 
-    parser.set_character_data_handler(Some(Box::new(move |data: &[u8]| {
-        unsafe {
-            (*collected_ptr).extend_from_slice(data);
-        }
+    parser.set_character_data_handler(Some(Box::new(move |data: &[u8]| unsafe {
+        (*collected_ptr).extend_from_slice(data);
     })));
 
     match parser.parse(text, true) {
@@ -615,16 +603,14 @@ fn test_trailing_spaces_in_elements() {
     let names_ptr: *mut Vec<u8> = &mut element_names as *mut _;
 
     parser.set_element_handlers(
-        Some(Box::new(move |name: &str, _attrs: &[(&str, &str)]| {
-            unsafe {
+        Some(Box::new(
+            move |name: &str, _attrs: &[(&str, &str)]| unsafe {
                 (*names_ptr).extend_from_slice(name.as_bytes());
                 (*names_ptr).push(b'/');
-            }
-        })),
-        Some(Box::new(move |name: &str| {
-            unsafe {
-                (*names_ptr).extend_from_slice(name.as_bytes());
-            }
+            },
+        )),
+        Some(Box::new(move |name: &str| unsafe {
+            (*names_ptr).extend_from_slice(name.as_bytes());
         })),
     );
 

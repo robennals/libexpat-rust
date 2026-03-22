@@ -1,8 +1,8 @@
-//! SipHash-2-4 implementation
+//! SipHash-2-4 implementation for hash-table randomization.
 //!
-//! A zero-unsafe, idiomatic Rust implementation of SipHash-2-4.
-//! AI-generated port of the C implementation in expat/lib/siphash.h
-//! (original C by William Ahern, derived from Aumasson & Bernstein).
+//! Ported from expat's `siphash.h` (original C by William Ahern, derived from
+//! Aumasson & Bernstein). Used to randomize hash seeds and protect against
+//! hash-collision denial-of-service attacks on attribute/element name tables.
 
 /// Perform a left rotate on a 64-bit value
 #[inline]
@@ -14,8 +14,7 @@ fn rotl64(x: u64, b: u32) -> u64 {
 fn u8_to_u64_le(bytes: &[u8]) -> u64 {
     assert!(bytes.len() >= 8, "Not enough bytes");
     u64::from_le_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ])
 }
 
@@ -91,8 +90,7 @@ impl SipHasher {
             let can_write = 8 - self.buf_len;
             let to_write = std::cmp::min(can_write, remaining.len());
 
-            self.buf[self.buf_len..self.buf_len + to_write]
-                .copy_from_slice(&remaining[..to_write]);
+            self.buf[self.buf_len..self.buf_len + to_write].copy_from_slice(&remaining[..to_write]);
             self.buf_len += to_write;
             remaining = &remaining[to_write..];
 
