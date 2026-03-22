@@ -846,6 +846,39 @@ fn auto_version_info() {
 }
 
 // ============================================================================
+// Tests: namespace-aware parser (new_ns)
+// ============================================================================
+
+#[test]
+fn auto_new_ns_parser() {
+    let mut p = Parser::new_ns(None, '\n').unwrap();
+    let s = p.parse(b"<r/>", true);
+    assert_eq!(s, XmlStatus::Ok);
+}
+
+#[test]
+fn auto_new_ns_with_namespace() {
+    let xml = b"<r xmlns:x=\"http://example.com\"><x:a/></r>";
+    let mut r = Parser::new_ns(None, '\n').unwrap();
+    let rs = r.parse(xml, true) as u32;
+    let re = r.error_code() as u32;
+
+    // C namespace parser
+    let c = unsafe {
+        let p = expat_sys::XML_ParserCreateNS(std::ptr::null(), b'\n' as i8);
+        if p.is_null() { panic!("null"); }
+        p
+    };
+    let cs = unsafe {
+        expat_sys::XML_Parse(c, xml.as_ptr() as *const c_char, xml.len() as c_int, 1)
+    };
+    let ce = unsafe { expat_sys::XML_GetErrorCode(c) };
+    unsafe { expat_sys::XML_ParserFree(c); }
+    assert_eq!(rs, cs, "ns parser status");
+    assert_eq!(re, ce, "ns parser error");
+}
+
+// ============================================================================
 // Tests: handler setter API coverage
 // ============================================================================
 
