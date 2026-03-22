@@ -72,12 +72,6 @@ pub enum Role {
     ParamEntityRef,
 }
 
-impl From<Role> for i32 {
-    fn from(role: Role) -> i32 {
-        role as i32
-    }
-}
-
 // Token types processed by the state machine
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token {

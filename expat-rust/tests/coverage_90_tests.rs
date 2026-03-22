@@ -2534,3 +2534,75 @@ fn cov90_complete_kitchen_sink() {
     compare_events(xml, "kitchen sink");
     compare_incr(xml, "kitchen sink incremental");
 }
+
+// ============================================================================
+// 91. Prolog BOM at exact buffer boundary with following data
+// ============================================================================
+
+#[test]
+fn cov90_prolog_bom_with_data() {
+    // BOM followed by immediate data in same chunk
+    compare_incr(b"\xEF\xBB\xBF<r/>", "BOM inline");
+    // BOM as first chunk, then data with xmldecl
+    let mut r = Parser::new(None).unwrap();
+    r.parse(b"\xEF\xBB\xBF", false);
+    r.parse(b"<?xml version='1.0'?>", false);
+    let rs = r.parse(b"<r/>", true) as u32;
+    let c = CParser::new(None).unwrap();
+    c.parse(b"\xEF\xBB\xBF", false);
+    c.parse(b"<?xml version='1.0'?>", false);
+    let (cs, _) = c.parse(b"<r/>", true);
+    assert_eq!(rs, cs, "BOM then xmldecl");
+}
+
+// ============================================================================
+// 92. Partial UTF-8 at end of various chunks
+// ============================================================================
+
+#[test]
+fn cov90_partial_utf8_everywhere() {
+    // Split 2-byte char é (C3 A9) at every position in content
+    let xml = b"<r>\xC3\xA9</r>"; // <r>é</r>
+    for split in 1..xml.len() {
+        let mut r = Parser::new(None).unwrap();
+        let r1 = r.parse(&xml[..split], false);
+        let rf = if r1 == XmlStatus::Ok {
+            r.parse(&xml[split..], true)
+        } else {
+            r1
+        };
+        let c = CParser::new(None).unwrap();
+        let (c1, _) = c.parse(&xml[..split], false);
+        let (cf, _) = if c1 == 1 {
+            c.parse(&xml[split..], true)
+        } else {
+            (c1, 0)
+        };
+        assert_eq!(rf as u32, cf, "partial_utf8 @{split}");
+    }
+}
+
+// ============================================================================
+// 93. CDATA with every split position
+// ============================================================================
+
+#[test]
+fn cov90_cdata_every_split() {
+    let xml = b"<r><![CDATA[\r\ndata\r]]></r>";
+    compare_incr(xml, "cdata every split with CR");
+}
+
+// ============================================================================
+// 94. Default handler expand (exercises default_handler_expand path)
+// ============================================================================
+
+#[test]
+fn cov90_default_handler_expand() {
+    let xml = b"<r>&amp;text</r>";
+    let mut p = Parser::new(None).unwrap();
+    p.set_default_handler_expand(Some(Box::new(|_: &[u8]| {})));
+    let rs = p.parse(xml, true) as u32;
+    let c = CParser::new(None).unwrap();
+    let (cs, _) = c.parse(xml, true);
+    assert_eq!(rs, cs, "default expand");
+}
