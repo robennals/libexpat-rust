@@ -353,6 +353,10 @@ pub unsafe extern "C" fn XML_GetBuffer(parser: XML_Parser, len: c_int) -> *mut c
     if parser.is_null() || len < 0 {
         return ptr::null_mut();
     }
+    // Reject excessively large buffers (matches C overflow detection)
+    if len as usize > (i32::MAX as usize) / 2 {
+        return ptr::null_mut();
+    }
     let handle = &mut *parser;
     match handle.parser.get_buffer(len as usize) {
         Some(buf) => buf.as_mut_ptr() as *mut c_void,

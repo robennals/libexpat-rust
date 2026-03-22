@@ -286,6 +286,8 @@ pub struct Parser {
     dtd_standalone: bool,
     /// Total byte offset in input (for tracking position across parse calls)
     byte_offset: u64,
+    /// Number of bytes in the current event token (set during handler callbacks)
+    event_cur_byte_count: i32,
     /// Pending byte from incomplete UTF-16 code unit across chunk boundaries
     utf16_pending_byte: Option<u8>,
     /// Internal entity definitions — maps entity name to replacement text
@@ -372,6 +374,7 @@ impl Parser {
             has_param_entity_refs: false,
             dtd_standalone: false,
             byte_offset: 0,
+            event_cur_byte_count: 0,
             utf16_pending_byte: None,
             internal_entities: HashMap::new(),
             external_entities: HashMap::new(),
@@ -444,6 +447,7 @@ impl Parser {
             has_param_entity_refs: false,
             dtd_standalone: false,
             byte_offset: 0,
+            event_cur_byte_count: 0,
             utf16_pending_byte: None,
             internal_entities: HashMap::new(),
             external_entities: HashMap::new(),
@@ -1331,6 +1335,9 @@ impl Parser {
                 }
             };
 
+            // Track byte count of current token for XML_GetCurrentByteCount
+            self.event_cur_byte_count = (next - pos) as i32;
+
             match tok {
                 XmlTok::TrailingCr => {
                     if have_more {
@@ -2148,6 +2155,9 @@ impl Parser {
             }
         }
 
+        // Track total byte offset (for XML_GetCurrentByteIndex)
+        self.byte_offset += data.len() as u64;
+
         // If the parser was suspended during a handler callback, save remaining data and return Suspended
         if self.parsing_state == ParsingState::Suspended {
             // Save the buffer for resume — the buffer still has unprocessed data
@@ -2413,14 +2423,18 @@ impl Parser {
     ///
     /// Equivalent to XML_GetCurrentByteIndex(parser) in C
     pub fn current_byte_index(&self) -> i64 {
-        self.byte_offset as i64
+        if self.parsing_state == ParsingState::Initialized {
+            -1 // Before any parsing, C returns -1
+        } else {
+            self.byte_offset as i64
+        }
     }
 
     /// Get the number of bytes in the current event
     ///
     /// Equivalent to XML_GetCurrentByteCount(parser) in C
     pub fn current_byte_count(&self) -> i32 {
-        0 // Placeholder
+        self.event_cur_byte_count
     }
 
     /// Get parsing status information
