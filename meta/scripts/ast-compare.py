@@ -803,6 +803,53 @@ def main():
         print(prompt)
         return
 
+    if sys.argv[1] == "--missing-functions":
+        # List C functions that have no Rust equivalent
+        c_src = open(C_FILE, 'rb').read()
+        r_src = open(RUST_FILE, 'rb').read()
+        c_tree = parse_c(c_src)
+        r_tree = parse_rust(r_src)
+        # Extract all C function names
+        c_funcs = {}
+        for node in walk_all(c_tree.root_node):
+            if node.type == "function_definition":
+                decl = node.child_by_field_name("declarator")
+                if decl:
+                    for child in walk_all(decl):
+                        if child.type == "identifier":
+                            name = child.text.decode()
+                            lines = node.text.decode().count('\n') + 1
+                            c_funcs[name] = lines
+                            break
+        # Extract all Rust function names
+        r_funcs = set()
+        for node in walk_all(r_tree.root_node):
+            if node.type == "function_item":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    r_funcs.add(name_node.text.decode())
+        # Check which C functions have no Rust equivalent
+        missing = []
+        for c_name, lines in sorted(c_funcs.items()):
+            rust_name = c_to_rust_call_name(c_name)
+            if rust_name not in r_funcs and c_name not in SUPPRESSED_CALLS:
+                # Also check if it's a suppressed category
+                skip = False
+                for sup in SUPPRESSED_CALLS:
+                    if c_name.startswith(sup) or c_name == sup:
+                        skip = True
+                        break
+                if c_name.startswith("pool") or c_name.startswith("hash"):
+                    skip = True
+                if not skip:
+                    missing.append((c_name, rust_name, lines))
+        print(f"C functions in xmlparse.c with no Rust equivalent ({len(missing)} of {len(c_funcs)}):")
+        print(f"{'C Function':<40} {'Expected Rust Name':<35} {'Lines':>5}")
+        print("-" * 82)
+        for c_name, r_name, lines in sorted(missing, key=lambda x: -x[2]):
+            print(f"{c_name:<40} {r_name:<35} {lines:>5}")
+        return
+
     if sys.argv[1] == "--prompt-all":
         # Generate prompts for all function pairs that have divergences
         pairs = get_pairs()
