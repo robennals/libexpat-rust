@@ -597,7 +597,72 @@ fn cov90_public_id_validation() {
 // 13. Billion laughs API (xmlparse.rs)
 // ============================================================================
 
-// Billion laughs API not yet implemented — skipping
+// ============================================================================
+// 26. Multi-byte UTF-8 in tag/attribute names (scan_lt, scan_end_tag, scan_atts)
+// ============================================================================
+
+#[test]
+fn cov90_multibyte_tag_names() {
+    compare_incr("<日本/>".as_bytes(), "3byte elem name");
+    compare_incr("<r><日本/></r>".as_bytes(), "3byte child elem");
+    compare_incr("<日本>text</日本>".as_bytes(), "3byte open+close");
+}
+
+#[test]
+fn cov90_multibyte_attr_names() {
+    compare_incr("<r café=\"val\"/>".as_bytes(), "2byte attr name");
+}
+
+#[test]
+fn cov90_multibyte_end_tags() {
+    compare_incr("<café>text</café>".as_bytes(), "2byte end tag");
+    compare_incr("<日本語>text</日本語>".as_bytes(), "3byte end tag");
+}
+
+// ============================================================================
+// 27. Scan declarations incremental
+// ============================================================================
+
+#[test]
+fn cov90_scan_decl_incremental() {
+    let cases: &[&[u8]] = &[
+        b"<!DOCTYPE r [<!ELEMENT r EMPTY><!ELEMENT a EMPTY>]><r/>",
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED><!ATTLIST r b ID #IMPLIED>]><r a='v' b='id1'/>",
+        b"<!DOCTYPE r [<!ENTITY e 'v'><!ENTITY f 'w'>]><r>&e;&f;</r>",
+        b"<!DOCTYPE r [<!NOTATION n1 SYSTEM 'x'><!NOTATION n2 PUBLIC '-//T//EN'>]><r/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("decl {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 28. PI with multi-byte targets
+// ============================================================================
+
+#[test]
+fn cov90_pi_multibyte() {
+    compare_incr("<?café data?><r/>".as_bytes(), "2byte PI target");
+    compare_incr("<r><?日本 data?></r>".as_bytes(), "3byte PI in content");
+}
+
+// ============================================================================
+// 29. Explicit encoding
+// ============================================================================
+
+#[test]
+fn cov90_explicit_encodings() {
+    for enc in &["UTF-8", "US-ASCII", "ISO-8859-1"] {
+        let mut r = Parser::new(Some(enc)).unwrap();
+        let rs = r.parse(b"<r>text</r>", true) as u32;
+        let c = CParser::new(Some(enc)).unwrap();
+        let (cs, _) = c.parse(b"<r>text</r>", true);
+        assert_eq!(rs, cs, "encoding {}", enc);
+    }
+}
 
 // ============================================================================
 // 14. Parsing status / set_encoding API (xmlparse.rs)

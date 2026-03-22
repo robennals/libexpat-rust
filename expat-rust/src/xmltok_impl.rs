@@ -365,12 +365,42 @@ pub fn scan_pi<E: Encoding>(
         });
     }
 
-    if !is_nmstrt_char(enc.byte_type(data, pos)) {
-        return Err(pos);
-    }
-
     let target = pos;
-    pos += enc.min_bytes_per_char();
+    match enc.byte_type(data, pos) {
+        ByteType::LEAD2 => {
+            if end - pos < 2 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            pos += 2;
+        }
+        ByteType::LEAD3 => {
+            if end - pos < 3 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            pos += 3;
+        }
+        ByteType::LEAD4 => {
+            if end - pos < 4 {
+                return Ok(TokenResult {
+                    token: XmlTok::Partial,
+                    next_pos: pos,
+                });
+            }
+            pos += 4;
+        }
+        bt if is_nmstrt_char(bt) => {
+            pos += enc.min_bytes_per_char();
+        }
+        _ => {
+            return Err(pos);
+        }
+    }
 
     while enc.has_char(data, pos, end) {
         match enc.byte_type(data, pos) {
@@ -457,6 +487,33 @@ pub fn scan_pi<E: Encoding>(
                     });
                 }
                 return Err(pos);
+            }
+            ByteType::LEAD2 => {
+                if end - pos < 2 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                pos += 2;
+            }
+            ByteType::LEAD3 => {
+                if end - pos < 3 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                pos += 3;
+            }
+            ByteType::LEAD4 => {
+                if end - pos < 4 {
+                    return Ok(TokenResult {
+                        token: XmlTok::Partial,
+                        next_pos: pos,
+                    });
+                }
+                pos += 4;
             }
             _ if is_name_char(enc.byte_type(data, pos)) => {
                 pos += enc.min_bytes_per_char();
