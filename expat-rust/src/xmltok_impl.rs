@@ -117,10 +117,7 @@ const ASCII_M: u8 = 0x6D;
 const ASCII_L: u8 = 0x6C;
 const ASCII_GT: u8 = 0x3E;
 const ASCII_RSQB: u8 = 0x5D;
-const ASCII_LSQB: u8 = 0x5B;
-const ASCII_EXCL: u8 = 0x21;
 const ASCII_SEMI: u8 = 0x3B;
-const ASCII_TAB: u8 = 0x09;
 const ASCII_QUOT: u8 = 0x22;
 const ASCII_APOS: u8 = 0x27;
 
@@ -564,7 +561,7 @@ pub fn cdata_section_tok<E: Encoding>(
     enc: &E,
     data: &[u8],
     mut pos: usize,
-    mut end: usize,
+    end: usize,
 ) -> Result<TokenResult, usize> {
     let minbpc = enc.min_bytes_per_char();
 
@@ -1409,7 +1406,7 @@ pub fn content_tok<E: Encoding>(
     enc: &E,
     data: &[u8],
     mut pos: usize,
-    mut end: usize,
+    end: usize,
 ) -> Result<TokenResult, usize> {
     let minbpc = enc.min_bytes_per_char();
 
@@ -1760,7 +1757,7 @@ pub fn prolog_tok<E: Encoding>(
     enc: &E,
     data: &[u8],
     mut pos: usize,
-    mut end: usize,
+    end: usize,
 ) -> Result<TokenResult, usize> {
     let minbpc = enc.min_bytes_per_char();
 

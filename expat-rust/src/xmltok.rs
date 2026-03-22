@@ -10,16 +10,6 @@
 use crate::char_tables::ByteType;
 use crate::xmltok_impl::Encoding;
 
-/// Constants for UTF-8 encoding first byte patterns
-const UTF8_CVAL1: u8 = 0x00;
-const UTF8_CVAL2: u8 = 0xc0;
-const UTF8_CVAL3: u8 = 0xe0;
-const UTF8_CVAL4: u8 = 0xf0;
-
-/// Maximum buffer sizes for encoding functions
-pub const XML_UTF8_ENCODE_MAX: usize = 4;
-pub const XML_UTF16_ENCODE_MAX: usize = 2;
-
 /// UTF-8 encoding implementation
 pub struct Utf8Encoding;
 
