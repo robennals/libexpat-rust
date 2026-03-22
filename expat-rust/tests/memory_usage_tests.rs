@@ -174,12 +174,8 @@ fn measure_c_oneshot(xml: &[u8]) -> (usize, usize) {
         assert!(!parser.is_null());
         expat_sys::XML_SetElementHandler(parser, Some(c_start), Some(c_end));
         expat_sys::XML_SetCharacterDataHandler(parser, Some(c_chardata));
-        let status = expat_sys::XML_Parse(
-            parser,
-            xml.as_ptr() as *const c_char,
-            xml.len() as c_int,
-            1,
-        );
+        let status =
+            expat_sys::XML_Parse(parser, xml.as_ptr() as *const c_char, xml.len() as c_int, 1);
         assert_eq!(status, expat_sys::XML_STATUS_OK);
         let peak = c_peak();
         expat_sys::XML_ParserFree(parser);
@@ -269,8 +265,7 @@ fn parse_rust_chunked(xml: &[u8], chunk_size: usize) {
 
 fn parse_c_chunked(xml: &[u8], chunk_size: usize, memsuite: &expat_sys::XML_Memory_Handling_Suite) {
     unsafe {
-        let parser =
-            expat_sys::XML_ParserCreate_MM(ptr::null(), memsuite as *const _, ptr::null());
+        let parser = expat_sys::XML_ParserCreate_MM(ptr::null(), memsuite as *const _, ptr::null());
         assert!(!parser.is_null());
         expat_sys::XML_SetElementHandler(parser, Some(c_start), Some(c_end));
         expat_sys::XML_SetCharacterDataHandler(parser, Some(c_chardata));
@@ -374,7 +369,10 @@ fn print_table(title: &str, results: &[MemoryResult]) {
 #[test]
 fn memory_usage_comparison() {
     let scenarios: Vec<(&str, Vec<u8>)> = vec![
-        ("44 B  flat", b"<root><child attr=\"val\">text</child></root>".to_vec()),
+        (
+            "44 B  flat",
+            b"<root><child attr=\"val\">text</child></root>".to_vec(),
+        ),
         ("10 KB flat", generate_document(200)),
         ("100 KB flat", generate_document(1_500)),
         ("1 MB flat", generate_document(15_000)),
@@ -529,7 +527,10 @@ fn memory_scales_linearly() {
     let mut measurements = Vec::new();
 
     println!();
-    println!("Memory scaling with document size (Rust vs C, {} chunks):", fmt_bytes(chunk_size));
+    println!(
+        "Memory scaling with document size (Rust vs C, {} chunks):",
+        fmt_bytes(chunk_size)
+    );
     println!(
         "  {:>10}  {:>10}  {:>14}  {:>12}  {:>14}  {:>12}",
         "Elements", "Doc Size", "Rust Peak", "Rust B/Elem", "C Peak", "C B/Elem"
