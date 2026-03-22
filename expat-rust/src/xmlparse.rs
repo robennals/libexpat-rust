@@ -636,6 +636,18 @@ impl Parser {
                     return (XmlError::InvalidToken, pos);
                 }
                 _ => {
+                    // C doProlog: if tok <= 0 && haveMore → buffer and wait
+                    // In C, prologTok returns -tok for names at end of buffer.
+                    // We detect this as: token consumed to end (next == end) and
+                    // the token is a name/keyword type that might be incomplete.
+                    if have_more && next >= end && matches!(tok,
+                        XmlTok::Name | XmlTok::Nmtoken | XmlTok::PrefixedName
+                        | XmlTok::PoundName | XmlTok::Literal
+                        | XmlTok::CloseBracket) {
+                        self.buffer = data[pos..].to_vec();
+                        return (XmlError::None, end);
+                    }
+
                     // Convert token type to role token type
                     let role_tok = Self::xmltok_to_role_token(tok);
 

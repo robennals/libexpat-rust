@@ -1819,6 +1819,10 @@ pub fn prolog_tok<E: Encoding>(
         }
     }
 
+    // Name reached end of data without a terminator (whitespace, delimiter, etc.)
+    // C returns -tok (negative) which the caller treats as "need more data" when
+    // haveMore is true. We return the name but with next_pos == end to signal
+    // the name consumed all remaining data (unterminated).
     Ok(TokenResult {
         token: if is_name { XmlTok::Name } else { XmlTok::Nmtoken },
         next_pos: pos,

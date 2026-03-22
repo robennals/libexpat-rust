@@ -579,7 +579,6 @@ fn incr_dtd_entity2() {
 }
 
 #[test]
-#[ignore] // Known: incremental prolog parsing incomplete for ATTLIST
 fn incr_dtd_attlist() {
     compare_incremental(
         b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED>]><r a='1'/>",
