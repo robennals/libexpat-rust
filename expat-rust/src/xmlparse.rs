@@ -323,6 +323,10 @@ pub struct Parser {
     doctype_public_id: Option<String>,
     /// Whether the start_doctype_decl_handler has been called for the current DOCTYPE
     doctype_handler_called: bool,
+    /// Notation declaration tracking
+    current_notation_name: Option<String>,
+    current_notation_system_id: Option<String>,
+    current_notation_public_id: Option<String>,
     /// XML role state machine for prolog parsing
     prolog_state: XmlRoleState,
 
@@ -408,6 +412,9 @@ impl Parser {
             doctype_system_id: None,
             doctype_public_id: None,
             doctype_handler_called: false,
+            current_notation_name: None,
+            current_notation_system_id: None,
+            current_notation_public_id: None,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
@@ -488,6 +495,9 @@ impl Parser {
             doctype_system_id: None,
             doctype_public_id: None,
             doctype_handler_called: false,
+            current_notation_name: None,
+            current_notation_system_id: None,
+            current_notation_public_id: None,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
@@ -977,6 +987,10 @@ impl Parser {
                     let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                     self.doctype_public_id = Some(pubid);
                 }
+                if matches!(role, Role::NotationPublicId) {
+                    let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                    self.current_notation_public_id = Some(pubid);
+                }
                 XmlError::None
             }
             Role::DoctypeSystemId => {
@@ -1090,7 +1104,35 @@ impl Parser {
                 XmlError::None
             }
             Role::NotationName => {
-                // Notation declaration
+                // Notation declaration — save name
+                let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.current_notation_name = Some(name);
+                self.current_notation_system_id = None;
+                self.current_notation_public_id = None;
+                XmlError::None
+            }
+            Role::NotationSystemId => {
+                // Notation SYSTEM ID
+                let sysid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.current_notation_system_id = Some(sysid);
+                // Call notation handler
+                if let Some(handler) = &mut self.notation_decl_handler {
+                    let name = self.current_notation_name.clone().unwrap_or_default();
+                    let base = self.base_uri.clone();
+                    let sysid = self.current_notation_system_id.clone().unwrap_or_default();
+                    let pubid = self.current_notation_public_id.clone();
+                    handler(&name, base.as_deref(), &sysid, pubid.as_deref());
+                }
+                XmlError::None
+            }
+            Role::NotationNoSystemId => {
+                // Notation with PUBLIC but no SYSTEM — call handler
+                if let Some(handler) = &mut self.notation_decl_handler {
+                    let name = self.current_notation_name.clone().unwrap_or_default();
+                    let base = self.base_uri.clone();
+                    let pubid = self.current_notation_public_id.clone();
+                    handler(&name, base.as_deref(), "", pubid.as_deref());
+                }
                 XmlError::None
             }
             Role::AttlistElementName => {
