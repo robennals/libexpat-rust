@@ -125,10 +125,23 @@ pub const XML_PARAM_ENTITY_PARSING_NEVER: XML_ParamEntityParsing = 0;
 pub const XML_PARAM_ENTITY_PARSING_UNLESS_STANDALONE: XML_ParamEntityParsing = 1;
 pub const XML_PARAM_ENTITY_PARSING_ALWAYS: XML_ParamEntityParsing = 2;
 
+/// Custom memory handling suite for XML_ParserCreate_MM.
+#[repr(C)]
+pub struct XML_Memory_Handling_Suite {
+    pub malloc_fcn: Option<unsafe extern "C" fn(size: usize) -> *mut c_void>,
+    pub realloc_fcn: Option<unsafe extern "C" fn(ptr: *mut c_void, size: usize) -> *mut c_void>,
+    pub free_fcn: Option<unsafe extern "C" fn(ptr: *mut c_void)>,
+}
+
 extern "C" {
     // Parser lifecycle
     pub fn XML_ParserCreate(encoding: *const XML_Char) -> XML_Parser;
     pub fn XML_ParserCreateNS(encoding: *const XML_Char, namespaceSeparator: XML_Char) -> XML_Parser;
+    pub fn XML_ParserCreate_MM(
+        encoding: *const XML_Char,
+        memsuite: *const XML_Memory_Handling_Suite,
+        namespaceSeparator: *const XML_Char,
+    ) -> XML_Parser;
     pub fn XML_ParserReset(parser: XML_Parser, encoding: *const XML_Char) -> XML_Bool;
     pub fn XML_ParserFree(parser: XML_Parser);
 
