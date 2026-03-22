@@ -50,6 +50,27 @@ fn main() {
     )
     .expect("Failed to write expat_config.h");
 
+    // Create a custom assert.h that calls fail() instead of abort()
+    // This prevents C assert() from killing the whole process
+    let assert_dir = out_dir.join("override");
+    std::fs::create_dir_all(&assert_dir).ok();
+    std::fs::write(
+        assert_dir.join("assert.h"),
+        r#"
+#ifndef CUSTOM_ASSERT_H
+#define CUSTOM_ASSERT_H
+#ifdef NDEBUG
+#define assert(x) ((void)0)
+#else
+extern void _fail(const char *file, int line, const char *msg);
+#define assert(expression) \
+    ((expression) ? ((void)0) : _fail(__FILE__, __LINE__, "assert failed: " #expression))
+#endif
+#endif
+"#,
+    )
+    .expect("Failed to write assert.h");
+
     // Compile the C test suite files
     cc::Build::new()
         // Test framework
@@ -70,7 +91,8 @@ fn main() {
         .file(tests_dir.join("acc_tests.c"))
         // Main - use our simplified runner
         .file(manifest_dir.join("runtests_basic_only.c"))
-        // Include paths
+        // Include paths (override dir first for custom assert.h)
+        .include(&assert_dir) // custom assert.h that calls fail() not abort()
         .include(&out_dir) // for expat_config.h
         .include(&lib_dir) // for expat.h, internal.h, expat_external.h
         .include(&tests_dir) // for test headers

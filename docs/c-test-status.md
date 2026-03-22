@@ -2,7 +2,7 @@
 
 Running the original C libexpat test suite against our Rust parser via `expat-ffi`.
 
-**Current results: 78 pass, 53 fail** of 131 tests reached (process aborts at test #132 `test_bad_cdata_utf16` due to C `assert()`).
+**Current results: 157 pass, 133 fail** of 290 tests reached (process crashes near end due to stack corruption in deeply nested entity test).
 
 ## How to run
 

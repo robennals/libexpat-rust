@@ -1201,7 +1201,13 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
     };
 
     match handle.parser.create_external_entity_parser(ctx_str, enc) {
-        Some(ext_parser) => new_handle(ext_parser),
+        Some(ext_parser) => {
+            let new_ptr = new_handle(ext_parser);
+            // Copy user_data and handler settings from parent (matches C behavior)
+            (*new_ptr).user_data = handle.user_data;
+            (*new_ptr).use_parser_as_handler_arg = handle.use_parser_as_handler_arg;
+            new_ptr
+        }
         None => ptr::null_mut(),
     }
 }

@@ -64,13 +64,15 @@ lldb -b -o "run" -o "quit" ./target/debug/c-tests-runner 2>&1 | grep -c "^PASS:"
 lldb -b -o "run" -o "quit" ./target/debug/c-tests-runner 2>&1 | grep -c "^FAIL "
 ```
 
-Current status: **75 pass, 56 fail** of 131 tests reached (process aborts
-at test #132 due to C `assert()`). The 56 failures break down as:
-- **21 Namespace** — namespace processing not fully implemented
-- **20 Parser bugs** — genuine behavioral differences from C libexpat
-- **7 Stubs** — features not implemented (accounting, custom allocators)
-- **3 Suspend/resume** — suspend within handler callbacks
-- **5 Alloc** — custom memory allocator enforcement (N/A for Rust)
+Current status: **157 pass, 133 fail** of 290 tests reached.
+No longer needs `lldb` — custom `assert.h` converts C asserts to test failures.
+```bash
+cargo build -p c-tests-runner
+./target/debug/c-tests-runner 2>/dev/null | grep -c "^PASS:"
+./target/debug/c-tests-runner 2>/dev/null | grep -c "^FAIL "
+```
+
+See [docs/c-test-status.md](docs/c-test-status.md) for detailed failure analysis.
 
 #### 4. expat-ffi C Integration Tests
 Small standalone C test file verifying the FFI layer works from C.
