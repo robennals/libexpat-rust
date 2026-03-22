@@ -1,3 +1,3 @@
 [workspace]
-members = ["expat-rust", "expat-sys"]
+members = ["expat-rust", "expat-sys", "expat-ffi"]
 resolver = "2"

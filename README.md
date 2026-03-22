@@ -131,11 +131,32 @@ For detailed architecture documentation, see [docs/architecture.md](docs/archite
 
 `expat-rust` is the right choice when you need **libexpat behavioral compatibility**, **full DTD support**, or are replacing libexpat in an existing system.
 
+## C Drop-in Replacement
+
+The `expat-ffi` crate provides a C-compatible shared library with the same API as libexpat. Build it with:
+
+```bash
+cargo build --release -p expat-ffi
+```
+
+This produces `target/release/libexpat.{so,dylib,dll}` which can replace the system libexpat in existing C/C++ applications. The library exposes the standard `XML_ParserCreate`, `XML_Parse`, `XML_SetElementHandler`, and other libexpat functions.
+
+## Benchmarks
+
+Run the benchmark suite comparing Rust vs C performance:
+
+```bash
+cargo bench -p expat-rust
+```
+
+This uses [criterion](https://github.com/bheisler/criterion.rs) to measure parsing performance across document sizes and complexity levels, comparing against the C library via FFI.
+
 ## Repository Structure
 
 ```
 .
 ├── expat-rust/       The main Rust crate
+├── expat-ffi/        C-compatible FFI wrapper (produces libexpat.so/.dylib/.dll)
 ├── expat-sys/        FFI bindings to C libexpat (for comparison testing only)
 ├── expat/            Git submodule — upstream libexpat at R_2_7_5
 ├── meta/             Porting process artifacts (tooling, plans, analysis)

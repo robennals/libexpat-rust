@@ -15,3 +15,8 @@ readme = "../README.md"
 
 [dev-dependencies]
 expat-sys = { path = "../expat-sys" }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "parse_benchmark"
+harness = false

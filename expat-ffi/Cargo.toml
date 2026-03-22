@@ -1,0 +1,13 @@
+[package]
+name = "expat-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "C-compatible FFI layer for expat-rust — drop-in replacement for libexpat"
+license = "MIT"
+
+[lib]
+name = "expat"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+expat-rust = { path = "../expat-rust" }
