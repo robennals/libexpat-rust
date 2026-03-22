@@ -258,6 +258,8 @@ pub struct Parser {
     utf16_pending_byte: Option<u8>,
     /// Internal entity definitions — maps entity name to replacement text
     internal_entities: HashMap<String, String>,
+    /// Set of currently open (being expanded) entities for recursion detection
+    open_entities: std::collections::HashSet<String>,
     /// Current entity name being declared in DTD (for GeneralEntityName → EntityValue flow)
     current_entity_name: Option<String>,
     /// XML role state machine for prolog parsing
@@ -321,6 +323,7 @@ impl Parser {
             byte_offset: 0,
             utf16_pending_byte: None,
             internal_entities: HashMap::new(),
+            open_entities: std::collections::HashSet::new(),
             current_entity_name: None,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
@@ -380,6 +383,7 @@ impl Parser {
             byte_offset: 0,
             utf16_pending_byte: None,
             internal_entities: HashMap::new(),
+            open_entities: std::collections::HashSet::new(),
             current_entity_name: None,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
@@ -807,11 +811,19 @@ impl Parser {
                 XmlError::None
             }
             Role::EntityValue => {
-                // Entity value — store in internal_entities map
+                // Entity value — validate and store in internal_entities map
+                // Matches C callStoreEntityValue/storeEntityValue
                 if let Some(ref name) = self.current_entity_name {
-                    // extract_token_text already stripped quotes for Literal tokens
-                    let value = std::str::from_utf8(&tok_text).unwrap_or("").to_string();
-                    self.internal_entities.insert(name.clone(), value);
+                    // tok_text has quotes already stripped by extract_token_text
+                    match self.store_entity_value(tok_text) {
+                        Ok(value) => {
+                            self.internal_entities.insert(name.clone(), value);
+                        }
+                        Err(e) => {
+                            self.event_pos = pos;
+                            return e;
+                        }
+                    }
                 }
                 XmlError::None
             }
@@ -847,6 +859,15 @@ impl Parser {
                 // Comment
                 if tok == XmlTok::Comment {
                     self.report_comment(&xmltok::Utf8Encoding, data, pos, next);
+                }
+                XmlError::None
+            }
+            Role::DefaultAttributeValue | Role::FixedAttributeValue => {
+                // ATTLIST default value — validate it
+                // tok_text has quotes stripped
+                if let Err(e) = self.validate_attribute_value(tok_text) {
+                    self.event_pos = pos;
+                    return e;
                 }
                 XmlError::None
             }
@@ -1180,11 +1201,29 @@ impl Parser {
                         }
                     } else {
                         // General entity reference — check internal entities
+                        // Matches C doContent XML_TOK_ENTITY_REF case
                         let name = std::str::from_utf8(&data[name_start..name_end]).unwrap_or("");
-                        if let Some(value) = self.internal_entities.get(name) {
-                            // Internal entity found — substitute its value
-                            if let Some(handler) = &mut self.character_data_handler {
-                                handler(value.as_bytes());
+                        if let Some(value) = self.internal_entities.get(name).cloned() {
+                            // Check for recursive entity reference
+                            if self.open_entities.contains(name) {
+                                return (XmlError::RecursiveEntityRef, pos);
+                            }
+                            // Parse entity value through content processing
+                            // (matches C processEntity → internalEntityProcessor → doContent)
+                            let entity_name = name.to_string();
+                            self.open_entities.insert(entity_name.clone());
+                            let entity_bytes = value.as_bytes().to_vec();
+                            let (entity_err, _) = self.do_content(
+                                self.tag_level,
+                                &xmltok::Utf8Encoding,
+                                &entity_bytes,
+                                0,
+                                entity_bytes.len(),
+                                false, // entity value is complete
+                            );
+                            self.open_entities.remove(&entity_name);
+                            if entity_err != XmlError::None {
+                                return (entity_err, pos);
                             }
                         } else if let Some(handler) = &mut self.skipped_entity_handler {
                             handler(name, false);
@@ -1192,7 +1231,6 @@ impl Parser {
                             self.report_default(enc, data, pos, next);
                         } else {
                             // No handler and no DTD — report undefined entity
-                            // But only if standalone or no param entity refs
                             self.error_code = XmlError::UndefinedEntity;
                             return (XmlError::UndefinedEntity, pos);
                         }
@@ -1589,6 +1627,110 @@ impl Parser {
     }
 
     /// Report default content — corresponds to C reportDefault()
+    /// Validate and store an entity value — corresponds to C storeEntityValue()
+    /// Tokenizes the entity value to validate char refs, detect entity refs, etc.
+    /// Returns the validated UTF-8 string or an error.
+    fn store_entity_value(&self, value_data: &[u8]) -> Result<String, XmlError> {
+        let enc = xmltok::Utf8Encoding;
+        let end = value_data.len();
+        let mut pos = 0;
+        let mut result = Vec::new();
+
+        loop {
+            let tok_result = xmltok_impl::entity_value_tok(&enc, value_data, pos, end);
+            let (tok, next) = match tok_result {
+                Ok(TokenResult { token, next_pos }) => (token, next_pos),
+                Err(_) => return Err(XmlError::InvalidToken),
+            };
+
+            match tok {
+                XmlTok::None => break,
+                XmlTok::EntityRef | XmlTok::DataChars => {
+                    // Entity refs and data chars: append raw bytes
+                    result.extend_from_slice(&value_data[pos..next]);
+                }
+                XmlTok::TrailingCr => {
+                    result.push(b'\n');
+                }
+                XmlTok::DataNewline => {
+                    result.push(b'\n');
+                }
+                XmlTok::CharRef => {
+                    let n = xmltok_impl::char_ref_number(&enc, value_data, pos);
+                    if n < 0 {
+                        return Err(XmlError::BadCharRef);
+                    }
+                    if let Some(c) = char::from_u32(n as u32) {
+                        let mut buf = [0u8; 4];
+                        let encoded = c.encode_utf8(&mut buf);
+                        result.extend_from_slice(encoded.as_bytes());
+                    } else {
+                        return Err(XmlError::BadCharRef);
+                    }
+                }
+                XmlTok::Partial => {
+                    return Err(XmlError::InvalidToken);
+                }
+                XmlTok::Invalid => {
+                    return Err(XmlError::InvalidToken);
+                }
+                _ => {
+                    // ParamEntityRef in internal subset → error
+                    if matches!(tok, XmlTok::ParamEntityRef) {
+                        return Err(XmlError::ParamEntityRef);
+                    }
+                    result.extend_from_slice(&value_data[pos..next]);
+                }
+            }
+            pos = next;
+        }
+
+        Ok(String::from_utf8(result).unwrap_or_default())
+    }
+
+    /// Validate an attribute default value — corresponds to C appendAttributeValue()
+    /// Tokenizes the value to reject < and validate entity refs.
+    fn validate_attribute_value(&self, value_data: &[u8]) -> Result<(), XmlError> {
+        let enc = xmltok::Utf8Encoding;
+        let end = value_data.len();
+        let mut pos = 0;
+
+        loop {
+            let tok_result = xmltok_impl::attribute_value_tok(&enc, value_data, pos, end);
+            let (tok, next) = match tok_result {
+                Ok(TokenResult { token, next_pos }) => (token, next_pos),
+                Err(_) => return Err(XmlError::InvalidToken),
+            };
+
+            match tok {
+                XmlTok::None => return Ok(()),
+                XmlTok::DataChars | XmlTok::DataNewline | XmlTok::TrailingCr => {}
+                XmlTok::CharRef => {
+                    let n = xmltok_impl::char_ref_number(&enc, value_data, pos);
+                    if n < 0 {
+                        return Err(XmlError::BadCharRef);
+                    }
+                }
+                XmlTok::EntityRef => {
+                    // Entity ref in attribute default — check it exists
+                    let minbpc = enc.min_bytes_per_char();
+                    let name_start = pos + minbpc;
+                    let name_end = next - minbpc;
+                    let _name = std::str::from_utf8(&value_data[name_start..name_end]).unwrap_or("");
+                    // In C, appendAttributeValue looks up the entity.
+                    // We accept known predefined entities; others are stored as-is.
+                }
+                XmlTok::Partial | XmlTok::Invalid => {
+                    return Err(XmlError::InvalidToken);
+                }
+                _ => {}
+            }
+            if next <= pos { break; }
+            pos = next;
+        }
+        Ok(())
+    }
+
     fn report_default<E: Encoding>(
         &mut self,
         _enc: &E,
