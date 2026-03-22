@@ -1796,6 +1796,27 @@ impl Parser {
                             }
                         }
                     }
+                    // Normalize tokenized attribute values per XML spec §3.3.3
+                    // NMTOKENS, IDREFS, ENTITIES types get whitespace collapsed
+                    if let Some(type_map) = self.attlist_types.get(tag_name) {
+                        for (attr_name, attr_val) in attrs.iter_mut() {
+                            if let Some(att_type) = type_map.get(attr_name.as_str()) {
+                                if matches!(
+                                    att_type.as_str(),
+                                    "NMTOKENS" | "IDREFS" | "ENTITIES"
+                                        | "NMTOKEN" | "IDREF" | "ENTITY"
+                                        | "ID" | "NOTATION"
+                                ) {
+                                    // Collapse: strip leading/trailing whitespace, collapse internal runs
+                                    let collapsed: String = attr_val
+                                        .split_whitespace()
+                                        .collect::<Vec<&str>>()
+                                        .join(" ");
+                                    *attr_val = collapsed;
+                                }
+                            }
+                        }
+                    }
                     self.n_specified_atts = specified_count * 2; // C counts name+value pairs
                                                                  // Find ID attribute index
                     self.id_att_index = -1;
