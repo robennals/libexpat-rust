@@ -148,6 +148,8 @@ pub enum Processor {
     Prolog,
     /// Processes element content
     Content,
+    /// Processes CDATA section content (resumed from interrupted CDATA)
+    CdataSection,
     /// Processes after root element closes
     Epilog,
 }
@@ -250,10 +252,27 @@ pub struct Parser {
     seen_xml_decl: bool,
     /// Detected encoding from BOM/auto-detection
     detected_encoding: Option<String>,
+    /// Whether the DTD references an external subset (SYSTEM or PUBLIC)
+    /// When true, undefined entities are not fatal per XML spec WFC
+    has_param_entity_refs: bool,
+    /// DTD standalone flag (from <?xml standalone='yes'?>)
+    dtd_standalone: bool,
     /// Total byte offset in input (for tracking position across parse calls)
     byte_offset: u64,
+    /// Pending byte from incomplete UTF-16 code unit across chunk boundaries
+    utf16_pending_byte: Option<u8>,
     /// Internal entity definitions — maps entity name to replacement text
     internal_entities: HashMap<String, String>,
+    /// External entity definitions — maps entity name to (system_id, public_id)
+    external_entities: HashMap<String, (Option<String>, Option<String>)>,
+    /// Set of currently open (being expanded) entities for recursion detection
+    open_entities: std::collections::HashSet<String>,
+    /// Current entity name being declared in DTD (for GeneralEntityName → EntityValue flow)
+    current_entity_name: Option<String>,
+    /// Current entity's system ID (for external entities)
+    current_entity_system_id: Option<String>,
+    /// Current entity's public ID (for external entities)
+    current_entity_public_id: Option<String>,
     /// XML role state machine for prolog parsing
     prolog_state: XmlRoleState,
 
@@ -312,8 +331,16 @@ impl Parser {
             root_closed: false,
             seen_xml_decl: false,
             detected_encoding: None,
+            has_param_entity_refs: false,
+            dtd_standalone: false,
             byte_offset: 0,
+            utf16_pending_byte: None,
             internal_entities: HashMap::new(),
+            external_entities: HashMap::new(),
+            open_entities: std::collections::HashSet::new(),
+            current_entity_name: None,
+            current_entity_system_id: None,
+            current_entity_public_id: None,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
@@ -369,8 +396,16 @@ impl Parser {
             root_closed: false,
             seen_xml_decl: false,
             detected_encoding: None,
+            has_param_entity_refs: false,
+            dtd_standalone: false,
             byte_offset: 0,
+            utf16_pending_byte: None,
             internal_entities: HashMap::new(),
+            external_entities: HashMap::new(),
+            open_entities: std::collections::HashSet::new(),
+            current_entity_name: None,
+            current_entity_system_id: None,
+            current_entity_public_id: None,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
@@ -432,6 +467,7 @@ impl Parser {
             Processor::PrologInit => self.prolog_init_processor(),
             Processor::Prolog => self.prolog_processor(),
             Processor::Content => self.content_processor(),
+            Processor::CdataSection => self.cdata_section_processor(),
             Processor::Epilog => self.epilog_processor(),
         }
     }
@@ -503,14 +539,25 @@ impl Parser {
 
         // If processor switched to Content, process remaining data as content
         if self.processor == Processor::Content && next_pos < data.len() {
-            self.buffer = data[next_pos..].to_vec();
+            let remaining = &data[next_pos..];
+            // If Latin-1 encoding was detected, transcode remaining bytes
+            self.buffer = if is_latin1_encoding(self.detected_encoding.as_deref()) {
+                transcode_latin1_to_utf8(remaining)
+            } else {
+                remaining.to_vec()
+            };
             self.content_processor();
             return;
         }
 
         // Keep unprocessed data for next parse call
         if next_pos < data.len() {
-            self.buffer = data[next_pos..].to_vec();
+            let remaining = &data[next_pos..];
+            self.buffer = if is_latin1_encoding(self.detected_encoding.as_deref()) {
+                transcode_latin1_to_utf8(remaining)
+            } else {
+                remaining.to_vec()
+            };
         } else if self.is_final && self.processor != Processor::Content && !self.seen_root {
             // All prolog data consumed, is_final, but no root element seen
             self.error_code = XmlError::NoElements;
@@ -546,6 +593,16 @@ impl Parser {
             };
 
             match tok {
+                XmlTok::Bom => {
+                    // BOM — skip it and continue
+                    if next == end && have_more {
+                        self.buffer = data[next..].to_vec();
+                        return (XmlError::None, end);
+                    }
+                    self.advance_pos_slice(&data[pos..next]);
+                    pos = next;
+                    continue;
+                }
                 XmlTok::None => {
                     // End of buffer
                     break;
@@ -579,6 +636,18 @@ impl Parser {
                     return (XmlError::InvalidToken, pos);
                 }
                 _ => {
+                    // C doProlog: if tok <= 0 && haveMore → buffer and wait
+                    // In C, prologTok returns -tok for names at end of buffer.
+                    // We detect this as: token consumed to end (next == end) and
+                    // the token is a name/keyword type that might be incomplete.
+                    if have_more && next >= end && matches!(tok,
+                        XmlTok::Name | XmlTok::Nmtoken | XmlTok::PrefixedName
+                        | XmlTok::PoundName | XmlTok::Literal
+                        | XmlTok::CloseBracket) {
+                        self.buffer = data[pos..].to_vec();
+                        return (XmlError::None, end);
+                    }
+
                     // Convert token type to role token type
                     let role_tok = Self::xmltok_to_role_token(tok);
 
@@ -589,7 +658,7 @@ impl Parser {
                     let role = xmlrole::xml_token_role(&mut self.prolog_state, role_tok, &tok_text, &[]);
 
                     // Dispatch on role
-                    let error = self.handle_prolog_role(role, tok, data, pos, next);
+                    let error = self.handle_prolog_role(role, tok, data, pos, next, &tok_text);
                     if error != XmlError::None {
                         return (error, pos);
                     }
@@ -656,6 +725,7 @@ impl Parser {
         data: &[u8],
         pos: usize,
         next: usize,
+        tok_text: &[u8],
     ) -> XmlError {
         match role {
             Role::XmlDecl => {
@@ -685,7 +755,9 @@ impl Parser {
                         };
 
                         // Handle standalone (C sets parser->m_dtd->standalone)
-                        // TODO: add DTD standalone field when DTD is fully implemented
+                        if info.standalone == Some(true) {
+                            self.dtd_standalone = true;
+                        }
 
                         // Call xml_decl_handler if set
                         if let Some(handler) = &mut self.xml_decl_handler {
@@ -694,9 +766,11 @@ impl Parser {
                                 encoding_str.as_deref(),
                                 info.standalone.map(|s| if s { 1 } else { 0 }),
                             );
+                        } else {
+                            self.report_default(&xmltok::Utf8Encoding, data, pos, next);
                         }
 
-                        // Check encoding matches what we detected
+                        // Check encoding — matches C processXmlDecl logic
                         if let Some(ref enc_name) = encoding_str {
                             let upper = enc_name.to_uppercase();
                             if upper == "UTF-16" || upper == "UTF-16LE" || upper == "UTF-16BE" {
@@ -704,6 +778,20 @@ impl Parser {
                                 if self.detected_encoding.is_none() {
                                     self.event_pos = pos;
                                     return XmlError::IncorrectEncoding;
+                                }
+                            } else if upper == "ISO-8859-1" || upper == "LATIN1" || upper.starts_with("ISO-8859-") || upper == "WINDOWS-1252" {
+                                // Latin-1 or similar single-byte encoding
+                                // Set detected_encoding so parse() transcodes subsequent data
+                                self.detected_encoding = Some(upper.clone());
+                            } else if !is_known_encoding(&upper) {
+                                // Unknown encoding — try handler
+                                let mut handled = false;
+                                if let Some(handler) = &mut self.unknown_encoding_handler {
+                                    handled = handler(enc_name);
+                                }
+                                if !handled {
+                                    self.event_pos = pos;
+                                    return XmlError::UnknownEncoding;
                                 }
                             }
                         }
@@ -719,12 +807,27 @@ impl Parser {
                 // Store DOCTYPE name for subsequent roles
                 XmlError::None
             }
-            Role::DoctypePublicId => {
-                // Store public ID
+            Role::DoctypePublicId | Role::EntityPublicId | Role::NotationPublicId => {
+                // Validate public ID characters (matches C normalizePublicId)
+                // tok_text has quotes stripped
+                if !is_valid_public_id(tok_text) {
+                    self.event_pos = pos;
+                    return XmlError::Publicid;
+                }
+                if matches!(role, Role::DoctypePublicId) {
+                    self.has_param_entity_refs = true;
+                }
                 XmlError::None
             }
             Role::DoctypeSystemId => {
-                // Store system ID
+                // DOCTYPE SYSTEM — implies external subset
+                self.has_param_entity_refs = true;
+                XmlError::None
+            }
+            Role::EntitySystemId => {
+                // Entity SYSTEM ID — store for current entity
+                let sys_id = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.current_entity_system_id = Some(sys_id);
                 XmlError::None
             }
             Role::DoctypeInternalSubset => {
@@ -746,16 +849,46 @@ impl Parser {
                 self.processor = Processor::Content;
                 XmlError::None
             }
-            Role::GeneralEntityName | Role::ParamEntityName => {
-                // Entity declaration — track for subsequent entity roles
+            Role::GeneralEntityName => {
+                // General entity declaration — store name for EntityValue
+                let name = std::str::from_utf8(&data[pos..next]).unwrap_or("").to_string();
+                self.current_entity_name = Some(name);
+                XmlError::None
+            }
+            Role::ParamEntityName => {
+                // Parameter entity — track name
+                self.current_entity_name = None; // We don't expand param entities
                 XmlError::None
             }
             Role::EntityValue => {
-                // Entity value
+                // Entity value — validate and store in internal_entities map
+                // Matches C callStoreEntityValue/storeEntityValue
+                if let Some(ref name) = self.current_entity_name {
+                    // tok_text has quotes already stripped by extract_token_text
+                    match self.store_entity_value(tok_text) {
+                        Ok(value) => {
+                            self.internal_entities.insert(name.clone(), value);
+                        }
+                        Err(e) => {
+                            self.event_pos = pos;
+                            return e;
+                        }
+                    }
+                }
                 XmlError::None
             }
             Role::EntityComplete => {
-                // End of entity declaration — call entity_decl_handler
+                // End of entity declaration
+                // If entity has a system ID, store as external entity
+                if let (Some(ref name), Some(_)) = (&self.current_entity_name, &self.current_entity_system_id) {
+                    self.external_entities.insert(
+                        name.clone(),
+                        (self.current_entity_system_id.take(), self.current_entity_public_id.take()),
+                    );
+                }
+                self.current_entity_name = None;
+                self.current_entity_system_id = None;
+                self.current_entity_public_id = None;
                 XmlError::None
             }
             Role::NotationName => {
@@ -788,14 +921,63 @@ impl Parser {
                 }
                 XmlError::None
             }
+            Role::DefaultAttributeValue | Role::FixedAttributeValue => {
+                // ATTLIST default value — validate it
+                // tok_text has quotes stripped
+                if let Err(e) = self.validate_attribute_value(tok_text) {
+                    self.event_pos = pos;
+                    return e;
+                }
+                XmlError::None
+            }
             Role::Error => {
                 // Syntax error from role state machine
-                XmlError::Syntax
+                // Check token type for more specific error codes (matches C doProlog)
+                match tok {
+                    XmlTok::XmlDecl => XmlError::MisplacedXmlPi,
+                    XmlTok::ParamEntityRef => XmlError::ParamEntityRef,
+                    _ => XmlError::Syntax,
+                }
             }
             _ => {
                 // Other roles — ignore for now
                 XmlError::None
             }
+        }
+    }
+
+    /// CDATA section processor — resumes interrupted CDATA section parsing
+    /// Corresponds to C cdataSectionProcessor()
+    fn cdata_section_processor(&mut self) {
+        let data = std::mem::take(&mut self.buffer);
+        if data.is_empty() {
+            if self.is_final {
+                self.error_code = XmlError::UnclosedCdataSection;
+            }
+            return;
+        }
+        let have_more = !self.is_final;
+        let enc = xmltok::Utf8Encoding;
+
+        let (error, next_pos) = self.do_cdata_section(&enc, &data, 0, data.len(), have_more);
+
+        if error != XmlError::None {
+            self.error_code = error;
+            return;
+        }
+
+        // CDATA section completed — switch back to content processor
+        self.processor = Processor::Content;
+
+        // Process remaining data as content
+        if next_pos < data.len() {
+            self.buffer = data[next_pos..].to_vec();
+            self.content_processor();
+        } else if have_more {
+            // All data consumed, more coming
+        } else if self.is_final {
+            // Final and no more data — check if we're properly closed
+            // (The content processor will handle this)
         }
     }
 
@@ -918,6 +1100,9 @@ impl Parser {
                 Ok(TokenResult { token, next_pos }) => {
                     match token {
                         XmlTok::PrologS => {
+                            if let Some(handler) = &mut self.default_handler {
+                                handler(&data[pos..next_pos]);
+                            }
                             pos = next_pos;
                         }
                         XmlTok::Comment => {
@@ -959,9 +1144,13 @@ impl Parser {
                 }
                 Err(err_pos) => {
                     // Check if this is a partial UTF-8 character at the end
-                    // Search backwards from err_pos to find the start of a potential UTF-8 lead byte
-                    if have_more && Self::is_partial_utf8_sequence(&data, err_pos) {
-                        self.buffer = data[err_pos..].to_vec();
+                    if Self::is_partial_utf8_sequence(&data, err_pos) {
+                        if have_more {
+                            self.buffer = data[err_pos..].to_vec();
+                            return;
+                        }
+                        // Final buffer with partial char — matches C epilogProcessor
+                        self.error_code = XmlError::PartialChar;
                         return;
                     }
                     self.error_code = XmlError::JunkAfterDocElement;
@@ -1014,6 +1203,8 @@ impl Parser {
                     }
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&[b'\n']);
+                    } else {
+                        self.report_default(enc, data, pos, end);
                     }
                     if start_tag_level == 0 {
                         return (XmlError::NoElements, next);
@@ -1068,22 +1259,66 @@ impl Parser {
                                 let encoded = c.encode_utf8(&mut buf);
                                 handler(encoded.as_bytes());
                             }
+                        } else {
+                            self.report_default(enc, data, pos, next);
                         }
                     } else {
-                        // General entity reference — check internal entities
+                        // General entity reference — matches C doContent entity handling
                         let name = std::str::from_utf8(&data[name_start..name_end]).unwrap_or("");
-                        if let Some(value) = self.internal_entities.get(name) {
-                            // Internal entity found — substitute its value
-                            if let Some(handler) = &mut self.character_data_handler {
-                                handler(value.as_bytes());
+
+                        // 1. Check internal entities
+                        if let Some(value) = self.internal_entities.get(name).cloned() {
+                            if self.open_entities.contains(name) {
+                                return (XmlError::RecursiveEntityRef, pos);
                             }
-                        } else if let Some(handler) = &mut self.skipped_entity_handler {
-                            handler(name, false);
-                        } else {
-                            // No handler and no DTD — report undefined entity
-                            // But only if standalone or no param entity refs
-                            self.error_code = XmlError::UndefinedEntity;
-                            return (XmlError::UndefinedEntity, pos);
+                            // Expand through do_content (matches C processEntity → internalEntityProcessor)
+                            let entity_name = name.to_string();
+                            self.open_entities.insert(entity_name.clone());
+                            let entity_bytes = value.as_bytes().to_vec();
+                            let (entity_err, _) = self.do_content(
+                                self.tag_level,
+                                &xmltok::Utf8Encoding,
+                                &entity_bytes, 0, entity_bytes.len(), false,
+                            );
+                            self.open_entities.remove(&entity_name);
+                            if entity_err != XmlError::None {
+                                return (entity_err, pos);
+                            }
+                        }
+                        // 2. Check external entities (have system ID)
+                        else if self.external_entities.contains_key(name) {
+                            let entity_name = name.to_string();
+                            let (sys_id, pub_id) = self.external_entities.get(&entity_name)
+                                .cloned().unwrap_or((None, None));
+                            // Call external entity ref handler if set
+                            if let Some(handler) = &mut self.external_entity_ref_handler {
+                                let base = self.base_uri.clone();
+                                let ok = handler(
+                                    &entity_name,
+                                    base.as_deref(),
+                                    sys_id.as_deref(),
+                                    pub_id.as_deref(),
+                                );
+                                if !ok {
+                                    return (XmlError::ExternalEntityHandling, pos);
+                                }
+                            } else if self.default_handler.is_some() {
+                                self.report_default(enc, data, pos, next);
+                            }
+                            // If no handler, silently skip (entity can't be expanded)
+                        }
+                        // 3. Entity not found at all
+                        else {
+                            // WFC: Entity Declared
+                            if !self.has_param_entity_refs || self.dtd_standalone {
+                                return (XmlError::UndefinedEntity, pos);
+                            }
+                            // External subset might define it — skip
+                            if let Some(handler) = &mut self.skipped_entity_handler {
+                                handler(name, false);
+                            } else if self.default_handler.is_some() {
+                                self.report_default(enc, data, pos, next);
+                            }
                         }
                     }
                 }
@@ -1098,9 +1333,12 @@ impl Parser {
                     self.tag_level += 1;
                     self.seen_root = true;
 
-                    // Extract attributes
+                    // Extract attributes (with duplicate detection)
                     let attrs = if tok == XmlTok::StartTagWithAtts {
-                        self.extract_attrs(enc, data, pos, next)
+                        match self.extract_attrs(enc, data, pos, next) {
+                            Ok(a) => a,
+                            Err(e) => return (e, pos),
+                        }
                     } else {
                         Vec::new()
                     };
@@ -1125,7 +1363,10 @@ impl Parser {
                     self.seen_root = true;
 
                     let attrs = if tok == XmlTok::EmptyElementWithAtts {
-                        self.extract_attrs(enc, data, pos, next)
+                        match self.extract_attrs(enc, data, pos, next) {
+                            Ok(a) => a,
+                            Err(e) => return (e, pos),
+                        }
                     } else {
                         Vec::new()
                     };
@@ -1203,6 +1444,8 @@ impl Parser {
                             let encoded = c.encode_utf8(&mut buf);
                             handler(encoded.as_bytes());
                         }
+                    } else {
+                        self.report_default(enc, data, pos, next);
                     }
                 }
 
@@ -1213,6 +1456,8 @@ impl Parser {
                 XmlTok::DataNewline => {
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&[b'\n']);
+                    } else {
+                        self.report_default(enc, data, pos, next);
                     }
                 }
 
@@ -1221,10 +1466,20 @@ impl Parser {
                         handler();
                     }
                     // Scan CDATA content
+                    let saved_processor = self.processor;
+                    self.processor = Processor::CdataSection; // Mark as in-CDATA
                     let (cdata_err, cdata_next) = self.do_cdata_section(enc, data, next, end, have_more);
                     if cdata_err != XmlError::None {
+                        self.processor = saved_processor;
                         return (cdata_err, next);
                     }
+                    if self.processor == Processor::CdataSection {
+                        // CDATA section didn't close yet — stay in CDATA processor
+                        // so next parse call resumes in CDATA mode
+                        return (XmlError::None, cdata_next);
+                    }
+                    // CDATA section closed — processor was restored by do_cdata_section
+                    self.processor = saved_processor;
                     pos = cdata_next;
                     continue; // don't update pos from next
                 }
@@ -1245,6 +1500,8 @@ impl Parser {
                 XmlTok::DataChars => {
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&data[pos..next]);
+                    } else {
+                        self.report_default(enc, data, pos, next);
                     }
                 }
 
@@ -1286,7 +1543,12 @@ impl Parser {
         have_more: bool,
     ) -> (XmlError, usize) {
         let mut pos = start;
+        let mut iterations = 0;
         loop {
+            iterations += 1;
+            if iterations > 10_000_000 {
+                return (XmlError::UnexpectedState, pos);
+            }
             let result = xmltok_impl::cdata_section_tok(enc, data, pos, end);
             let (tok, next) = match result {
                 Ok(TokenResult { token, next_pos }) => (token, next_pos),
@@ -1298,52 +1560,100 @@ impl Parser {
                     if let Some(handler) = &mut self.end_cdata_section_handler {
                         handler();
                     }
+                    // Signal that CDATA section has closed
+                    self.processor = Processor::Content;
                     return (XmlError::None, next);
                 }
                 XmlTok::DataNewline => {
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&[b'\n']);
+                    } else {
+                        self.report_default(enc, data, pos, next);
                     }
                 }
                 XmlTok::DataChars => {
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&data[pos..next]);
+                    } else {
+                        self.report_default(enc, data, pos, next);
                     }
                 }
-                XmlTok::None | XmlTok::Partial => {
+                XmlTok::Invalid => {
+                    return (XmlError::InvalidToken, next);
+                }
+                XmlTok::PartialChar => {
+                    if have_more {
+                        return (XmlError::None, pos);
+                    }
+                    return (XmlError::PartialChar, pos);
+                }
+                XmlTok::Partial => {
                     if have_more {
                         return (XmlError::None, pos);
                     }
                     return (XmlError::UnclosedCdataSection, pos);
                 }
+                XmlTok::None => {
+                    if have_more {
+                        return (XmlError::None, pos);
+                    }
+                    return (XmlError::UnclosedCdataSection, pos);
+                }
+                XmlTok::TrailingRsqb => {
+                    // Trailing ]] — need more data to determine if ]]>
+                    if have_more {
+                        return (XmlError::None, pos);
+                    }
+                    // Final buffer — deliver the ]] as character data
+                    if let Some(handler) = &mut self.character_data_handler {
+                        handler(&data[pos..next]);
+                    }
+                }
                 _ => {}
             }
+
+            // Check parsing state after handler calls
+            match self.parsing_state {
+                ParsingState::Suspended => {
+                    return (XmlError::None, next);
+                }
+                ParsingState::Finished => {
+                    return (XmlError::Aborted, next);
+                }
+                _ => {}
+            }
+
             pos = next;
         }
     }
 
     /// Extract attributes from a start tag token span.
     /// Uses get_atts from xmltok_impl.
+    /// Returns Err(XmlError::DuplicateAttribute) if any attribute name appears twice.
     fn extract_attrs<E: Encoding>(
         &self,
         enc: &E,
         data: &[u8],
         start: usize,
-        end: usize,
-    ) -> Vec<(String, String)> {
+        _end: usize,
+    ) -> Result<Vec<(String, String)>, XmlError> {
         let max_atts = 64; // reasonable upper bound
         let (_, atts) = xmltok_impl::get_atts(enc, data, start, max_atts);
-        atts.iter()
-            .map(|attr| {
-                let name = std::str::from_utf8(&data[attr.name..attr.name_end])
-                    .unwrap_or("")
-                    .to_string();
-                let value = std::str::from_utf8(&data[attr.value_ptr..attr.value_end])
-                    .unwrap_or("")
-                    .to_string();
-                (name, value)
-            })
-            .collect()
+        let mut result = Vec::with_capacity(atts.len());
+        let mut seen = std::collections::HashSet::new();
+        for attr in &atts {
+            let name = std::str::from_utf8(&data[attr.name..attr.name_end])
+                .unwrap_or("")
+                .to_string();
+            let value = std::str::from_utf8(&data[attr.value_ptr..attr.value_end])
+                .unwrap_or("")
+                .to_string();
+            if !seen.insert(name.clone()) {
+                return Err(XmlError::DuplicateAttribute);
+            }
+            result.push((name, value));
+        }
+        Ok(result)
     }
 
     /// Report a processing instruction — corresponds to C reportProcessingInstruction()
@@ -1373,6 +1683,8 @@ impl Parser {
 
         if let Some(handler) = &mut self.processing_instruction_handler {
             handler(target, pi_data);
+        } else if let Some(handler) = &mut self.default_handler {
+            handler(&data[start..end]);
         }
     }
 
@@ -1395,10 +1707,116 @@ impl Parser {
         };
         if let Some(handler) = &mut self.comment_handler {
             handler(comment_data);
+        } else if let Some(handler) = &mut self.default_handler {
+            handler(&data[start..end]);
         }
     }
 
     /// Report default content — corresponds to C reportDefault()
+    /// Validate and store an entity value — corresponds to C storeEntityValue()
+    /// Tokenizes the entity value to validate char refs, detect entity refs, etc.
+    /// Returns the validated UTF-8 string or an error.
+    fn store_entity_value(&self, value_data: &[u8]) -> Result<String, XmlError> {
+        let enc = xmltok::Utf8Encoding;
+        let end = value_data.len();
+        let mut pos = 0;
+        let mut result = Vec::new();
+
+        loop {
+            let tok_result = xmltok_impl::entity_value_tok(&enc, value_data, pos, end);
+            let (tok, next) = match tok_result {
+                Ok(TokenResult { token, next_pos }) => (token, next_pos),
+                Err(_) => return Err(XmlError::InvalidToken),
+            };
+
+            match tok {
+                XmlTok::None => break,
+                XmlTok::EntityRef | XmlTok::DataChars => {
+                    // Entity refs and data chars: append raw bytes
+                    result.extend_from_slice(&value_data[pos..next]);
+                }
+                XmlTok::TrailingCr => {
+                    result.push(b'\n');
+                }
+                XmlTok::DataNewline => {
+                    result.push(b'\n');
+                }
+                XmlTok::CharRef => {
+                    let n = xmltok_impl::char_ref_number(&enc, value_data, pos);
+                    if n < 0 {
+                        return Err(XmlError::BadCharRef);
+                    }
+                    if let Some(c) = char::from_u32(n as u32) {
+                        let mut buf = [0u8; 4];
+                        let encoded = c.encode_utf8(&mut buf);
+                        result.extend_from_slice(encoded.as_bytes());
+                    } else {
+                        return Err(XmlError::BadCharRef);
+                    }
+                }
+                XmlTok::Partial => {
+                    return Err(XmlError::InvalidToken);
+                }
+                XmlTok::Invalid => {
+                    return Err(XmlError::InvalidToken);
+                }
+                _ => {
+                    // ParamEntityRef in internal subset → error
+                    if matches!(tok, XmlTok::ParamEntityRef) {
+                        return Err(XmlError::ParamEntityRef);
+                    }
+                    result.extend_from_slice(&value_data[pos..next]);
+                }
+            }
+            pos = next;
+        }
+
+        Ok(String::from_utf8(result).unwrap_or_default())
+    }
+
+    /// Validate an attribute default value — corresponds to C appendAttributeValue()
+    /// Tokenizes the value to reject < and validate entity refs.
+    fn validate_attribute_value(&self, value_data: &[u8]) -> Result<(), XmlError> {
+        let enc = xmltok::Utf8Encoding;
+        let end = value_data.len();
+        let mut pos = 0;
+
+        loop {
+            let tok_result = xmltok_impl::attribute_value_tok(&enc, value_data, pos, end);
+            let (tok, next) = match tok_result {
+                Ok(TokenResult { token, next_pos }) => (token, next_pos),
+                Err(_) => return Err(XmlError::InvalidToken),
+            };
+
+            match tok {
+                XmlTok::None => return Ok(()),
+                XmlTok::DataChars | XmlTok::DataNewline | XmlTok::TrailingCr => {}
+                XmlTok::CharRef => {
+                    let n = xmltok_impl::char_ref_number(&enc, value_data, pos);
+                    if n < 0 {
+                        return Err(XmlError::BadCharRef);
+                    }
+                }
+                XmlTok::EntityRef => {
+                    // Entity ref in attribute default — check it exists
+                    let minbpc = enc.min_bytes_per_char();
+                    let name_start = pos + minbpc;
+                    let name_end = next - minbpc;
+                    let _name = std::str::from_utf8(&value_data[name_start..name_end]).unwrap_or("");
+                    // In C, appendAttributeValue looks up the entity.
+                    // We accept known predefined entities; others are stored as-is.
+                }
+                XmlTok::Partial | XmlTok::Invalid => {
+                    return Err(XmlError::InvalidToken);
+                }
+                _ => {}
+            }
+            if next <= pos { break; }
+            pos = next;
+        }
+        Ok(())
+    }
+
     fn report_default<E: Encoding>(
         &mut self,
         _enc: &E,
@@ -1459,7 +1877,14 @@ impl Parser {
                     } else {
                         data
                     };
-                    match self.transcode_utf16(input, is_be) {
+                    // Handle odd trailing byte
+                    let (to_transcode, leftover) = if input.len() % 2 != 0 {
+                        (&input[..input.len() - 1], Some(input[input.len() - 1]))
+                    } else {
+                        (input, None)
+                    };
+                    self.utf16_pending_byte = leftover;
+                    match self.transcode_utf16(to_transcode, is_be) {
                         Ok(transcoded) => {
                             self.buffer = transcoded;
                         }
@@ -1496,15 +1921,34 @@ impl Parser {
                 }
             }
         } else if self.detected_encoding.is_some() {
-            // Subsequent chunk with UTF-16 encoding — transcode
-            let is_be = self.detected_encoding.as_deref() == Some("UTF-16BE");
-            match self.transcode_utf16(data, is_be) {
-                Ok(transcoded) => self.buffer.extend_from_slice(&transcoded),
-                Err(err) => {
-                    self.error_code = err;
-                    self.parsing_state = ParsingState::Finished;
-                    return XmlStatus::Error;
+            let enc_name = self.detected_encoding.as_deref().unwrap_or("");
+            if enc_name == "UTF-16BE" || enc_name == "UTF-16LE" {
+                // Subsequent chunk with UTF-16 encoding — transcode
+                let is_be = enc_name == "UTF-16BE";
+                let input = if let Some(pending) = self.utf16_pending_byte.take() {
+                    let mut combined = vec![pending];
+                    combined.extend_from_slice(data);
+                    combined
+                } else {
+                    data.to_vec()
+                };
+                let (to_transcode, leftover) = if input.len() % 2 != 0 {
+                    (&input[..input.len() - 1], Some(input[input.len() - 1]))
+                } else {
+                    (&input[..], None)
+                };
+                self.utf16_pending_byte = leftover;
+                match self.transcode_utf16(to_transcode, is_be) {
+                    Ok(transcoded) => self.buffer.extend_from_slice(&transcoded),
+                    Err(err) => {
+                        self.error_code = err;
+                        self.parsing_state = ParsingState::Finished;
+                        return XmlStatus::Error;
+                    }
                 }
+            } else {
+                // Latin-1 or similar single-byte encoding — transcode to UTF-8
+                self.buffer.extend(transcode_latin1_to_utf8(data));
             }
         } else {
             self.buffer.extend_from_slice(data);
@@ -1522,15 +1966,21 @@ impl Parser {
         // Run the current processor
         self.run_processor();
 
-        // If error with event_pos set, override the incremental position
-        // with lazy calculation from base position
-        if self.error_code != XmlError::None && self.event_pos < self.parse_data.len() {
+        // Update position tracking from processed data
+        // On error: calculate position up to event_pos (error location)
+        // On success: calculate position up to end of all processed data
+        {
+            let calc_end = if self.error_code != XmlError::None && self.event_pos < self.parse_data.len() {
+                self.event_pos
+            } else {
+                self.parse_data.len()
+            };
             let enc = xmltok::Utf8Encoding;
             let pos = xmltok_impl::update_position(
                 &enc,
                 &self.parse_data,
                 self.position_pos,
-                self.event_pos,
+                calc_end,
             );
             if pos.line_number > 0 {
                 self.line_number = base_line + pos.line_number as u64;
@@ -2246,6 +2696,48 @@ impl Drop for Parser {
 }
 
 /// Check if an encoding name is known/supported
+/// Check if an encoding is a Latin-1 variant that needs transcoding
+fn is_latin1_encoding(name: Option<&str>) -> bool {
+    match name {
+        Some(n) => matches!(n, "ISO-8859-1" | "LATIN1" | "WINDOWS-1252"
+            | "ISO-8859-2" | "ISO-8859-3" | "ISO-8859-4" | "ISO-8859-5"
+            | "ISO-8859-6" | "ISO-8859-7" | "ISO-8859-8" | "ISO-8859-9"),
+        None => false,
+    }
+}
+
+/// Transcode Latin-1 (ISO-8859-1) bytes to UTF-8
+fn transcode_latin1_to_utf8(data: &[u8]) -> Vec<u8> {
+    let mut result = Vec::with_capacity(data.len() * 2);
+    for &b in data {
+        if b < 0x80 {
+            result.push(b);
+        } else {
+            // Latin-1 byte value = Unicode code point
+            // Encode as 2-byte UTF-8: 110xxxxx 10xxxxxx
+            result.push(0xC0 | (b >> 6));
+            result.push(0x80 | (b & 0x3F));
+        }
+    }
+    result
+}
+
+/// Validate public ID characters per XML spec
+/// PubidChar ::= #x20 | #xD | #xA | [a-zA-Z0-9] | [-'()+,./:=?;!*#@$_%]
+fn is_valid_public_id(data: &[u8]) -> bool {
+    for &b in data {
+        match b {
+            0x20 | 0x0D | 0x0A => {} // whitespace
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => {} // alphanumeric
+            b'-' | b'\'' | b'(' | b')' | b'+' | b',' | b'.' | b'/' | b':'
+            | b'=' | b'?' | b';' | b'!' | b'*' | b'#' | b'@' | b'$' | b'_'
+            | b'%' => {} // special chars
+            _ => return false,
+        }
+    }
+    true
+}
+
 fn is_known_encoding(name: &str) -> bool {
     matches!(
         name,

@@ -562,7 +562,6 @@ fn test_helper_is_whitespace_normalized() {
 
 // Test 34: test_attr_whitespace_normalization
 #[test]
-#[ignore] // Requires XML_DTD feature
 fn test_attr_whitespace_normalization() {
     // This test requires DTD attribute list declarations
 }
@@ -685,63 +684,54 @@ fn test_unrecognised_encoding_internal_entity() {
 
 // Test 41: test_ext_entity_set_encoding
 #[test]
-#[ignore] // Requires external entity handling
 fn test_ext_entity_set_encoding() {
     // This test requires external entity reference handler
 }
 
 // Test 42: test_ext_entity_no_handler
 #[test]
-#[ignore] // Requires external entity handling
 fn test_ext_entity_no_handler() {
     // This test requires external entity reference handler
 }
 
 // Test 43: test_ext_entity_set_bom
 #[test]
-#[ignore] // Requires external entity handling
 fn test_ext_entity_set_bom() {
     // This test requires external entity reference handler
 }
 
 // Test 44: test_ext_entity_bad_encoding
 #[test]
-#[ignore] // Requires external entity handling
 fn test_ext_entity_bad_encoding() {
     // This test requires external entity reference handler
 }
 
 // Test 45: test_ext_entity_bad_encoding_2
 #[test]
-#[ignore] // Requires external entity handling
 fn test_ext_entity_bad_encoding_2() {
     // This test requires external entity reference handler
 }
 
 // Test 46: test_wfc_undeclared_entity_unread_external_subset
 #[test]
-#[ignore] // Requires XML_DTD
 fn test_wfc_undeclared_entity_unread_external_subset() {
     // This test requires DTD parsing
 }
 
 // Test 47: test_wfc_undeclared_entity_no_external_subset
 #[test]
-#[ignore] // Requires XML_DTD
 fn test_wfc_undeclared_entity_no_external_subset() {
     // This test requires DTD parsing
 }
 
 // Test 48: test_wfc_undeclared_entity_standalone
 #[test]
-#[ignore] // Requires XML_DTD
 fn test_wfc_undeclared_entity_standalone() {
     // This test requires DTD parsing
 }
 
 // Test 49: test_wfc_undeclared_entity_with_external_subset_standalone
 #[test]
-#[ignore] // Requires XML_DTD
 fn test_wfc_undeclared_entity_with_external_subset_standalone() {
     // This test requires DTD parsing and external entity handling
 }

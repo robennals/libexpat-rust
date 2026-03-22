@@ -309,6 +309,7 @@ fn is_name_char(bt: ByteType) -> bool {
             | ByteType::DIGIT
             | ByteType::NAME
             | ByteType::MINUS
+            | ByteType::COLON
     )
 }
 
@@ -349,6 +350,18 @@ pub fn scan_pi<E: Encoding>(
 
                 while enc.has_char(data, pos, end) {
                     match enc.byte_type(data, pos) {
+                        ByteType::LEAD2 => {
+                            if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                            pos += 2;
+                        }
+                        ByteType::LEAD3 => {
+                            if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                            pos += 3;
+                        }
+                        ByteType::LEAD4 => {
+                            if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                            pos += 4;
+                        }
                         ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
                             return Err(pos);
                         }
@@ -476,21 +489,22 @@ pub fn cdata_section_tok<E: Encoding>(
             pos += minbpc;
             if !enc.has_char(data, pos, end) {
                 return Ok(TokenResult {
-                    token: XmlTok::DataNewline,
+                    token: XmlTok::TrailingRsqb,
                     next_pos: pos,
                 });
             }
             if !enc.char_matches(data, pos, ASCII_RSQB) {
-                pos -= minbpc;
+                // Single ] — keep pos past it and fall through to continuation loop
             } else {
                 pos += minbpc;
                 if !enc.has_char(data, pos, end) {
                     return Ok(TokenResult {
-                        token: XmlTok::DataNewline,
+                        token: XmlTok::TrailingRsqb,
                         next_pos: pos,
                     });
                 }
                 if !enc.char_matches(data, pos, ASCII_GT) {
+                    // ]] but no > — back up to second ], fall through
                     pos -= minbpc;
                 } else {
                     return Ok(TokenResult {
@@ -521,6 +535,18 @@ pub fn cdata_section_tok<E: Encoding>(
                 token: XmlTok::DataNewline,
                 next_pos: pos + minbpc,
             });
+        }
+        ByteType::LEAD2 => {
+            if end - pos < 2 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+            pos += 2;
+        }
+        ByteType::LEAD3 => {
+            if end - pos < 3 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+            pos += 3;
+        }
+        ByteType::LEAD4 => {
+            if end - pos < 4 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+            pos += 4;
         }
         ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
             return Err(pos);
@@ -584,11 +610,27 @@ pub fn scan_end_tag<E: Encoding>(
         });
     }
 
-    if !is_nmstrt_char(enc.byte_type(data, pos)) {
-        return Err(pos);
+    // Name start character (including multi-byte UTF-8)
+    match enc.byte_type(data, pos) {
+        ByteType::LEAD2 => {
+            if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+            pos += 2;
+        }
+        ByteType::LEAD3 => {
+            if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+            pos += 3;
+        }
+        ByteType::LEAD4 => {
+            if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+            pos += 4;
+        }
+        _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
+            pos += enc.min_bytes_per_char();
+        }
+        _ => {
+            return Err(pos);
+        }
     }
-
-    pos += enc.min_bytes_per_char();
 
     while enc.has_char(data, pos, end) {
         match enc.byte_type(data, pos) {
@@ -620,6 +662,21 @@ pub fn scan_end_tag<E: Encoding>(
                     token: XmlTok::EndTag,
                     next_pos: pos + enc.min_bytes_per_char(),
                 });
+            }
+            ByteType::LEAD2 => {
+                if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                pos += 2;
+            }
+            ByteType::LEAD3 => {
+                if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                pos += 3;
+            }
+            ByteType::LEAD4 => {
+                if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                pos += 4;
+            }
+            ByteType::COLON => {
+                pos += enc.min_bytes_per_char();
             }
             _ if is_name_char(enc.byte_type(data, pos)) => {
                 pos += enc.min_bytes_per_char();
@@ -795,6 +852,19 @@ pub fn scan_atts<E: Encoding>(
     // Outer loop: scan attribute name characters
     while enc.has_char(data, pos, end) {
         match enc.byte_type(data, pos) {
+            // Multi-byte name characters (LEAD2/3/4)
+            ByteType::LEAD2 => {
+                if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                pos += 2;
+            }
+            ByteType::LEAD3 => {
+                if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                pos += 3;
+            }
+            ByteType::LEAD4 => {
+                if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                pos += 4;
+            }
             // Name characters — continue scanning attr name
             _ if is_name_char(enc.byte_type(data, pos))
                 && !matches!(enc.byte_type(data, pos), ByteType::S | ByteType::CR | ByteType::LF
@@ -900,6 +970,18 @@ fn scan_attr_value<E: Encoding>(
             break; // Found closing quote
         }
         match t {
+            ByteType::LEAD2 => {
+                if end - pos < 2 { return Ok(pos); } // Partial
+                pos += 2;
+            }
+            ByteType::LEAD3 => {
+                if end - pos < 3 { return Ok(pos); } // Partial
+                pos += 3;
+            }
+            ByteType::LEAD4 => {
+                if end - pos < 4 { return Ok(pos); } // Partial
+                pos += 4;
+            }
             ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => return Err(pos),
             ByteType::AMP => {
                 let result = scan_ref(enc, data, pos + minbpc, end)?;
@@ -979,16 +1061,27 @@ pub fn scan_lt<E: Encoding>(
         ByteType::SOL => {
             return scan_end_tag(enc, data, pos + enc.min_bytes_per_char(), end);
         }
+        ByteType::LEAD2 => {
+            if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+            // Multi-byte name start — advance by n and fall through to name loop
+            pos += 2;
+        }
+        ByteType::LEAD3 => {
+            if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+            pos += 3;
+        }
+        ByteType::LEAD4 => {
+            if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+            pos += 4;
+        }
         _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
-            // Start tag - fall through
+            // Start tag - advance past first char and fall through to name loop
+            pos += enc.min_bytes_per_char();
         }
         _ => {
             return Err(pos);
         }
     }
-
-    // Parse start tag
-    pos += enc.min_bytes_per_char();
 
     while enc.has_char(data, pos, end) {
         match enc.byte_type(data, pos) {
@@ -1055,6 +1148,21 @@ pub fn scan_lt<E: Encoding>(
                     token: XmlTok::EmptyElementNoAtts,
                     next_pos: pos + enc.min_bytes_per_char(),
                 });
+            }
+            ByteType::LEAD2 => {
+                if end - pos < 2 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                pos += 2;
+            }
+            ByteType::LEAD3 => {
+                if end - pos < 3 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                pos += 3;
+            }
+            ByteType::LEAD4 => {
+                if end - pos < 4 { return Ok(TokenResult { token: XmlTok::Partial, next_pos: pos }); }
+                pos += 4;
+            }
+            ByteType::COLON => {
+                pos += enc.min_bytes_per_char();
             }
             _ if is_name_char(enc.byte_type(data, pos)) => {
                 pos += enc.min_bytes_per_char();
@@ -1157,6 +1265,24 @@ pub fn content_tok<E: Encoding>(
                     });
                 }
             }
+        }
+        ByteType::LEAD2 => {
+            if end - pos < 2 {
+                return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos });
+            }
+            pos += 2;
+        }
+        ByteType::LEAD3 => {
+            if end - pos < 3 {
+                return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos });
+            }
+            pos += 3;
+        }
+        ByteType::LEAD4 => {
+            if end - pos < 4 {
+                return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos });
+            }
+            pos += 4;
         }
         ByteType::NONXML | ByteType::MALFORM | ByteType::TRAIL => {
             return Err(pos);
@@ -1447,14 +1573,71 @@ pub fn prolog_tok<E: Encoding>(
         ByteType::CR => {
             if pos + minbpc == end {
                 return Ok(TokenResult {
-                    token: XmlTok::PrologS,
+                    token: XmlTok::TrailingCr,
                     next_pos: end,
                 });
             }
+            // Fall through to whitespace scanning loop
             pos += minbpc;
+            // Scan remaining whitespace
+            loop {
+                if !enc.has_char(data, pos, end) {
+                    break;
+                }
+                match enc.byte_type(data, pos) {
+                    ByteType::S | ByteType::LF => {
+                        pos += minbpc;
+                    }
+                    ByteType::CR => {
+                        // Don't split CR/LF pair
+                        if pos + minbpc == end {
+                            break;
+                        }
+                        pos += minbpc;
+                    }
+                    _ => {
+                        return Ok(TokenResult {
+                            token: XmlTok::PrologS,
+                            next_pos: pos,
+                        });
+                    }
+                }
+            }
+            return Ok(TokenResult {
+                token: XmlTok::PrologS,
+                next_pos: pos,
+            });
         }
         ByteType::S | ByteType::LF => {
             pos += minbpc;
+            // Scan remaining whitespace
+            loop {
+                if !enc.has_char(data, pos, end) {
+                    break;
+                }
+                match enc.byte_type(data, pos) {
+                    ByteType::S | ByteType::LF => {
+                        pos += minbpc;
+                    }
+                    ByteType::CR => {
+                        // Don't split CR/LF pair
+                        if pos + minbpc == end {
+                            break;
+                        }
+                        pos += minbpc;
+                    }
+                    _ => {
+                        return Ok(TokenResult {
+                            token: XmlTok::PrologS,
+                            next_pos: pos,
+                        });
+                    }
+                }
+            }
+            return Ok(TokenResult {
+                token: XmlTok::PrologS,
+                next_pos: pos,
+            });
         }
         ByteType::PERCNT => {
             return scan_percent(enc, data, pos + minbpc, end);
@@ -1607,9 +1790,28 @@ pub fn prolog_tok<E: Encoding>(
                     next_pos: pos + minbpc,
                 });
             }
-            ByteType::DIGIT | ByteType::NAME | ByteType::MINUS => {
-                is_name = false;
+            ByteType::NMSTRT | ByteType::HEX => {
                 pos += minbpc;
+            }
+            ByteType::DIGIT | ByteType::NAME | ByteType::MINUS => {
+                // Note: C CHECK_NAME_CASES does NOT downgrade tok from NAME to NMTOKEN
+                // in the continuation loop. is_name was set by the initial character only.
+                pos += minbpc;
+            }
+            ByteType::COLON => {
+                pos += minbpc;
+            }
+            ByteType::LEAD2 => {
+                if end - pos < 2 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+                pos += 2;
+            }
+            ByteType::LEAD3 => {
+                if end - pos < 3 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+                pos += 3;
+            }
+            ByteType::LEAD4 => {
+                if end - pos < 4 { return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }); }
+                pos += 4;
             }
             _ => {
                 return Err(pos);
@@ -1617,6 +1819,10 @@ pub fn prolog_tok<E: Encoding>(
         }
     }
 
+    // Name reached end of data without a terminator (whitespace, delimiter, etc.)
+    // C returns -tok (negative) which the caller treats as "need more data" when
+    // haveMore is true. We return the name but with next_pos == end to signal
+    // the name consumed all remaining data (unterminated).
     Ok(TokenResult {
         token: if is_name { XmlTok::Name } else { XmlTok::Nmtoken },
         next_pos: pos,

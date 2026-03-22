@@ -27,6 +27,36 @@ fn compare(xml: &[u8], desc: &str) {
         std::str::from_utf8(xml).unwrap_or("<binary>"));
 }
 
+/// Compare incremental parsing: split input at every byte position
+fn compare_incremental(xml: &[u8], desc: &str) {
+    // First compare single-call
+    compare(xml, desc);
+    // Then compare split at each byte boundary
+    for split in 1..xml.len() {
+        let mut r_parser = Parser::new(None).unwrap();
+        let r1 = r_parser.parse(&xml[..split], false);
+        let r_final = if r1 == expat_rust::xmlparse::XmlStatus::Ok {
+            r_parser.parse(&xml[split..], true)
+        } else {
+            r1
+        };
+        let r_err = r_parser.error_code();
+
+        let c_parser = CParser::new(None).unwrap();
+        let (c1, _) = c_parser.parse(&xml[..split], false);
+        let (c_final, c_err) = if c1 == 1 { // XML_STATUS_OK
+            c_parser.parse(&xml[split..], true)
+        } else {
+            (c1, c_parser.parse(&xml[split..], true).1)
+        };
+
+        let rs = r_final as u32;
+        let re = r_err as u32;
+        assert!(rs == c_final && re == c_err,
+            "INCREMENTAL MISMATCH {desc} split@{split}: Rust status={rs} err={re}, C status={c_final} err={c_err}");
+    }
+}
+
 fn compare_ns(xml: &[u8], desc: &str) {
     // NS tests use non-NS parser for now — still catches basic parse errors
     compare(xml, desc);
@@ -278,77 +308,77 @@ fn gen_doctype_pi() {
 }
 
 #[test]
-fn gen_err_empty_final() {
+fn ext_err_empty_final() {
     compare(b"", "empty input with is_final");
 }
 
 #[test]
-fn gen_err_no_root() {
+fn ext_err_no_root() {
     compare(b"   ", "whitespace only");
 }
 
 #[test]
-fn gen_err_unclosed_tag() {
+fn ext_err_unclosed_tag() {
     compare(b"<r>", "unclosed tag");
 }
 
 #[test]
-fn gen_err_mismatched_tags() {
+fn ext_err_mismatched_tags() {
     compare(b"<a></b>", "mismatched tags");
 }
 
 #[test]
-fn gen_err_double_root() {
+fn ext_err_double_root() {
     compare(b"<r/><r/>", "two root elements");
 }
 
 #[test]
-fn gen_err_text_after_root() {
+fn ext_err_text_after_root() {
     compare(b"<r/>text", "text after root");
 }
 
 #[test]
-fn gen_err_invalid_char() {
+fn ext_err_invalid_char() {
     compare(b"<r>\x00</r>", "null byte in content");
 }
 
 #[test]
-fn gen_err_bad_entity() {
+fn ext_err_bad_entity() {
     compare(b"<r>&nosuch;</r>", "undefined entity");
 }
 
 #[test]
-fn gen_err_bad_charref() {
+fn ext_err_bad_charref() {
     compare(b"<r>&#xFFFFFF;</r>", "invalid char ref");
 }
 
 #[test]
-fn gen_err_unclosed_entity() {
+fn ext_err_unclosed_entity() {
     compare(b"<r>&amp</r>", "unclosed entity ref");
 }
 
 #[test]
-fn gen_err_duplicate_attr() {
+fn ext_err_duplicate_attr() {
     compare(b"<r a=\"1\" a=\"2\"/>", "duplicate attribute");
 }
 
 #[test]
-fn gen_err_junk_in_prolog() {
+fn ext_err_junk_in_prolog() {
     compare(b"xxx<r/>", "junk before root");
 }
 
 #[test]
-fn gen_err_misplaced_xmldecl() {
+fn ext_err_misplaced_xmldecl() {
     compare(b"<r/><?xml version='1.0'?>", "xml decl after root");
 }
 
 #[test]
-fn gen_err_trailing_cr() {
+fn ext_err_trailing_cr() {
     compare(b"<r>\r", "trailing CR in content");
 }
 
 #[test]
-fn gen_err_partial_tag() {
+fn ext_err_partial_tag() {
     compare(b"<r", "partial opening tag");
 }
 
@@ -427,4 +457,131 @@ fn gen_utf8_in_name() {
     compare(b"<r\xc3\xa9/>", "UTF-8 in element name");
 }
 
-// Total: 79 generated comparison tests
+
+// ======================== Incremental parsing tests ========================
+// These split inputs at every byte boundary to test buffering logic
+
+#[test]
+fn incr_simple() { compare_incremental(b"<r/>", "incremental simple"); }
+
+#[test]
+fn incr_with_content() { compare_incremental(b"<r>hello</r>", "incremental with content"); }
+
+#[test]
+fn incr_with_attrs() { compare_incremental(b"<r a='1' b='2'/>", "incremental with attrs"); }
+
+#[test]
+fn incr_xmldecl() { compare_incremental(b"<?xml version='1.0'?><r/>", "incremental xmldecl"); }
+
+#[test]
+fn incr_doctype() { compare_incremental(b"<!DOCTYPE r><r/>", "incremental doctype"); }
+
+#[test]
+fn incr_cdata() { compare_incremental(b"<r><![CDATA[data]]></r>", "incremental cdata"); }
+
+#[test]
+fn incr_comment() { compare_incremental(b"<r><!-- comment --></r>", "incremental comment"); }
+
+#[test]
+fn incr_pi() { compare_incremental(b"<r><?target data?></r>", "incremental pi"); }
+
+#[test]
+fn incr_charref() { compare_incremental(b"<r>&#65;&#x42;</r>", "incremental charref"); }
+
+#[test]
+fn incr_entity() { compare_incremental(b"<r>&amp;&lt;&gt;</r>", "incremental entities"); }
+
+#[test]
+fn incr_nested() { compare_incremental(b"<a><b><c/></b></a>", "incremental nested"); }
+
+#[test]
+fn incr_epilog() { compare_incremental(b"<r/>\n<!-- done -->\n", "incremental epilog"); }
+
+#[test]
+fn incr_utf8() { compare_incremental(b"<r>\xc3\xa9</r>", "incremental utf8"); }
+
+#[test]
+fn incr_dtd_entity() { compare_incremental(b"<!DOCTYPE r [<!ENTITY e 'val'>]><r>&e;</r>", "incremental dtd entity"); }
+
+#[test]
+fn incr_empty_element() { compare_incremental(b"<r><a/><b/></r>", "incremental empty elements"); }
+
+// ======================== DTD coverage tests ========================
+
+#[test]
+fn ext_dtd_attlist_cdata() {
+    compare(b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED b CDATA #REQUIRED>]><r a='1' b='2'/>", "attlist CDATA");
+}
+
+#[test]
+fn ext_dtd_attlist_enum() {
+    compare(b"<!DOCTYPE r [<!ATTLIST r a (x|y|z) #IMPLIED>]><r a='x'/>", "attlist enum");
+}
+
+#[test]
+fn ext_dtd_attlist_default() {
+    compare(b"<!DOCTYPE r [<!ATTLIST r a CDATA 'default'>]><r/>", "attlist with default");
+}
+
+#[test]
+fn ext_dtd_entity_multiple() {
+    compare(b"<!DOCTYPE r [<!ENTITY a 'alpha'><!ENTITY b 'beta'><!ENTITY c 'gamma'>]><r>&a;&b;&c;</r>", "multiple entities");
+}
+
+#[test]
+fn ext_dtd_notation_system() {
+    compare(b"<!DOCTYPE r [<!NOTATION n SYSTEM 'http://example.com'>]><r/>", "notation SYSTEM");
+}
+
+#[test]
+fn ext_dtd_notation_public() {
+    compare(b"<!DOCTYPE r [<!NOTATION n PUBLIC 'pubid' 'http://example.com'>]><r/>", "notation PUBLIC");
+}
+
+#[test]
+fn ext_dtd_element_any() {
+    compare(b"<!DOCTYPE r [<!ELEMENT r ANY>]><r>text</r>", "element ANY");
+}
+
+#[test]
+fn ext_dtd_element_empty() {
+    compare(b"<!DOCTYPE r [<!ELEMENT r EMPTY>]><r/>", "element EMPTY");
+}
+
+#[test]
+fn ext_dtd_element_children() {
+    compare(b"<!DOCTYPE r [<!ELEMENT r (a,b,c)><!ELEMENT a EMPTY><!ELEMENT b EMPTY><!ELEMENT c EMPTY>]><r><a/><b/><c/></r>", "element children");
+}
+
+#[test]
+fn ext_dtd_element_choice() {
+    compare(b"<!DOCTYPE r [<!ELEMENT r (a|b)><!ELEMENT a EMPTY><!ELEMENT b EMPTY>]><r><a/></r>", "element choice");
+}
+
+#[test]
+fn ext_dtd_element_quantifiers() {
+    compare(b"<!DOCTYPE r [<!ELEMENT r (a+)><!ELEMENT a EMPTY>]><r><a/><a/></r>", "element quantifiers");
+}
+
+#[test]
+fn ext_dtd_public_system() {
+    compare(b"<!DOCTYPE r PUBLIC 'pubid' 'sysid'><r/>", "DOCTYPE PUBLIC+SYSTEM");
+}
+
+#[test]
+fn ext_dtd_system_only() {
+    compare(b"<!DOCTYPE r SYSTEM 'sysid'><r/>", "DOCTYPE SYSTEM");
+}
+
+#[test]
+fn incr_dtd_entity2() {
+    compare_incremental(b"<!DOCTYPE r [<!ENTITY e 'v'>]><r>&e;</r>", "incremental DTD entity2");
+}
+
+#[test]
+fn incr_dtd_attlist() {
+    compare_incremental(
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED>]><r a='1'/>",
+        "incremental DTD attlist"
+    );
+}

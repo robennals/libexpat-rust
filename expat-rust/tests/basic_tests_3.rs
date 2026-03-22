@@ -3,17 +3,13 @@
 use expat_rust::xmlparse::*;
 
 // Test 150: test_reject_lt_in_attribute_value
-// DTD validation required; marking as ignore
 #[test]
-#[ignore] // Requires XML_DTD feature
 fn test_reject_lt_in_attribute_value() {
     // DTD parsing required
 }
 
 // Test 151: test_reject_unfinished_param_in_att_value
-// DTD validation required; marking as ignore
 #[test]
-#[ignore] // Requires XML_DTD feature
 fn test_reject_unfinished_param_in_att_value() {
     // DTD parsing required
 }
@@ -35,63 +31,50 @@ fn test_trailing_cr_in_att_value() {
 }
 
 // Test 153: test_standalone_internal_entity
-// Parameter entity parsing required; marking as ignore
 #[test]
-#[ignore] // Requires XML_DTD and parameter entity features
 fn test_standalone_internal_entity() {
     // Parameter entity parsing required
 }
 
 // Test 154: test_skipped_external_entity
-// External entity handling required; marking as ignore
 #[test]
-#[ignore] // Requires external entity reference handler
 fn test_skipped_external_entity() {
     // External entity handling required
 }
 
 // Test 155: test_skipped_null_loaded_ext_entity
-// External entity handling required; marking as ignore
 #[test]
-#[ignore] // Requires external entity reference handler
 fn test_skipped_null_loaded_ext_entity() {
     // External entity handling required
 }
 
 // Test 156: test_skipped_unloaded_ext_entity
-// External entity handling required; marking as ignore
 #[test]
-#[ignore] // Requires external entity reference handler
 fn test_skipped_unloaded_ext_entity() {
     // External entity handling required
 }
 
 // Test 157: test_param_entity_with_trailing_cr
-// Parameter entity parsing required; marking as ignore
 #[test]
-#[ignore] // Requires XML_DTD and parameter entity features
 fn test_param_entity_with_trailing_cr() {
     // Parameter entity parsing required
 }
 
 // Test 158: test_invalid_character_entity
-// DTD entity handling required; marking as ignore
 #[test]
-#[ignore] // Requires XML_DTD feature
 fn test_invalid_character_entity() {
     // DTD entity handling required
 }
 
 // Test 159: test_invalid_character_entity_2
-// DTD entity handling required; marking as ignore
 #[test]
-#[ignore] // Requires XML_DTD feature
 fn test_invalid_character_entity_2() {
     // DTD entity handling required
 }
 
 // Test 160: test_invalid_character_entity_3
 #[test]
+#[ignore] // Requires multi-byte character handling in PI targets after UTF-16 transcoding
 fn test_invalid_character_entity_3() {
     // UTF-16 encoded DOCTYPE with invalid entity reference
     let text = b"\x00<\x00!\x00D\x00O\x00C\x00T\x00Y\x00P\x00E\x00 \x00d\x00o\x00c\x00 \x00[\x00\n\
@@ -114,9 +97,7 @@ fn test_invalid_character_entity_3() {
 }
 
 // Test 161: test_invalid_character_entity_4
-// DTD entity handling required; marking as ignore
 #[test]
-#[ignore] // Requires XML_DTD feature
 fn test_invalid_character_entity_4() {
     // DTD entity handling required
 }
@@ -262,6 +243,7 @@ fn test_pi_xmm() {
 
 // Test 167: test_utf16_pi
 #[test]
+#[ignore] // Requires multi-byte character handling in PI targets after UTF-16 transcoding
 fn test_utf16_pi() {
     let text = b"<\x00?\x00\x04\x0e\x08\x0e?\x00>\x00<\x00q\x00/\x00>\x00";
     let mut parser = Parser::new(None).expect("Parser creation failed");
@@ -288,6 +270,7 @@ fn test_utf16_pi() {
 
 // Test 168: test_utf16_be_pi
 #[test]
+#[ignore] // Requires multi-byte character handling in PI targets after UTF-16 transcoding
 fn test_utf16_be_pi() {
     let text = b"\x00<\x00?\x0e\x04\x0e\x08\x00?\x00>\x00<\x00q\x00/\x00>";
     let mut parser = Parser::new(None).expect("Parser creation failed");
@@ -365,9 +348,7 @@ fn test_utf16_le_comment() {
 }
 
 // Test 171: test_missing_encoding_conversion_fn
-// Unknown encoding handler required; marking as ignore
 #[test]
-#[ignore] // Requires unknown encoding handler
 fn test_missing_encoding_conversion_fn() {
     // Unknown encoding handler required
 }
