@@ -1469,6 +1469,8 @@ impl Parser {
                             .map(|(k, v)| (k.as_str(), v.as_str()))
                             .collect();
                         handler(tag_name, &attr_refs);
+                    } else if self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, next);
                     }
                 }
 
@@ -1498,9 +1500,13 @@ impl Parser {
                             .map(|(k, v)| (k.as_str(), v.as_str()))
                             .collect();
                         handler(&tag_name, &attr_refs);
+                    } else if self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, next);
                     }
                     if let Some(handler) = &mut self.end_element_handler {
                         handler(&tag_name);
+                    } else if self.start_element_handler.is_none() && self.default_handler.is_some() {
+                        // Only forward end of empty element if we didn't already forward the whole thing
                     }
 
                     // Check if root element closed (empty root element)
@@ -1542,6 +1548,8 @@ impl Parser {
 
                     if let Some(handler) = &mut self.end_element_handler {
                         handler(tag_name);
+                    } else if self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, next);
                     }
 
                     // Check if root element closed
@@ -1588,6 +1596,8 @@ impl Parser {
                 XmlTok::CdataSectOpen => {
                     if let Some(handler) = &mut self.start_cdata_section_handler {
                         handler();
+                    } else if self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, next);
                     }
                     // Scan CDATA content
                     let saved_processor = self.processor;
@@ -1615,6 +1625,8 @@ impl Parser {
                     }
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&data[pos..end]);
+                    } else if self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, end);
                     }
                     if start_tag_level == 0 && !self.seen_root {
                         return (XmlError::NoElements, end);
@@ -1684,6 +1696,8 @@ impl Parser {
                 XmlTok::CdataSectClose => {
                     if let Some(handler) = &mut self.end_cdata_section_handler {
                         handler();
+                    } else if self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, next);
                     }
                     // Signal that CDATA section has closed
                     self.processor = Processor::Content;
