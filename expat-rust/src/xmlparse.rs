@@ -226,6 +226,10 @@ pub struct Parser {
     buffer: Vec<u8>,
     /// Buffer for XML_GetBuffer/XML_ParseBuffer two-phase API
     get_buffer_data: Vec<u8>,
+    /// Data remaining when parser was suspended (for resume)
+    suspended_data: Vec<u8>,
+    /// Whether the suspended parse was final
+    suspended_is_final: bool,
     /// Current error code
     error_code: XmlError,
     /// Parsing state machine
@@ -341,6 +345,8 @@ impl Parser {
         Some(Parser {
             buffer: Vec::new(),
             get_buffer_data: Vec::new(),
+            suspended_data: Vec::new(),
+            suspended_is_final: false,
             error_code: XmlError::None,
             parsing_state: ParsingState::Initialized,
             processor: Processor::PrologInit,
@@ -411,6 +417,8 @@ impl Parser {
         Some(Parser {
             buffer: Vec::new(),
             get_buffer_data: Vec::new(),
+            suspended_data: Vec::new(),
+            suspended_is_final: false,
             error_code: XmlError::None,
             parsing_state: ParsingState::Initialized,
             processor: Processor::PrologInit,
@@ -2140,8 +2148,11 @@ impl Parser {
             }
         }
 
-        // If the parser was suspended during a handler callback, return Suspended
+        // If the parser was suspended during a handler callback, save remaining data and return Suspended
         if self.parsing_state == ParsingState::Suspended {
+            // Save the buffer for resume — the buffer still has unprocessed data
+            self.suspended_data = self.buffer.clone();
+            self.suspended_is_final = is_final;
             return XmlStatus::Suspended;
         }
 
@@ -2358,6 +2369,17 @@ impl Parser {
             return XmlStatus::Error;
         }
         self.parsing_state = ParsingState::Parsing;
+
+        // Re-process the saved data from when we suspended
+        if !self.suspended_data.is_empty() || self.suspended_is_final {
+            let data = std::mem::take(&mut self.suspended_data);
+            let is_final = self.suspended_is_final;
+            self.suspended_is_final = false;
+            // Clear the buffer since parse() will re-add data
+            self.buffer.clear();
+            return self.parse(&data, is_final);
+        }
+
         XmlStatus::Ok
     }
 
