@@ -73,24 +73,8 @@ fn to_ascii(enc: &dyn Encoding, data: &[u8], pos: usize, end: usize) -> i32 {
     if pos >= end {
         return -1;
     }
-
-    // For single-byte encodings, just return the byte
-    if enc.min_bytes_per_char() == 1 {
-        let byte = enc.byte_to_ascii(data, pos);
-        if byte < 0x80 {
-            return byte as i32;
-        } else {
-            return -1;
-        }
-    }
-
-    // For multi-byte encodings (UTF-16), need at least 2 bytes
-    if pos + enc.min_bytes_per_char() > end {
-        return -1;
-    }
-
     let byte = enc.byte_to_ascii(data, pos);
-    if byte != 0xff {
+    if byte < 0x80 {
         byte as i32
     } else {
         -1
