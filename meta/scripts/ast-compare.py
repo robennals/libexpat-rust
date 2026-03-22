@@ -25,10 +25,16 @@ import tree_sitter
 import tree_sitter_c
 import tree_sitter_rust
 
-ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-C_FILE = os.path.join(ROOT, "expat", "lib", "xmlparse.c")
+# ROOT is two levels up from meta/scripts/
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+# Support both submodule layout (expat/expat/lib/) and flat layout (expat/lib/)
+C_FILE = os.path.join(ROOT, "expat", "expat", "lib", "xmlparse.c")
+if not os.path.exists(C_FILE):
+    C_FILE = os.path.join(ROOT, "expat", "lib", "xmlparse.c")
 RUST_FILE = os.path.join(ROOT, "expat-rust", "src", "xmlparse.rs")
 DIVERGENCES_FILE = os.path.join(ROOT, "scripts", "deliberate-divergences.json")
+if not os.path.exists(DIVERGENCES_FILE):
+    DIVERGENCES_FILE = os.path.join(ROOT, "meta", "scripts", "deliberate-divergences.json")
 
 # Initialize parsers
 C_LANG = tree_sitter.Language(tree_sitter_c.language())
