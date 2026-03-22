@@ -2197,12 +2197,56 @@ impl Parser {
             let raw_value = &data[attr.value_ptr..attr.value_end];
             // Always normalize: expand refs, normalize \t \n \r → space
             let value = Self::normalize_attribute_value(raw_value, &self.internal_entities);
+            if value.contains('\x00') {
+                return Err(XmlError::RecursiveEntityRef);
+            }
             if !seen.insert(name.clone()) {
                 return Err(XmlError::DuplicateAttribute);
             }
             result.push((name, value));
         }
         Ok(result)
+    }
+
+    /// Check if an entity value contains a cycle (recursive entity references)
+    fn entity_value_contains_cycle(
+        entity_name: &str,
+        value: &[u8],
+        entities: &std::collections::HashMap<String, String>,
+        visited: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        if !visited.insert(entity_name.to_string()) {
+            return true; // Cycle detected
+        }
+        // Scan value for entity references
+        let mut i = 0;
+        while i < value.len() {
+            if value[i] == b'&' {
+                if let Some(semi) = value[i + 1..].iter().position(|&b| b == b';') {
+                    let ref_name = &value[i + 1..i + 1 + semi];
+                    if !ref_name.starts_with(b"#") {
+                        if let Ok(name) = std::str::from_utf8(ref_name) {
+                            if !matches!(name, "amp" | "lt" | "gt" | "apos" | "quot") {
+                                if let Some(child_value) = entities.get(name) {
+                                    if Self::entity_value_contains_cycle(
+                                        name, child_value.as_bytes(), entities, visited,
+                                    ) {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    i = i + 2 + semi;
+                } else {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        visited.remove(entity_name);
+        false
     }
 
     /// Normalize an attribute value per XML spec section 3.3.3:
@@ -2253,9 +2297,20 @@ impl Parser {
                                 "apos" => result.push(b'\''),
                                 "quot" => result.push(b'"'),
                                 _ => {
-                                    // Internal general entity
+                                    // Internal general entity — recursively expand
                                     if let Some(value) = entities.get(name) {
-                                        result.extend_from_slice(value.as_bytes());
+                                        // Check for recursive entity reference
+                                        if Self::entity_value_contains_cycle(
+                                            name, value.as_bytes(), entities,
+                                            &mut std::collections::HashSet::new(),
+                                        ) {
+                                            // Return error marker — caller should detect
+                                            return String::from("\x00RECURSIVE");
+                                        }
+                                        let expanded = Self::normalize_attribute_value(
+                                            value.as_bytes(), entities,
+                                        );
+                                        result.extend_from_slice(expanded.as_bytes());
                                     } else {
                                         // Unknown entity — keep as-is
                                         result.extend_from_slice(&raw[i..i + 2 + semi_offset]);
