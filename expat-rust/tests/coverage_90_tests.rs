@@ -2791,3 +2791,65 @@ fn cov90_empty_final_after_content() {
     let (cs2, _) = c2.parse(b"<r/>", true);
     assert_eq!(rs2, cs2, "empty final after DTD");
 }
+
+// ============================================================================
+// 102. Parse with NO handlers — hits all handler-not-set dispatch paths
+// ============================================================================
+
+#[test]
+fn cov90_no_handlers_complex() {
+    // Complex document parsed with zero handlers registered
+    // This exercises the "handler not set" branches in do_content
+    let xml = br#"<?xml version="1.0"?>
+<!DOCTYPE doc [
+  <!ELEMENT doc (#PCDATA|child)*>
+  <!ELEMENT child EMPTY>
+  <!ENTITY e "hello">
+  <!ATTLIST doc id CDATA "def">
+  <!NOTATION n SYSTEM "x">
+]>
+<doc id="1">
+  text &amp; &e; &#65;
+  <child/>
+  <!-- comment -->
+  <?pi data?>
+  <![CDATA[cdata content]]>
+</doc>
+<!-- epilog -->"#;
+
+    // Rust — no handlers
+    let mut r = Parser::new(None).unwrap();
+    let rs = r.parse(xml, true) as u32;
+    let re = r.error_code() as u32;
+
+    // C — no handlers
+    let c = CParser::new(None).unwrap();
+    let (cs, ce) = c.parse(xml, true);
+
+    assert_eq!(rs, cs, "no handlers status");
+    assert_eq!(re, ce, "no handlers error");
+}
+
+#[test]
+fn cov90_no_handlers_incremental() {
+    // Same complex doc with no handlers, incremental
+    let xml = b"<?xml version='1.0'?><!DOCTYPE r [<!ENTITY e 'v'>]><r>&e;text<!-- c --><?pi d?><![CDATA[cd]]></r>";
+    compare_incr(xml, "no handlers incremental");
+}
+
+#[test]
+fn cov90_only_default_handler() {
+    // Parse with ONLY default handler — all other events go to default
+    let xml = b"<r a='v'>text&amp;<!-- c --><?pi d?><![CDATA[cd]]></r>";
+    let mut r = Parser::new(None).unwrap();
+    r.set_default_handler(Some(Box::new(|_: &[u8]| {})));
+    let rs = r.parse(xml, true) as u32;
+
+    let c = CParser::new(None).unwrap();
+    unsafe {
+        unsafe extern "C" fn def(_: *mut c_void, _: *const c_char, _: c_int) {}
+        expat_sys::XML_SetDefaultHandler(c.raw_parser(), Some(def));
+    }
+    let (cs, _) = c.parse(xml, true);
+    assert_eq!(rs, cs, "only default handler");
+}
