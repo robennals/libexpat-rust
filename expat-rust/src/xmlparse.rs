@@ -2553,6 +2553,9 @@ impl Parser {
         // Run the current processor
         self.run_processor();
 
+        // Reset event byte count (only valid during handler callbacks)
+        self.event_cur_byte_count = 0;
+
         // Update position tracking from processed data
         // On error: calculate position up to event_pos (error location)
         // On success: calculate position up to end of all processed data
