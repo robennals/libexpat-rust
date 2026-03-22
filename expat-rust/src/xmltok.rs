@@ -62,37 +62,6 @@ impl Encoding for Utf8Encoding {
 // tokenizes in the native encoding, but both approaches produce identical results
 // for all XML-legal inputs (confirmed by 459+ comparison tests).
 
-/// Encode a Unicode code point to UTF-8
-/// Returns the number of bytes written (0-4)
-/// Buffer must be at least XML_UTF8_ENCODE_MAX bytes
-pub fn utf8_encode(char_num: u32, buf: &mut [u8]) -> usize {
-    const MIN2: u32 = 0x80;
-    const MIN3: u32 = 0x800;
-    const MIN4: u32 = 0x10000;
-
-    if char_num < MIN2 {
-        buf[0] = (char_num as u8) | UTF8_CVAL1;
-        1
-    } else if char_num < MIN3 {
-        buf[0] = ((char_num >> 6) as u8) | UTF8_CVAL2;
-        buf[1] = ((char_num as u8) & 0x3f) | 0x80;
-        2
-    } else if char_num < MIN4 {
-        buf[0] = ((char_num >> 12) as u8) | UTF8_CVAL3;
-        buf[1] = (((char_num >> 6) as u8) & 0x3f) | 0x80;
-        buf[2] = ((char_num as u8) & 0x3f) | 0x80;
-        3
-    } else if char_num < 0x110000 {
-        buf[0] = ((char_num >> 18) as u8) | UTF8_CVAL4;
-        buf[1] = (((char_num >> 12) as u8) & 0x3f) | 0x80;
-        buf[2] = (((char_num >> 6) as u8) & 0x3f) | 0x80;
-        buf[3] = ((char_num as u8) & 0x3f) | 0x80;
-        4
-    } else {
-        0 // Invalid code point
-    }
-}
-
 /// Check if a character is whitespace (space, tab, CR, LF)
 fn is_space(c: u8) -> bool {
     matches!(c, 0x20 | 0x09 | 0x0D | 0x0A)
@@ -428,23 +397,6 @@ pub fn parse_xml_decl(data: &[u8], is_text_decl: bool) -> Result<XmlDeclInfo, us
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_utf8_encode_single_byte() {
-        let mut buf = [0u8; 4];
-        let len = utf8_encode(0x41, &mut buf);
-        assert_eq!(len, 1);
-        assert_eq!(buf[0], 0x41);
-    }
-
-    #[test]
-    fn test_utf8_encode_two_bytes() {
-        let mut buf = [0u8; 4];
-        let len = utf8_encode(0x00C2, &mut buf);
-        assert_eq!(len, 2);
-        assert_eq!(buf[0], 0xC3);
-        assert_eq!(buf[1], 0x82);
-    }
 
     #[test]
     fn test_utf8_encoding() {
