@@ -2,8 +2,14 @@
 name = "expat-rust"
 version = "0.1.0"
 edition = "2021"
-description = "A safe, idiomatic Rust port of libexpat XML parser"
+rust-version = "1.70"
 license = "MIT"
+description = "A memory-safe, idiomatic Rust reimplementation of libexpat XML parser"
+repository = "https://github.com/robennals/libexpat-rust"
+documentation = "https://docs.rs/expat-rust"
+keywords = ["xml", "parser", "expat", "sax", "streaming"]
+categories = ["parser-implementations", "encoding"]
+readme = "../README.md"
 
 [dependencies]
 

@@ -1,5 +1,8 @@
-// ASCII character constants — AI-generated port of expat/lib/ascii.h
-// These are the byte values of ASCII characters used throughout the parser.
+//! ASCII character byte constants, ported from expat's `ascii.h`.
+//!
+//! Provides named constants for every ASCII letter, digit, and punctuation character
+//! used by the tokenizer and parser. Values are raw `u8` bytes, enabling
+//! encoding-independent comparisons against input data.
 
 pub const A: u8 = 0x41;
 pub const B: u8 = 0x42;

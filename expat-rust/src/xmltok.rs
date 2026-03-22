@@ -1,4 +1,11 @@
-// AI-generated port of xmltok.c + xmltok_ns.c
+//! Token types, encoding detection, and XML declaration parsing.
+//!
+//! Ported from expat's `xmltok.c` / `xmltok_ns.c`. This module provides the
+//! encoding-specific [`Encoding`] implementations
+//! (UTF-8, UTF-16, Latin-1) and utilities for BOM detection, XML/text-declaration
+//! scanning, and character encoding/decoding. It is the interface layer between
+//! the main parser ([`xmlparse`](crate::xmlparse)) and the core tokenizer
+//! ([`xmltok_impl`](crate::xmltok_impl)).
 
 use crate::char_tables::ByteType;
 use crate::xmltok_impl::Encoding;
@@ -511,10 +518,7 @@ pub struct XmlDeclInfo {
 
 /// Parse an XML declaration (<?xml ...?>)
 /// Returns ParseXmlDeclResult with parsed information
-pub fn parse_xml_decl(
-    data: &[u8],
-    is_text_decl: bool,
-) -> Result<XmlDeclInfo, usize> {
+pub fn parse_xml_decl(data: &[u8], is_text_decl: bool) -> Result<XmlDeclInfo, usize> {
     let enc = &Utf8Encoding as &dyn Encoding;
     let minbpc = enc.min_bytes_per_char();
 
@@ -544,11 +548,7 @@ pub fn parse_xml_decl(
         parse_pseudo_attribute(enc, data, pos, end - 2 * minbpc);
 
     if !success {
-        return Err(if name_start > 0 {
-            name_start
-        } else {
-            next_pos
-        });
+        return Err(if name_start > 0 { name_start } else { next_pos });
     }
 
     pos = next_pos;
@@ -670,10 +670,7 @@ pub fn parse_xml_decl(
 
 /// Convert UTF-8 to UTF-16
 /// Returns the number of UTF-16 units written
-pub fn utf8_to_utf16(
-    input: &[u8],
-    output: &mut [u16],
-) -> Result<usize, usize> {
+pub fn utf8_to_utf16(input: &[u8], output: &mut [u16]) -> Result<usize, usize> {
     let mut in_pos = 0;
     let mut out_pos = 0;
 

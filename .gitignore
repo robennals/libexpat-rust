@@ -1,49 +1,29 @@
-/.idea/
-.broomy/output/
-# CVS default ignores begin
-tags
-TAGS
-.make.state
-.nse_depinfo
-*~
-#*
-.#*
-,*
-_$*
-*$
-*.old
-*.bak
-*.BAK
-*.orig
-*.rej
-.del-*
-*.a
-*.olb
-*.o
-*.obj
-*.so
-*.exe
-*.Z
-*.elc
-*.ln
-core
-# CVS default ignores end
-expat/win32/bin/
-expat/win32/tmp/
-expat/.vs/
-expat/**/*.vcxproj.user
-expat/**/*.suo
-expat/**/*.sdf
-expat/**/*.VC.db
-expat/tests/**/Debug/
-expat/tests/**/Release/
-
 # Rust build artifacts
-expat-rust/target/
-expat-sys/target/
-c2rust-output/target/
+**/target/
+
+# Python
 *.pyc
 __pycache__/
 
-# CMake build artifacts
+# IDE
+/.idea/
+.broomy/output/
+.claude-personal/
+.claude/
+
+# OS
+.DS_Store
+*~
+*.swp
+
+# Build artifacts
+*.a
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.exe
+
+# CMake (for expat submodule builds)
 expat/build/

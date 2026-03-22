@@ -2,8 +2,10 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    // The libexpat submodule is at ../expat, with source under the expat/ subdirectory
     let expat_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("..")
+        .join("expat")
         .join("expat");
     let build_dir = expat_dir.join("build");
 

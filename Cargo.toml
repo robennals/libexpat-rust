@@ -1,0 +1,3 @@
+[workspace]
+members = ["expat-rust", "expat-sys"]
+resolver = "2"

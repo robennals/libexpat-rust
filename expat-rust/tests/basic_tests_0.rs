@@ -10,7 +10,11 @@ fn test_nul_byte() {
 
     // Test that a NUL byte (in US-ASCII data) is an error
     let result = parser.parse(&text[..text.len() - 1], true);
-    assert_ne!(result, XmlStatus::Ok, "Parser did not report error on NUL-byte");
+    assert_ne!(
+        result,
+        XmlStatus::Ok,
+        "Parser did not report error on NUL-byte"
+    );
     assert_eq!(
         parser.error_code(),
         XmlError::InvalidToken,
@@ -26,7 +30,11 @@ fn test_u0000_char() {
     let mut parser = Parser::new(None).expect("Parser not created");
 
     let result = parser.parse(text.as_bytes(), true);
-    assert_ne!(result, XmlStatus::Ok, "Expected parse error for NUL-byte char ref");
+    assert_ne!(
+        result,
+        XmlStatus::Ok,
+        "Expected parse error for NUL-byte char ref"
+    );
     assert_eq!(
         parser.error_code(),
         XmlError::BadCharRef,
@@ -58,7 +66,8 @@ fn test_bom_utf8() {
 
     let result = parser.parse(text, true);
     assert_eq!(
-        result, XmlStatus::Ok,
+        result,
+        XmlStatus::Ok,
         "UTF-8 BOM should be accepted without error"
     );
 }
@@ -139,7 +148,8 @@ fn test_french_charref_hexidecimal() {
 
     let result = parser.parse(text.as_bytes(), true);
     assert_eq!(
-        result, XmlStatus::Ok,
+        result,
+        XmlStatus::Ok,
         "French character references (hex) should parse"
     );
 }
@@ -154,7 +164,8 @@ fn test_french_charref_decimal() {
 
     let result = parser.parse(text.as_bytes(), true);
     assert_eq!(
-        result, XmlStatus::Ok,
+        result,
+        XmlStatus::Ok,
         "French character references (decimal) should parse"
     );
 }
@@ -169,7 +180,8 @@ fn test_french_latin1() {
 
     let result = parser.parse(text.as_bytes(), true);
     assert_eq!(
-        result, XmlStatus::Ok,
+        result,
+        XmlStatus::Ok,
         "French Latin-1 direct text should parse"
     );
 }
@@ -195,7 +207,11 @@ fn test_utf8_false_rejection() {
     parser.set_character_data_handler(Some(Box::new(|_data: &[u8]| {})));
 
     let result = parser.parse(text, true);
-    assert_eq!(result, XmlStatus::Ok, "UTF-8 character should not be rejected");
+    assert_eq!(
+        result,
+        XmlStatus::Ok,
+        "UTF-8 character should not be rejected"
+    );
 }
 
 // Test 15: test_illegal_utf8
@@ -204,7 +220,10 @@ fn test_illegal_utf8() {
     // This test checks that 8-bit characters followed by 7-bit characters
     // are not mistakenly interpreted as valid UTF-8
     for i in 128..=255 {
-        let text = format!("<e>{}cd</e>", char::from_u32(i as u32).unwrap_or('\u{FFFD}'));
+        let text = format!(
+            "<e>{}cd</e>",
+            char::from_u32(i as u32).unwrap_or('\u{FFFD}')
+        );
         let mut parser = Parser::new(None).expect("Parser not created");
 
         let result = parser.parse(text.as_bytes(), true);
@@ -257,7 +276,11 @@ fn test_utf16() {
     parser.set_character_data_handler(Some(Box::new(|_data: &[u8]| {})));
 
     let result = parser.parse(text, true);
-    assert_eq!(result, XmlStatus::Ok, "UTF-16 with fullwidth character should parse");
+    assert_eq!(
+        result,
+        XmlStatus::Ok,
+        "UTF-16 with fullwidth character should parse"
+    );
 }
 
 // Test 18: test_utf16_le_epilog_newline
@@ -270,13 +293,15 @@ fn test_utf16_le_epilog_newline() {
 
     let result = parser.parse(&text[..first_chunk_bytes], false);
     assert_eq!(
-        result, XmlStatus::Ok,
+        result,
+        XmlStatus::Ok,
         "First chunk with newline should parse"
     );
 
     let result = parser.parse(&text[first_chunk_bytes..], true);
     assert_eq!(
-        result, XmlStatus::Ok,
+        result,
+        XmlStatus::Ok,
         "Second chunk with epilog newline should parse"
     );
 }
@@ -291,7 +316,8 @@ fn test_not_utf16() {
 
     let result = parser.parse(text.as_bytes(), true);
     assert_ne!(
-        result, XmlStatus::Ok,
+        result,
+        XmlStatus::Ok,
         "Declaring UTF-16 in UTF-8 should be rejected"
     );
     assert_eq!(
@@ -347,7 +373,8 @@ fn test_long_utf8_character() {
 
     let result = parser.parse(text.as_bytes(), true);
     assert_ne!(
-        result, XmlStatus::Ok,
+        result,
+        XmlStatus::Ok,
         "4-byte UTF-8 character in element name should be rejected"
     );
     assert_eq!(
@@ -467,7 +494,11 @@ fn test_line_and_column_numbers_inside_handlers() {
     );
 
     let result = parser.parse(text.as_bytes(), true);
-    assert_eq!(result, XmlStatus::Ok, "Parse with line tracking should succeed");
+    assert_eq!(
+        result,
+        XmlStatus::Ok,
+        "Parse with line tracking should succeed"
+    );
 }
 
 // Test 28: test_line_number_after_error
@@ -528,7 +559,11 @@ fn test_really_long_encoded_lines() {
     parser.set_character_data_handler(Some(Box::new(|_data: &[u8]| {})));
 
     let result = parser.parse(text.as_bytes(), true);
-    assert_eq!(result, XmlStatus::Ok, "Really long encoded line should parse");
+    assert_eq!(
+        result,
+        XmlStatus::Ok,
+        "Really long encoded line should parse"
+    );
 }
 
 // Test 32: test_end_element_events
@@ -574,7 +609,8 @@ fn test_xmldecl_misplaced() {
 
     let result = parser.parse(text.as_bytes(), true);
     assert_ne!(
-        result, XmlStatus::Ok,
+        result,
+        XmlStatus::Ok,
         "Misplaced XML declaration should fail"
     );
     assert_eq!(
@@ -607,7 +643,8 @@ fn test_xmldecl_missing_attr() {
 
     let result = parser.parse(text.as_bytes(), true);
     assert_ne!(
-        result, XmlStatus::Ok,
+        result,
+        XmlStatus::Ok,
         "Missing XML declaration attribute should fail"
     );
     assert_eq!(
@@ -625,7 +662,8 @@ fn test_xmldecl_missing_value() {
 
     let result = parser.parse(text.as_bytes(), true);
     assert_ne!(
-        result, XmlStatus::Ok,
+        result,
+        XmlStatus::Ok,
         "Missing XML declaration attribute value should fail"
     );
     assert_eq!(
@@ -674,7 +712,8 @@ fn test_unrecognised_encoding_internal_entity() {
 
     let result = parser.parse(text.as_bytes(), true);
     assert_ne!(
-        result, XmlStatus::Ok,
+        result,
+        XmlStatus::Ok,
         "Unrecognised encoding should be rejected"
     );
 }
