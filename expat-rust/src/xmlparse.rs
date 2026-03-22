@@ -1275,12 +1275,60 @@ impl Parser {
                 }
                 XmlError::None
             }
-            Role::AttributeEnumValue | Role::AttributeNotationValue => {
-                // Enumeration values — no special handling needed
+            Role::AttributeEnumValue => {
+                // Enumeration value — append to type string like (one|two|three)
+                let val = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                if let Some(ref mut type_str) = self.current_attlist_type {
+                    if type_str.ends_with('(') {
+                        type_str.push_str(&val);
+                    } else {
+                        type_str.push('|');
+                        type_str.push_str(&val);
+                    }
+                } else {
+                    self.current_attlist_type = Some(format!("({}", val));
+                }
                 XmlError::None
             }
-            Role::ImpliedAttributeValue | Role::RequiredAttributeValue => {
-                // #IMPLIED or #REQUIRED — no default value to store
+            Role::AttributeNotationValue => {
+                // NOTATION enum value — append to type string like NOTATION(foo|bar)
+                let val = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                if let Some(ref mut type_str) = self.current_attlist_type {
+                    if type_str.ends_with('(') {
+                        type_str.push_str(&val);
+                    } else {
+                        type_str.push('|');
+                        type_str.push_str(&val);
+                    }
+                } else {
+                    self.current_attlist_type = Some(format!("NOTATION({}", val));
+                }
+                XmlError::None
+            }
+            Role::ImpliedAttributeValue => {
+                // #IMPLIED — no default value, not required
+                if let Some(handler) = &mut self.attlist_decl_handler {
+                    let elem = self.current_attlist_element.clone().unwrap_or_default();
+                    let attr = self.current_attlist_attr.clone().unwrap_or_default();
+                    let mut type_str = self.current_attlist_type.clone().unwrap_or_else(|| "CDATA".to_string());
+                    if type_str.contains('(') && !type_str.ends_with(')') {
+                        type_str.push(')');
+                    }
+                    handler(&elem, &attr, &type_str, None, None, false);
+                }
+                XmlError::None
+            }
+            Role::RequiredAttributeValue => {
+                // #REQUIRED — no default value, is required
+                if let Some(handler) = &mut self.attlist_decl_handler {
+                    let elem = self.current_attlist_element.clone().unwrap_or_default();
+                    let attr = self.current_attlist_attr.clone().unwrap_or_default();
+                    let mut type_str = self.current_attlist_type.clone().unwrap_or_else(|| "CDATA".to_string());
+                    if type_str.contains('(') && !type_str.ends_with(')') {
+                        type_str.push(')');
+                    }
+                    handler(&elem, &attr, &type_str, None, None, true);
+                }
                 XmlError::None
             }
             Role::ElementName => {
@@ -1301,41 +1349,101 @@ impl Parser {
                 }
                 XmlError::None
             }
-            Role::DefaultAttributeValue | Role::FixedAttributeValue => {
+            Role::DefaultAttributeValue => {
                 // ATTLIST default value — validate and store
-                // tok_text has quotes stripped
                 if let Err(e) = self.validate_attribute_value(tok_text) {
                     self.event_pos = pos;
                     return e;
                 }
-                // Store the default value for this element/attribute
                 if let (Some(ref elem), Some(ref attr)) =
                     (&self.current_attlist_element, &self.current_attlist_attr)
                 {
                     let value = Self::normalize_attribute_value(tok_text, &self.internal_entities);
                     let defaults = self.attlist_defaults.entry(elem.clone()).or_default();
-                    // Only store if not already defined (first declaration wins)
                     if !defaults.iter().any(|(n, _)| n == attr) {
-                        defaults.push((attr.clone(), value));
+                        defaults.push((attr.clone(), value.clone()));
+                    }
+                    if let Some(handler) = &mut self.attlist_decl_handler {
+                        let mut type_str = self.current_attlist_type.clone().unwrap_or_else(|| "CDATA".to_string());
+                        if type_str.contains('(') && !type_str.ends_with(')') {
+                            type_str.push(')');
+                        }
+                        handler(&elem, &attr, &type_str, Some(&value), None, false);
+                    }
+                }
+                XmlError::None
+            }
+            Role::FixedAttributeValue => {
+                // ATTLIST #FIXED value — validate and store
+                if let Err(e) = self.validate_attribute_value(tok_text) {
+                    self.event_pos = pos;
+                    return e;
+                }
+                if let (Some(ref elem), Some(ref attr)) =
+                    (&self.current_attlist_element, &self.current_attlist_attr)
+                {
+                    let value = Self::normalize_attribute_value(tok_text, &self.internal_entities);
+                    let defaults = self.attlist_defaults.entry(elem.clone()).or_default();
+                    if !defaults.iter().any(|(n, _)| n == attr) {
+                        defaults.push((attr.clone(), value.clone()));
+                    }
+                    if let Some(handler) = &mut self.attlist_decl_handler {
+                        let mut type_str = self.current_attlist_type.clone().unwrap_or_else(|| "CDATA".to_string());
+                        if type_str.contains('(') && !type_str.ends_with(')') {
+                            type_str.push(')');
+                        }
+                        handler(&elem, &attr, &type_str, Some(&value), None, false);
                     }
                 }
                 XmlError::None
             }
             Role::Error => {
                 // Syntax error from role state machine
-                // Check token type for more specific error codes (matches C doProlog)
                 match tok {
                     XmlTok::XmlDecl => XmlError::MisplacedXmlPi,
                     XmlTok::ParamEntityRef => XmlError::ParamEntityRef,
                     _ => XmlError::Syntax,
                 }
             }
-            Role::ParamEntityRef | Role::InnerParamEntityRef => {
-                // Parameter entity reference in DTD
-                // If PE is undefined and we don't have param entity parsing,
-                // stop processing DTD declarations (matches C keepProcessing=false)
+            Role::IgnoreSect => {
+                // Ignore section: <![IGNORE[ ... ]]>
+                if self.default_handler.is_some() {
+                    self.report_default(&xmltok::Utf8Encoding, data, pos, next);
+                }
+                self.do_ignore_section(data, next, data.len())
+            }
+            Role::ParamEntityRef => {
+                // PE reference outside internal subset
                 self.has_param_entity_refs = true;
-                self.dtd_keep_processing = false;
+                if self.param_entity_parsing == ParamEntityParsing::Never {
+                    self.dtd_keep_processing = self.dtd_standalone;
+                }
+                XmlError::None
+            }
+            Role::InnerParamEntityRef => {
+                // PE reference inside a declaration
+                self.has_param_entity_refs = true;
+                if self.param_entity_parsing == ParamEntityParsing::Never {
+                    self.dtd_keep_processing = self.dtd_standalone;
+                } else {
+                    // PE parsing enabled — call skipped entity handler
+                    if let Some(handler) = &mut self.skipped_entity_handler {
+                        if data.len() > pos && data[pos] == b'%' {
+                            if let Some(semi) = data[pos + 1..].iter().position(|&b| b == b';') {
+                                let name_bytes = &data[pos + 1..pos + 1 + semi];
+                                if let Ok(name) = std::str::from_utf8(name_bytes) {
+                                    handler(name, true);
+                                }
+                            }
+                        }
+                    }
+                    self.dtd_keep_processing = self.dtd_standalone;
+                }
+                XmlError::None
+            }
+            Role::DoctypeNone | Role::EntityNone | Role::NotationNone | Role::AttlistNone | Role::ElementNone => {
+                // Whitespace/non-semantic tokens in DTD declarations — pass to default handler
+                self.report_default(&xmltok::Utf8Encoding, data, pos, next);
                 XmlError::None
             }
             _ => {
@@ -2164,6 +2272,28 @@ impl Parser {
     /// Returns Err(XmlError::DuplicateAttribute) if any attribute name appears twice.
     /// Performs XML attribute value normalization per spec section 3.3.3:
     /// - Expand character references (&#NN; &#xNN;)
+    /// Process an ignore section: <![IGNORE[ ... ]]>
+    /// Scans from start position for ]]> while tracking nested <![
+    fn do_ignore_section(&self, data: &[u8], start: usize, end: usize) -> XmlError {
+        let mut level = 1; // Already inside one IGNORE section
+        let mut i = start;
+        while i < end {
+            if i + 3 <= end && &data[i..i + 3] == b"]]>" {
+                level -= 1;
+                if level == 0 {
+                    return XmlError::None;
+                }
+                i += 3;
+            } else if i + 3 <= end && &data[i..i + 3] == b"<![" {
+                level += 1;
+                i += 3;
+            } else {
+                i += 1;
+            }
+        }
+        XmlError::Syntax
+    }
+
     /// - Expand predefined entity references (&amp; &lt; &gt; &apos; &quot;)
     /// - Expand internal general entity references
     /// - Normalize whitespace (\t, \n, \r, \r\n → space)

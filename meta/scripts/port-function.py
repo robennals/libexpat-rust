@@ -17,8 +17,11 @@ import sys
 import os
 import json
 
-ROOT = os.path.join(os.path.dirname(__file__), "..")
-C_FILE = os.path.join(ROOT, "expat", "lib", "xmlparse.c")
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+# Support both submodule layout (expat/expat/lib/) and flat layout (expat/lib/)
+C_FILE = os.path.join(ROOT, "expat", "expat", "lib", "xmlparse.c")
+if not os.path.exists(C_FILE):
+    C_FILE = os.path.join(ROOT, "expat", "lib", "xmlparse.c")
 RUST_FILE = os.path.join(ROOT, "expat-rust", "src", "xmlparse.rs")
 
 

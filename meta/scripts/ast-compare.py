@@ -15,6 +15,8 @@ Usage:
     python3 scripts/ast-compare.py doContent do_content
     python3 scripts/ast-compare.py --all              # Compare all known pairs
     python3 scripts/ast-compare.py --list-cases <func> c|rust  # List cases in a function
+    python3 scripts/ast-compare.py --prompt <c_func> <rust_func> [extra...]  # Generate Haiku porting prompt
+    python3 scripts/ast-compare.py --prompt-all       # Generate prompts for all divergent pairs
 """
 
 import sys
@@ -476,6 +478,161 @@ def get_pairs():
     return pairs
 
 
+def extract_c_case_source(c_func_name, case_label):
+    """Extract the C source code for a specific switch case."""
+    c_src = open(C_FILE, 'rb').read()
+    c_tree = parse_c(c_src)
+    c_node = find_function_node(c_tree, c_func_name, "c")
+    if not c_node:
+        return None
+    for node in walk_all(c_node):
+        if node.type == "case_statement":
+            value_node = node.child_by_field_name("value") or (node.children[1] if len(node.children) > 1 else None)
+            if value_node and value_node.text.decode() == case_label:
+                return node.text.decode()
+    return None
+
+
+def extract_rust_function_source(func_name):
+    """Extract the full Rust function source."""
+    r_src = open(RUST_FILE, 'rb').read()
+    r_tree = parse_rust(r_src)
+    r_node = find_function_node(r_tree, func_name, "rust")
+    if not r_node:
+        return None
+    return r_node.text.decode()
+
+
+def generate_prompt(c_func_name, r_func_name, extra_rust_funcs=None):
+    """Generate a Haiku-ready prompt for fixing divergences between C and Rust functions."""
+    results = compare(c_func_name, r_func_name, extra_rust_funcs)
+    if not results or not results["divergences"]:
+        return "No divergences found — nothing to fix."
+
+    c_src = open(C_FILE, 'rb').read()
+    r_src = open(RUST_FILE, 'rb').read()
+    c_tree = parse_c(c_src)
+    r_tree = parse_rust(r_src)
+    c_node = find_function_node(c_tree, c_func_name, "c")
+
+    # Collect C cases for missing match arms
+    c_cases = extract_switch_cases_ast(c_node, "c")
+    c_case_by_label = {c["label"]: c for c in c_cases}
+
+    # Find missing match arms and per-case divergences
+    missing_arms = []
+    case_fixes = []
+    missing_errors_overall = []
+    missing_handlers_overall = []
+
+    for sev, desc, details in results["divergences"]:
+        if "missing_match_arms" in desc:
+            missing_arms = details
+        elif desc.startswith("case ") and "missing errors" in desc:
+            case_fixes.append(("error", desc, details))
+        elif desc.startswith("case ") and "missing handlers" in desc:
+            case_fixes.append(("handler", desc, details))
+        elif desc == "missing_errors":
+            missing_errors_overall = details
+        elif desc == "missing_handlers":
+            missing_handlers_overall = details
+
+    lines = []
+    lines.append(f"# Task: Fix divergences in {r_func_name} (Rust) to match {c_func_name} (C)")
+    lines.append("")
+    lines.append("You are porting C libexpat to Rust. Fix the Rust implementation to match C behavior.")
+    lines.append("")
+    lines.append("## File to modify")
+    lines.append(f"- `expat-rust/src/xmlparse.rs` — function `{r_func_name}`")
+    if extra_rust_funcs:
+        for ef in extra_rust_funcs:
+            lines.append(f"- `expat-rust/src/xmlparse.rs` — function `{ef}`")
+    lines.append("")
+
+    # Missing match arms — extract C source for each
+    if missing_arms:
+        lines.append("## Missing match arms (cases C handles but Rust doesn't)")
+        lines.append("")
+        for arm in missing_arms:
+            # Find the original C label
+            c_label = None
+            for cl in c_case_by_label:
+                mapped = TOKEN_MAP.get(cl) or ROLE_MAP.get(cl)
+                if mapped == arm:
+                    c_label = cl
+                    break
+            if c_label:
+                c_source = extract_c_case_source(c_func_name, c_label)
+                if c_source:
+                    lines.append(f"### {arm} (C: {c_label})")
+                    lines.append("```c")
+                    lines.append(c_source.strip())
+                    lines.append("```")
+                    lines.append("")
+                    # Show case metadata
+                    c_case = c_case_by_label.get(c_label, {})
+                    if c_case.get("errors"):
+                        lines.append(f"Errors used: {c_case['errors']}")
+                    if c_case.get("handlers"):
+                        lines.append(f"Handlers called: {c_case['handlers']}")
+                    if c_case.get("calls"):
+                        lines.append(f"Functions called: {c_case['calls']}")
+                    lines.append("")
+            else:
+                lines.append(f"### {arm}")
+                lines.append("(Could not find C source for this case)")
+                lines.append("")
+
+    # Per-case divergences
+    if case_fixes:
+        lines.append("## Existing cases that need fixes")
+        lines.append("")
+        for fix_type, desc, details in case_fixes:
+            rust_label = desc.split(":")[0].replace("case ", "")
+            # Find C label
+            c_label = None
+            for cl in c_case_by_label:
+                mapped = TOKEN_MAP.get(cl) or ROLE_MAP.get(cl)
+                if mapped == rust_label:
+                    c_label = cl
+                    break
+            lines.append(f"### {desc}")
+            if c_label:
+                c_source = extract_c_case_source(c_func_name, c_label)
+                if c_source:
+                    lines.append(f"C source ({c_label}):")
+                    lines.append("```c")
+                    lines.append(c_source.strip())
+                    lines.append("```")
+            lines.append(f"Missing: {details}")
+            lines.append("")
+
+    # Overall missing errors/handlers
+    if missing_errors_overall:
+        lines.append(f"## Overall missing error codes: {missing_errors_overall}")
+        lines.append("These errors appear in C but not in Rust. Add them to the appropriate cases.")
+        lines.append("")
+    if missing_handlers_overall:
+        lines.append(f"## Overall missing handlers: {missing_handlers_overall}")
+        lines.append("These handler calls appear in C but not in Rust.")
+        lines.append("")
+
+    # Rules
+    lines.append("## Rules")
+    lines.append("- No unsafe code")
+    lines.append("- Match C behavior exactly")
+    lines.append("- Keep changes minimal and focused")
+    lines.append("- Use Rust std types (String, Vec, HashMap) instead of C pools/hash tables")
+    lines.append("- Read the existing Rust code before making changes")
+    lines.append("")
+    lines.append("## Verification")
+    lines.append("```bash")
+    lines.append("cargo build -p expat-rust 2>&1 | tail -5")
+    lines.append("```")
+
+    return "\n".join(lines)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -489,6 +646,35 @@ def main():
             results = compare(c_name, r_name, extra)
             if results:
                 print(format_report(results))
+                print()
+        return
+
+    if sys.argv[1] == "--prompt":
+        # Generate a Haiku-ready prompt for fixing divergences
+        # Usage: ast-compare.py --prompt <c_func> <rust_func> [extra_rust_funcs...]
+        if len(sys.argv) < 4:
+            print("Usage: ast-compare.py --prompt <c_func> <rust_func> [extra_rust_funcs...]")
+            sys.exit(1)
+        c_name = sys.argv[2]
+        r_name = sys.argv[3]
+        extra = sys.argv[4:] if len(sys.argv) > 4 else []
+        prompt = generate_prompt(c_name, r_name, extra if extra else None)
+        print(prompt)
+        return
+
+    if sys.argv[1] == "--prompt-all":
+        # Generate prompts for all function pairs that have divergences
+        pairs = get_pairs()
+        for item in pairs:
+            c_name, r_name = item[0], item[1]
+            extra = item[2] if len(item) > 2 else []
+            results = compare(c_name, r_name, extra)
+            if results and results["divergences"]:
+                prompt = generate_prompt(c_name, r_name, extra if extra else None)
+                print(f"{'='*80}")
+                print(f"PROMPT FOR: {c_name} -> {r_name}")
+                print(f"{'='*80}")
+                print(prompt)
                 print()
         return
 
