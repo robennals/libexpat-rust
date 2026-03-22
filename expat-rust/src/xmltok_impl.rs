@@ -788,13 +788,8 @@ pub fn scan_end_tag<E: Encoding>(
                 pos += 3;
             }
             ByteType::LEAD4 => {
-                if end - pos < 4 {
-                    return Ok(TokenResult {
-                        token: XmlTok::Partial,
-                        next_pos: pos,
-                    });
-                }
-                pos += 4;
+                // 4-byte UTF-8 = U+10000+, not valid as XML name character
+                return Err(pos);
             }
             ByteType::COLON => {
                 pos += enc.min_bytes_per_char();
@@ -1261,13 +1256,8 @@ pub fn scan_lt<E: Encoding>(
             pos += 3;
         }
         ByteType::LEAD4 => {
-            if end - pos < 4 {
-                return Ok(TokenResult {
-                    token: XmlTok::Partial,
-                    next_pos: pos,
-                });
-            }
-            pos += 4;
+            // 4-byte UTF-8 = U+10000+, not valid as XML name character
+            return Err(pos);
         }
         _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
             // Start tag - advance past first char and fall through to name loop
@@ -1363,13 +1353,8 @@ pub fn scan_lt<E: Encoding>(
                 pos += 3;
             }
             ByteType::LEAD4 => {
-                if end - pos < 4 {
-                    return Ok(TokenResult {
-                        token: XmlTok::Partial,
-                        next_pos: pos,
-                    });
-                }
-                pos += 4;
+                // 4-byte UTF-8 = U+10000+, not valid as XML name character
+                return Err(pos);
             }
             ByteType::COLON => {
                 pos += enc.min_bytes_per_char();
