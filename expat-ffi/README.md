@@ -50,27 +50,20 @@ cc -o your_app your_app.c -Ltarget/release -lexpat -Wl,-rpath,target/release
 
 The API is the same. `XML_ParserCreate`, `XML_Parse`, `XML_SetElementHandler` — they all work identically. Your code doesn't need to change.
 
-## What's Implemented
+## API Coverage
 
-The following libexpat functions are currently exposed:
+The full libexpat public API is exposed — 48 functions covering:
 
-| Function | Status |
-|----------|--------|
-| `XML_ParserCreate` | Implemented |
-| `XML_ParserCreateNS` | Implemented |
-| `XML_ParserFree` | Implemented |
-| `XML_Parse` | Implemented |
-| `XML_GetErrorCode` | Implemented |
-| `XML_ErrorString` | Implemented |
-| `XML_GetCurrentLineNumber` | Implemented |
-| `XML_GetCurrentColumnNumber` | Implemented |
-| `XML_SetUserData` | Implemented |
-| `XML_SetElementHandler` | Implemented |
-| `XML_SetCharacterDataHandler` | Implemented |
-| `XML_SetCommentHandler` | Implemented |
-| `XML_ExpatVersion` | Implemented |
-
-Additional handlers (PI, CDATA, DTD, namespace, etc.) can be added incrementally. The Rust parser supports the full API — only the FFI wrappers need to be written.
+- **Parser lifecycle**: `XML_ParserCreate`, `XML_ParserCreateNS`, `XML_ParserReset`, `XML_ParserFree`
+- **Parsing**: `XML_Parse`, `XML_GetBuffer`, `XML_ParseBuffer`, `XML_StopParser`, `XML_ResumeParser`
+- **Error handling**: `XML_GetErrorCode`, `XML_ErrorString`
+- **Position**: `XML_GetCurrentLineNumber`, `XML_GetCurrentColumnNumber`, `XML_GetCurrentByteIndex`, `XML_GetCurrentByteCount`
+- **Configuration**: `XML_SetEncoding`, `XML_SetBase`, `XML_GetBase`, `XML_SetHashSalt`, `XML_SetParamEntityParsing`, `XML_UseForeignDTD`, `XML_SetReturnNSTriplet`, `XML_SetReparseDeferralEnabled`, `XML_UseParserAsHandlerArg`
+- **All handler setters**: Element, character data, processing instruction, comment, CDATA section, default, DOCTYPE declaration, XML declaration, external entity ref, plus individual start/end variants
+- **Attribute info**: `XML_GetSpecifiedAttributeCount`, `XML_GetIdAttributeIndex`
+- **External entities**: `XML_ExternalEntityParserCreate`
+- **Security**: `XML_SetBillionLaughsAttackProtectionMaximumAmplification`, `XML_SetBillionLaughsAttackProtectionActivationThreshold`
+- **Version**: `XML_ExpatVersion`
 
 ## Examples
 

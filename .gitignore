@@ -27,3 +27,4 @@ __pycache__/
 
 # CMake (for expat submodule builds)
 expat/build/
+expat-ffi/examples/basic_parse
