@@ -8,6 +8,12 @@
 
 use crate::char_tables::ByteType;
 
+/// Check if a byte is a valid UTF-8 continuation byte (0x80-0xBF)
+#[inline]
+fn is_utf8_follow(b: u8) -> bool {
+    (b & 0xC0) == 0x80
+}
+
 /// Token type enumeration matching XML_TOK_* constants
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
@@ -156,6 +162,9 @@ pub fn scan_comment<E: Encoding>(
                         next_pos: pos,
                     });
                 }
+                if !is_utf8_follow(data[pos + 1]) {
+                    return Err(pos);
+                }
                 pos += 2;
             }
             ByteType::LEAD3 => {
@@ -165,6 +174,9 @@ pub fn scan_comment<E: Encoding>(
                         next_pos: pos,
                     });
                 }
+                if !is_utf8_follow(data[pos + 1]) || !is_utf8_follow(data[pos + 2]) {
+                    return Err(pos);
+                }
                 pos += 3;
             }
             ByteType::LEAD4 => {
@@ -173,6 +185,11 @@ pub fn scan_comment<E: Encoding>(
                         token: XmlTok::Partial,
                         next_pos: pos,
                     });
+                }
+                if !is_utf8_follow(data[pos + 1]) || !is_utf8_follow(data[pos + 2])
+                    || !is_utf8_follow(data[pos + 3])
+                {
+                    return Err(pos);
                 }
                 pos += 4;
             }
@@ -591,6 +608,9 @@ pub fn cdata_section_tok<E: Encoding>(
                     next_pos: pos,
                 });
             }
+            if !is_utf8_follow(data[pos + 1]) {
+                return Err(pos);
+            }
             pos += 2;
         }
         ByteType::LEAD3 => {
@@ -600,6 +620,9 @@ pub fn cdata_section_tok<E: Encoding>(
                     next_pos: pos,
                 });
             }
+            if !is_utf8_follow(data[pos + 1]) || !is_utf8_follow(data[pos + 2]) {
+                return Err(pos);
+            }
             pos += 3;
         }
         ByteType::LEAD4 => {
@@ -608,6 +631,11 @@ pub fn cdata_section_tok<E: Encoding>(
                     token: XmlTok::PartialChar,
                     next_pos: pos,
                 });
+            }
+            if !is_utf8_follow(data[pos + 1]) || !is_utf8_follow(data[pos + 2])
+                || !is_utf8_follow(data[pos + 3])
+            {
+                return Err(pos);
             }
             pos += 4;
         }
@@ -1455,6 +1483,9 @@ pub fn content_tok<E: Encoding>(
                     next_pos: pos,
                 });
             }
+            if !is_utf8_follow(data[pos + 1]) {
+                return Err(pos);
+            }
             pos += 2;
         }
         ByteType::LEAD3 => {
@@ -1464,6 +1495,9 @@ pub fn content_tok<E: Encoding>(
                     next_pos: pos,
                 });
             }
+            if !is_utf8_follow(data[pos + 1]) || !is_utf8_follow(data[pos + 2]) {
+                return Err(pos);
+            }
             pos += 3;
         }
         ByteType::LEAD4 => {
@@ -1472,6 +1506,11 @@ pub fn content_tok<E: Encoding>(
                     token: XmlTok::PartialChar,
                     next_pos: pos,
                 });
+            }
+            if !is_utf8_follow(data[pos + 1]) || !is_utf8_follow(data[pos + 2])
+                || !is_utf8_follow(data[pos + 3])
+            {
+                return Err(pos);
             }
             pos += 4;
         }
