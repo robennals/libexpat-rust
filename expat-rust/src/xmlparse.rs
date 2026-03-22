@@ -252,6 +252,11 @@ pub struct Parser {
     seen_xml_decl: bool,
     /// Detected encoding from BOM/auto-detection
     detected_encoding: Option<String>,
+    /// Whether the DTD references an external subset (SYSTEM or PUBLIC)
+    /// When true, undefined entities are not fatal per XML spec WFC
+    has_param_entity_refs: bool,
+    /// DTD standalone flag (from <?xml standalone='yes'?>)
+    dtd_standalone: bool,
     /// Total byte offset in input (for tracking position across parse calls)
     byte_offset: u64,
     /// Pending byte from incomplete UTF-16 code unit across chunk boundaries
@@ -320,6 +325,8 @@ impl Parser {
             root_closed: false,
             seen_xml_decl: false,
             detected_encoding: None,
+            has_param_entity_refs: false,
+            dtd_standalone: false,
             byte_offset: 0,
             utf16_pending_byte: None,
             internal_entities: HashMap::new(),
@@ -380,6 +387,8 @@ impl Parser {
             root_closed: false,
             seen_xml_decl: false,
             detected_encoding: None,
+            has_param_entity_refs: false,
+            dtd_standalone: false,
             byte_offset: 0,
             utf16_pending_byte: None,
             internal_entities: HashMap::new(),
@@ -722,7 +731,9 @@ impl Parser {
                         };
 
                         // Handle standalone (C sets parser->m_dtd->standalone)
-                        // TODO: add DTD standalone field when DTD is fully implemented
+                        if info.standalone == Some(true) {
+                            self.dtd_standalone = true;
+                        }
 
                         // Call xml_decl_handler if set
                         if let Some(handler) = &mut self.xml_decl_handler {
@@ -779,10 +790,16 @@ impl Parser {
                     self.event_pos = pos;
                     return XmlError::Publicid;
                 }
+                if matches!(role, Role::DoctypePublicId) {
+                    self.has_param_entity_refs = true;
+                }
                 XmlError::None
             }
-            Role::DoctypeSystemId => {
-                // Store system ID
+            Role::DoctypeSystemId | Role::EntitySystemId => {
+                // System ID implies external subset reference
+                if matches!(role, Role::DoctypeSystemId) {
+                    self.has_param_entity_refs = true;
+                }
                 XmlError::None
             }
             Role::DoctypeInternalSubset => {
@@ -1230,14 +1247,22 @@ impl Parser {
                             if entity_err != XmlError::None {
                                 return (entity_err, pos);
                             }
-                        } else if let Some(handler) = &mut self.skipped_entity_handler {
-                            handler(name, false);
-                        } else if self.default_handler.is_some() {
-                            self.report_default(enc, data, pos, next);
                         } else {
-                            // No handler and no DTD — report undefined entity
-                            self.error_code = XmlError::UndefinedEntity;
-                            return (XmlError::UndefinedEntity, pos);
+                            // Entity not found in internal entities
+                            // Matches C doContent entity lookup logic:
+                            // If no external subset refs or standalone, undefined = error
+                            // If has external subset refs and not standalone, skip silently
+                            if !self.has_param_entity_refs || self.dtd_standalone {
+                                return (XmlError::UndefinedEntity, pos);
+                            }
+                            // Has external subset refs — entity might be defined there
+                            // Skip it (call skipped handler or default handler)
+                            if let Some(handler) = &mut self.skipped_entity_handler {
+                                handler(name, false);
+                            } else if self.default_handler.is_some() {
+                                self.report_default(enc, data, pos, next);
+                            }
+                            // Otherwise silently skip
                         }
                     }
                 }
