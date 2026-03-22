@@ -4,21 +4,26 @@
 
 ### Line coverage (measured by tooling)
 
-| File | C line coverage (gcov, native C tests) | Rust line coverage (tarpaulin, all Rust tests) |
-|------|----------------------------------------|------------------------------------------------|
-| xmlparse | **92.3%** of 4789 lines | **82.5%** of 1684 lines |
-| xmltok_impl | **86.2%** of 950 lines | **74.3%** of 1532 lines |
-| xmlrole | **84.6%** of 664 lines | **86.1%** of 526 lines |
-| **Overall** | **~90%** | **80.3%** (3249/4046 lines) |
+| File | C lines (gcov, C's own 4692 tests) | Rust lines (tarpaulin, all Rust tests) | Rust lines (comparison tests only) |
+|------|-------------------------------------|----------------------------------------|-------------------------------------|
+| xmlparse | **92.3%** of 4789 lines | **82.5%** of 1684 lines | 58.8% of 1684 lines |
+| xmltok_impl | **86.2%** of 950 lines | **74.3%** of 1532 lines | ~60% of 1532 lines |
+| xmlrole | **84.6%** of 664 lines | **86.1%** of 526 lines | 68.3% of 526 lines |
+| **Overall** | **~90%** | **80.3%** (3249/4046) | **59.3%** (2356/3973) |
 
-C line coverage is the baseline — it's what C's own comprehensive test suite (4692 test cases) achieves of the C source. Our Rust line coverage is lower both because we added new code without tests, and because our Rust is only 64% of C's size (missing features aren't lines to cover, but their absence means the code we DO have handles fewer cases).
+**Column 1** (C lines): What C's own test suite covers of C code. This is the gold standard — 4692 test cases exercising the full C API.
+
+**Column 2** (Rust, all tests): What all Rust tests (comparison + unit + coverage) cover of Rust code. Higher than comparison-only because unit tests exercise error paths and edge cases.
+
+**Column 3** (Rust, comparison tests only): What the C-vs-Rust **SAX comparison tests** cover of Rust code. These are the highest-trust tests — they run identical XML through both C and Rust parsers and verify the SAX event sequences match exactly. They cover 59.3% of Rust lines, which represents the verified-equivalent subset of our implementation. C coverage from these same tests would be similar or slightly higher (same inputs, C has more code paths for features we haven't implemented).
 
 ### Test pass rates
 
 | Test suite | Pass rate | What it measures |
 |------------|-----------|------------------|
-| **C test suite against Rust** | **196/290 (67.6%)** | Feature parity: does Rust match C behavior for complex XML? |
-| **Rust comparison tests** | 1020/1212 (84%) | SAX event equivalence for simple XML inputs. 192 tests ignored (features not yet implemented). |
+| **C test suite against Rust** | **196/290 (67.6%)** | Feature parity: does Rust match C for complex XML? (DTD, entities, namespaces, suspend/resume) |
+| **Rust SAX comparison tests** | 1020/1212 (84%) | Behavioral equivalence: identical SAX events for same input. 192 tests ignored (unimplemented features). |
+| **C native tests** | 4692/4692 (100%) | C passes its own tests (obviously). Covers 92.3% of C lines. |
 
 ### Code size
 
