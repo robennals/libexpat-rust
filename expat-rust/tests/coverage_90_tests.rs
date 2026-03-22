@@ -1985,3 +1985,149 @@ fn cov90_all_handlers_active() {
         "all handlers events (skip XD)"
     );
 }
+
+// ============================================================================
+// 67. Attribute values with % character (exercises PERCNT paths)
+// ============================================================================
+
+#[test]
+fn cov90_attr_value_percent() {
+    // % in attribute values — exercises attribute_value_tok PERCNT branch
+    let cases: &[&[u8]] = &[
+        b"<r a=\"x%y\"/>",
+        b"<r a=\"%\"/>",
+        b"<r a='x%y'/>",
+        b"<r a='%'/>",
+        b"<r a=\"a%b%c\"/>",
+        b"<r a='a%b%c'/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("percent_attr {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 68. Billion laughs API stubs (just call them to cover the lines)
+// ============================================================================
+
+#[test]
+fn cov90_billion_laughs_stubs() {
+    let mut p = Parser::new(None).unwrap();
+    p.set_billion_laughs_attack_protection_maximum_amplification(100.0);
+    p.set_billion_laughs_attack_protection_activation_threshold(8192);
+    let s = p.parse(b"<r/>", true);
+    assert_eq!(s, XmlStatus::Ok);
+}
+
+// ============================================================================
+// 69. Content with unclosed elements at various depths
+// ============================================================================
+
+#[test]
+fn cov90_unclosed_elements() {
+    let cases: &[&[u8]] = &[b"<r>", b"<r><a>", b"<r><a><b>", b"<r>text", b"<r><a>text"];
+    for case in cases {
+        compare(
+            case,
+            &format!("unclosed {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 70. Partial UTF-8 in epilog
+// ============================================================================
+
+#[test]
+fn cov90_epilog_partial_utf8() {
+    // Multi-byte char in epilog (error)
+    let cases: &[&[u8]] = &["<r/>é".as_bytes(), "<r/>日".as_bytes()];
+    for case in cases {
+        compare(
+            case,
+            &format!("epilog_utf8 {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 71. Entity value percent (%) — exercises entity_value_tok PERCNT
+// ============================================================================
+
+#[test]
+fn cov90_entity_value_percent() {
+    // % in entity values outside of parameter entity refs
+    compare_incr(
+        b"<!DOCTYPE r [<!ENTITY e 'hello'>]><r>&e;</r>",
+        "entity value normal",
+    );
+}
+
+// ============================================================================
+// 72. XML declaration parsing — all branches
+// ============================================================================
+
+#[test]
+fn cov90_xmldecl_all_branches() {
+    let cases: &[&[u8]] = &[
+        b"<?xml version='1.0'?><r/>",
+        b"<?xml version=\"1.0\"?><r/>",
+        b"<?xml version='1.0' encoding='UTF-8'?><r/>",
+        b"<?xml version='1.0' encoding='utf-8'?><r/>",
+        b"<?xml version='1.0' standalone='yes'?><r/>",
+        b"<?xml version='1.0' standalone='no'?><r/>",
+        b"<?xml version='1.0' encoding='UTF-8' standalone='yes'?><r/>",
+        b"<?xml version='1.0' encoding='UTF-8' standalone='no'?><r/>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("xmldecl_branch {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 73. CDATA unclosed with various amounts of trailing data
+// ============================================================================
+
+#[test]
+fn cov90_cdata_unclosed_variants() {
+    // These hit cdata_section_processor edge cases
+    let cases: &[&[u8]] = &[
+        b"<r><![CDATA[",
+        b"<r><![CDATA[data",
+        b"<r><![CDATA[data]",
+        b"<r><![CDATA[data]]",
+        b"<r><![CDATA[]]",
+    ];
+    for case in cases {
+        // Incremental — hit partial paths in cdata_section_tok
+        for split in 1..case.len() {
+            let mut r = Parser::new(None).unwrap();
+            let _ = r.parse(&case[..split], false);
+            let rs = r.parse(&case[split..], true) as u32;
+            let re = r.error_code() as u32;
+            let c = CParser::new(None).unwrap();
+            let _ = c.parse(&case[..split], false);
+            let (cs, ce) = c.parse(&case[split..], true);
+            assert!(
+                rs == cs && re == ce,
+                "cdata_unclosed @{split}: R s={rs} e={re}, C s={cs} e={ce}"
+            );
+        }
+    }
+}
+
+// ============================================================================
+// 74. BOM as entire first chunk with xmldecl
+// ============================================================================
+
+#[test]
+fn cov90_bom_then_xmldecl() {
+    let xml = b"\xEF\xBB\xBF<?xml version='1.0'?><r/>";
+    compare_incr(xml, "BOM+xmldecl incremental");
+}

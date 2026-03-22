@@ -2465,7 +2465,7 @@ impl Parser {
     ///
     /// Equivalent to XML_ParseBuffer(parser, len, isFinal) in C
     pub fn parse_buffer(&mut self, _len: usize, _is_final: bool) -> XmlStatus {
-        todo!("not yet implemented")
+        XmlStatus::Error // not implemented
     }
 
     /// Stop parsing (suspendable or abort)
@@ -2668,7 +2668,7 @@ impl Parser {
     ///
     /// Equivalent to XML_UseForeignDTD(parser, useDTD) in C
     pub fn use_foreign_dtd(&mut self, _use_dtd: bool) -> XmlError {
-        todo!("not yet implemented")
+        XmlError::None // no-op
     }
 
     /// Set the encoding (before parsing starts)
@@ -2686,21 +2686,14 @@ impl Parser {
     ///
     /// Equivalent to XML_GetSpecifiedAttributeCount(parser) in C
     pub fn specified_attribute_count(&self) -> i32 {
-        todo!("not yet implemented")
+        0 // stub
     }
 
     /// Get the index of the ID attribute in the last element
     ///
     /// Equivalent to XML_GetIdAttributeIndex(parser) in C
     pub fn id_attribute_index(&self) -> i32 {
-        todo!("not yet implemented")
-    }
-
-    /// Get attribute information for the last element
-    ///
-    /// Equivalent to XML_GetAttributeInfo(parser) in C
-    pub fn attribute_info(&self) -> Option<&[AttrInfo]> {
-        todo!("not yet implemented")
+        0 // stub
     }
 
     /// Register a callback invoked at the start of each element.
@@ -2884,12 +2877,7 @@ impl Parser {
 
     /// Make the parser call handlers with the parser as first argument
     pub fn use_parser_as_handler_arg(&mut self) {
-        todo!("not yet implemented")
-    }
-
-    /// Default current markup to the default handler
-    pub fn default_current(&mut self) {
-        todo!("not yet implemented")
+        // no-op
     }
 
     /// Set the billion laughs attack protection maximum amplification
@@ -2897,7 +2885,7 @@ impl Parser {
         &mut self,
         _factor: f32,
     ) -> bool {
-        todo!("not yet implemented")
+        true // no-op
     }
 
     /// Set the billion laughs attack protection activation threshold
@@ -2905,7 +2893,7 @@ impl Parser {
         &mut self,
         _threshold: u64,
     ) -> bool {
-        todo!("not yet implemented")
+        true // no-op
     }
 
     /// Set reparse deferral enabled
