@@ -1216,3 +1216,339 @@ fn cov90_handler_combos() {
         assert_eq!(rs, cs, "no handlers status");
     }
 }
+
+// ============================================================================
+// 38. Massive incremental test — exercises ALL tokenizer LEAD partial paths
+//     by parsing documents with multi-byte chars at every split point
+// ============================================================================
+
+#[test]
+fn cov90_massive_multibyte_incremental() {
+    // 2-byte chars (café = c3 a9) at every position in various constructs
+    let docs: &[&[u8]] = &[
+        // Multi-byte in content, comments, CDATA, PI data (not in names — known gap)
+        "<?xml version='1.0'?><!-- café --><r>café<![CDATA[café]]><?pi café?></r>".as_bytes(),
+        // 3-byte CJK in content
+        "<r>日本語テスト</r>".as_bytes(),
+        // DTD with multi-byte in entity values (not names)
+        "<!DOCTYPE r [<!ENTITY e 'café'>]><r>&e;</r>".as_bytes(),
+    ];
+    for doc in docs {
+        compare_incr(doc, &format!("massive_mb len={}", doc.len()));
+    }
+}
+
+// ============================================================================
+// 39. Current byte index — UTF-16 path
+// ============================================================================
+
+#[test]
+fn cov90_byte_index_utf16() {
+    fn utf16le(s: &str) -> Vec<u8> {
+        let mut out = vec![0xFF, 0xFE];
+        for c in s.encode_utf16() {
+            out.push(c as u8);
+            out.push((c >> 8) as u8);
+        }
+        out
+    }
+    let xml = utf16le("<r>text</r>");
+    let mut r = Parser::new(None).unwrap();
+    r.parse(&xml, true);
+    let ri = r.current_byte_index();
+    let c = CParser::new(None).unwrap();
+    c.parse(&xml, true);
+    let ci = c.current_byte_index();
+    assert_eq!(ri, ci, "byte index UTF-16LE");
+}
+
+// ============================================================================
+// 40. DTD with all role states exercised incrementally
+// ============================================================================
+
+#[test]
+fn cov90_dtd_all_role_states() {
+    // This document hits as many xmlrole.rs states as possible
+    let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE root SYSTEM "root.dtd" [
+  <!ELEMENT root (#PCDATA|child|bold|italic)*>
+  <!ELEMENT child (a,b?,c*)>
+  <!ELEMENT a EMPTY>
+  <!ELEMENT b (#PCDATA)>
+  <!ELEMENT c ANY>
+  <!ELEMENT bold (#PCDATA)>
+  <!ELEMENT italic EMPTY>
+  <!ATTLIST root
+    id ID #REQUIRED
+    class CDATA "default"
+    lang (en|fr|de|ja) "en"
+    version NMTOKEN #IMPLIED
+    ref IDREF #IMPLIED
+    refs IDREFS #IMPLIED
+    style CDATA #FIXED "normal"
+  >
+  <!ATTLIST child type CDATA #IMPLIED>
+  <!ATTLIST a href CDATA #IMPLIED>
+  <!ENTITY internal "Hello &amp; World">
+  <!ENTITY ext1 SYSTEM "ext1.xml">
+  <!ENTITY ext2 PUBLIC "-//Test//Entity//EN" "ext2.xml">
+  <!ENTITY % pe1 "EMPTY">
+  <!ENTITY % pe2 SYSTEM "pe.dtd">
+  <!ENTITY % pe3 PUBLIC "-//Test//PE//EN" "pe.dtd">
+  <!NOTATION jpeg SYSTEM "image/jpeg">
+  <!NOTATION png PUBLIC "-//Test//PNG//EN">
+  <!NOTATION gif PUBLIC "-//Test//GIF//EN" "image/gif">
+  <!NOTATION svg SYSTEM "image/svg+xml">
+  <!ENTITY logo SYSTEM "logo.png" NDATA png>
+  <!-- DTD comment 1 -->
+  <?dtd-pi processing instruction?>
+  <!-- DTD comment 2 -->
+]>
+<root id="r1" class="main" lang="en" version="v1">
+  Hello &amp; World
+  <child type="test"><a href="http://example.com"/><b>bold text</b><c/></child>
+  <bold>Bold &internal;</bold>
+  <italic/>
+  <!-- content comment -->
+  <?app-info key=value?>
+  <![CDATA[Raw <data> & "stuff"]]>
+</root>
+<!-- epilog comment -->
+<?post-pi done?>"#;
+    compare_events(xml, "all role states doc");
+    compare_incr(xml, "all role states incremental");
+}
+
+// ============================================================================
+// 41. Entity expansion patterns
+// ============================================================================
+
+#[test]
+fn cov90_entity_patterns() {
+    let cases: &[&[u8]] = &[
+        // Entity with char ref in value
+        b"<!DOCTYPE r [<!ENTITY e '&#169;'>]><r>&e;</r>",
+        // Entity with entity ref in value
+        b"<!DOCTYPE r [<!ENTITY e '&amp;'>]><r>&e;</r>",
+        // Entity with multiple char refs
+        b"<!DOCTYPE r [<!ENTITY e '&#65;&#66;&#67;'>]><r>&e;</r>",
+        // Entity value with CR/LF (exercises entity_value_tok CR/LF paths)
+        b"<!DOCTYPE r [<!ENTITY e 'line1\r\nline2\rline3\nline4'>]><r>&e;</r>",
+        // Multiple entities in sequence
+        b"<!DOCTYPE r [<!ENTITY a 'A'><!ENTITY b 'B'><!ENTITY c 'C'>]><r>&a;&b;&c;</r>",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("entity_pat {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 42. Attribute value patterns with all token types
+// ============================================================================
+
+#[test]
+fn cov90_attr_value_all_tokens() {
+    // Exercise every branch in attribute_value_tok
+    let cases = [
+        // LF at start of value
+        "<r a=\"\nv\"/>",
+        // CR at start of value
+        "<r a=\"\rv\"/>",
+        // CRLF at start of value
+        "<r a=\"\r\nv\"/>",
+        // Space at start of value (AttributeValueS token)
+        "<r a=\" v\"/>",
+        // Tab at start
+        "<r a=\"\tv\"/>",
+        // Entity ref at start
+        "<r a=\"&amp;v\"/>",
+        // Char ref at start
+        "<r a=\"&#65;v\"/>",
+        // Single-quoted variants
+        "<r a='\nv'/>",
+        "<r a='\rv'/>",
+        "<r a='\r\nv'/>",
+        "<r a=' v'/>",
+        "<r a='\tv'/>",
+        "<r a='&amp;v'/>",
+        "<r a='&#65;v'/>",
+        // Multiple whitespace types in sequence
+        "<r a=\"a\t\n\r b\"/>",
+        "<r a='a\t\n\r b'/>",
+    ];
+    for case in &cases {
+        compare_events(case.as_bytes(), &format!("attr_all {:?}", case));
+    }
+    // Incremental versions
+    for case in &cases[..4] {
+        compare_incr(case.as_bytes(), &format!("attr_all_incr {:?}", case));
+    }
+}
+
+// ============================================================================
+// 43. CDATA section tokenizer — all branches
+// ============================================================================
+
+#[test]
+fn cov90_cdata_all_branches() {
+    let cases = [
+        "<r><![CDATA[a\r\nb\rc\nd]]></r>",
+        "<r><![CDATA[]]]]></r>",    // ]] then ]]>
+        "<r><![CDATA[]]]></r>",     // ] then ]]>
+        "<r><![CDATA[a]b]c]]></r>", // scattered ]
+        "<r><![CDATA[a]]b]]></r>",  // ]] not followed by >
+        // With multi-byte
+        "<r><![CDATA[café]]></r>",
+        "<r><![CDATA[日本語]]></r>",
+    ];
+    for case in &cases {
+        compare_incr(case.as_bytes(), &format!("cdata_all {:?}", case));
+    }
+}
+
+// ============================================================================
+// 44. Prolog tokenizer — all token types
+// ============================================================================
+
+#[test]
+fn cov90_prolog_tok_all() {
+    // Various prolog token combinations to exercise prolog_tok branches
+    let cases: &[&[u8]] = &[
+        // XML decl with double quotes
+        b"<?xml version=\"1.0\"?><r/>",
+        // DOCTYPE with mixed quote types
+        b"<!DOCTYPE r PUBLIC '-//T//EN' \"sys.dtd\"><r/>",
+        // DTD with open/close paren tokens
+        b"<!DOCTYPE r [<!ELEMENT r (a|b|c)><!ELEMENT a EMPTY><!ELEMENT b EMPTY><!ELEMENT c EMPTY>]><r><a/></r>",
+        // DTD with comma separator
+        b"<!DOCTYPE r [<!ELEMENT r (a,b)><!ELEMENT a EMPTY><!ELEMENT b EMPTY>]><r><a/><b/></r>",
+        // DTD with name+quantifier tokens
+        b"<!DOCTYPE r [<!ELEMENT r (a*,b?,c+)><!ELEMENT a EMPTY><!ELEMENT b EMPTY><!ELEMENT c EMPTY>]><r><c/></r>",
+        // DTD with close paren + quantifier tokens
+        b"<!DOCTYPE r [<!ELEMENT r (a)*><!ELEMENT a EMPTY>]><r><a/></r>",
+        b"<!DOCTYPE r [<!ELEMENT r (a)?><!ELEMENT a EMPTY>]><r/>",
+        b"<!DOCTYPE r [<!ELEMENT r (a)+><!ELEMENT a EMPTY>]><r><a/></r>",
+        // Multi-byte in DTD names
+        "<!DOCTYPE café [<!ELEMENT café EMPTY>]><café/>".as_bytes(),
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("prolog_all {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 45. Content with every entity type
+// ============================================================================
+
+#[test]
+fn cov90_content_all_entities() {
+    let xml = br#"<!DOCTYPE r [
+  <!ENTITY int1 "internal value">
+  <!ENTITY int2 "&#169; &amp; &#x41;">
+  <!ENTITY ext SYSTEM "ext.xml">
+]>
+<r>
+  predefined: &amp; &lt; &gt; &apos; &quot;
+  decimal: &#65; &#66; &#67;
+  hex: &#x41; &#x42; &#x43;
+  internal: &int1; &int2;
+</r>"#;
+    compare_events(xml, "all entities in content");
+    compare_incr(xml, "all entities incremental");
+}
+
+// ============================================================================
+// 46. Partial UTF-8 at buffer end (exercises is_partial_utf8_sequence)
+// ============================================================================
+
+#[test]
+fn cov90_partial_utf8_at_boundary() {
+    // Documents where multi-byte UTF-8 chars are split at exact boundaries
+    // 2-byte: é
+    compare_incr("<r>café</r>".as_bytes(), "partial 2byte");
+    // 3-byte: 日
+    compare_incr("<r>日</r>".as_bytes(), "partial 3byte");
+    // 4-byte: 😀
+    compare_incr("<r>😀</r>".as_bytes(), "partial 4byte");
+}
+
+// ============================================================================
+// 47. Scan declarations — multi-byte and edge cases
+// ============================================================================
+
+#[test]
+fn cov90_scan_decl_multibyte() {
+    // Multi-byte in DTD element/entity/notation names
+    let cases = [
+        "<!DOCTYPE r [<!ELEMENT café EMPTY>]><r/>",
+        "<!DOCTYPE r [<!ENTITY café 'val'>]><r/>",
+        "<!DOCTYPE r [<!NOTATION café SYSTEM 'x'>]><r/>",
+        "<!DOCTYPE r [<!ATTLIST r café CDATA #IMPLIED>]><r/>",
+    ];
+    for case in &cases {
+        compare_incr(case.as_bytes(), &format!("decl_mb {:?}", case));
+    }
+}
+
+// ============================================================================
+// 48. Epilog — all valid token types
+// ============================================================================
+
+#[test]
+fn cov90_epilog_all_tokens() {
+    let cases: &[&[u8]] = &[
+        b"<r/> ",
+        b"<r/>\n",
+        b"<r/>\r\n",
+        b"<r/>\t",
+        b"<r/><!-- comment -->",
+        b"<r/><?pi data?>",
+        b"<r/> \n\t <!-- c1 -->\n<?pi d?>\n<!-- c2 --> \n",
+    ];
+    for case in cases {
+        compare_incr(
+            case,
+            &format!("epilog_all {:?}", std::str::from_utf8(case).unwrap()),
+        );
+    }
+}
+
+// ============================================================================
+// 49. Parser parse() edge cases
+// ============================================================================
+
+#[test]
+fn cov90_parse_edge_cases() {
+    // Parse empty non-final then data
+    let mut r = Parser::new(None).unwrap();
+    r.parse(b"", false);
+    r.parse(b"", false);
+    let rs = r.parse(b"<r/>", true) as u32;
+    let c = CParser::new(None).unwrap();
+    c.parse(b"", false);
+    c.parse(b"", false);
+    let (cs, _) = c.parse(b"<r/>", true);
+    assert_eq!(rs, cs, "empty non-final");
+
+    // Very small chunks
+    let xml = b"<r>text</r>";
+    for chunk_size in 1..=3 {
+        let mut r = Parser::new(None).unwrap();
+        let c = CParser::new(None).unwrap();
+        let mut pos = 0;
+        while pos < xml.len() {
+            let end = (pos + chunk_size).min(xml.len());
+            let is_final = end == xml.len();
+            r.parse(&xml[pos..end], is_final);
+            c.parse(&xml[pos..end], is_final);
+            pos = end;
+        }
+        assert_eq!(r.error_code() as u32, 0, "small chunk {chunk_size}");
+    }
+}
