@@ -78,6 +78,17 @@ cd expat-ffi/examples
 make run
 ```
 
+## Testing
+
+22 integration tests written in C verify the FFI layer end-to-end — real C code calling the Rust library through the standard libexpat API:
+
+```bash
+cargo build --release -p expat-ffi
+make -C expat-ffi/tests
+```
+
+Tests cover parser lifecycle, all handler types (elements, character data, comments, PIs, CDATA, XML declarations, DOCTYPE), error handling, incremental parsing, parser reset, and configuration.
+
 ## Building from source
 
 ```bash
