@@ -297,6 +297,8 @@ pub struct Parser {
     byte_offset: u64,
     /// Number of bytes in the current event token (set during handler callbacks)
     event_cur_byte_count: i32,
+    /// Raw bytes of the current event token (for XML_DefaultCurrent)
+    event_cur_data: Vec<u8>,
     /// Pending byte from incomplete UTF-16 code unit across chunk boundaries
     utf16_pending_byte: Option<u8>,
     /// Buffer for partial encoding detection (BOM bytes received across calls)
@@ -414,6 +416,7 @@ impl Parser {
             original_chunk_bom_len: 0,
             byte_offset: 0,
             event_cur_byte_count: 0,
+            event_cur_data: Vec::new(),
             utf16_pending_byte: None,
             encoding_detection_buf: Vec::new(),
             internal_entities: HashMap::new(),
@@ -505,6 +508,7 @@ impl Parser {
             original_chunk_bom_len: 0,
             byte_offset: 0,
             event_cur_byte_count: 0,
+            event_cur_data: Vec::new(),
             utf16_pending_byte: None,
             encoding_detection_buf: Vec::new(),
             internal_entities: HashMap::new(),
@@ -1615,8 +1619,10 @@ impl Parser {
                 }
             };
 
-            // Track byte count of current token for XML_GetCurrentByteCount
+            // Track byte count and raw data of current token for XML_GetCurrentByteCount
+            // and XML_DefaultCurrent
             self.event_cur_byte_count = (next - pos) as i32;
+            self.event_cur_data = data[pos..next].to_vec();
 
             // Update line/column position up to current token before handler callbacks
             // This ensures XML_GetCurrentLineNumber/ColumnNumber are correct inside handlers
@@ -2653,8 +2659,9 @@ impl Parser {
         // Run the current processor
         self.run_processor();
 
-        // Reset event byte count (only valid during handler callbacks)
+        // Reset event byte count and data (only valid during handler callbacks)
         self.event_cur_byte_count = 0;
+        self.event_cur_data.clear();
 
         // Update position tracking from processed data
         // On error: calculate position up to event_pos (error location)
@@ -3372,7 +3379,14 @@ impl Parser {
 
     /// Default current markup to the default handler
     pub fn default_current(&mut self) {
-        // Stub: would forward current markup to default handler
+        // Forward the current event's raw bytes to the default handler
+        if !self.event_cur_data.is_empty() {
+            let data = self.event_cur_data.clone();
+            if let Some(handler) = &mut self.default_handler {
+                handler(&data);
+            }
+            return;
+        }
     }
 
     /// Set the billion laughs attack protection maximum amplification
