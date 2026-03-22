@@ -69,34 +69,21 @@ pub type XML_Index = c_long;
 // Handler types
 pub type XML_StartElementHandler =
     Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, *mut *const XML_Char)>;
-pub type XML_EndElementHandler =
-    Option<unsafe extern "C" fn(*mut c_void, *const XML_Char)>;
+pub type XML_EndElementHandler = Option<unsafe extern "C" fn(*mut c_void, *const XML_Char)>;
 pub type XML_CharacterDataHandler =
     Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, c_int)>;
 pub type XML_ProcessingInstructionHandler =
     Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, *const XML_Char)>;
-pub type XML_CommentHandler =
-    Option<unsafe extern "C" fn(*mut c_void, *const XML_Char)>;
-pub type XML_StartCdataSectionHandler =
-    Option<unsafe extern "C" fn(*mut c_void)>;
-pub type XML_EndCdataSectionHandler =
-    Option<unsafe extern "C" fn(*mut c_void)>;
-pub type XML_DefaultHandler =
-    Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, c_int)>;
+pub type XML_CommentHandler = Option<unsafe extern "C" fn(*mut c_void, *const XML_Char)>;
+pub type XML_StartCdataSectionHandler = Option<unsafe extern "C" fn(*mut c_void)>;
+pub type XML_EndCdataSectionHandler = Option<unsafe extern "C" fn(*mut c_void)>;
+pub type XML_DefaultHandler = Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, c_int)>;
 pub type XML_StartDoctypeDeclHandler = Option<
-    unsafe extern "C" fn(
-        *mut c_void,
-        *const XML_Char,
-        *const XML_Char,
-        *const XML_Char,
-        c_int,
-    ),
+    unsafe extern "C" fn(*mut c_void, *const XML_Char, *const XML_Char, *const XML_Char, c_int),
 >;
-pub type XML_EndDoctypeDeclHandler =
-    Option<unsafe extern "C" fn(*mut c_void)>;
-pub type XML_XmlDeclHandler = Option<
-    unsafe extern "C" fn(*mut c_void, *const XML_Char, *const XML_Char, c_int),
->;
+pub type XML_EndDoctypeDeclHandler = Option<unsafe extern "C" fn(*mut c_void)>;
+pub type XML_XmlDeclHandler =
+    Option<unsafe extern "C" fn(*mut c_void, *const XML_Char, *const XML_Char, c_int)>;
 pub type XML_ExternalEntityRefHandler = Option<
     unsafe extern "C" fn(
         XML_Parser,
@@ -125,15 +112,36 @@ pub const XML_PARAM_ENTITY_PARSING_NEVER: XML_ParamEntityParsing = 0;
 pub const XML_PARAM_ENTITY_PARSING_UNLESS_STANDALONE: XML_ParamEntityParsing = 1;
 pub const XML_PARAM_ENTITY_PARSING_ALWAYS: XML_ParamEntityParsing = 2;
 
+/// Custom memory handling suite for XML_ParserCreate_MM.
+#[repr(C)]
+pub struct XML_Memory_Handling_Suite {
+    pub malloc_fcn: Option<unsafe extern "C" fn(size: usize) -> *mut c_void>,
+    pub realloc_fcn: Option<unsafe extern "C" fn(ptr: *mut c_void, size: usize) -> *mut c_void>,
+    pub free_fcn: Option<unsafe extern "C" fn(ptr: *mut c_void)>,
+}
+
 extern "C" {
     // Parser lifecycle
     pub fn XML_ParserCreate(encoding: *const XML_Char) -> XML_Parser;
-    pub fn XML_ParserCreateNS(encoding: *const XML_Char, namespaceSeparator: XML_Char) -> XML_Parser;
+    pub fn XML_ParserCreateNS(
+        encoding: *const XML_Char,
+        namespaceSeparator: XML_Char,
+    ) -> XML_Parser;
+    pub fn XML_ParserCreate_MM(
+        encoding: *const XML_Char,
+        memsuite: *const XML_Memory_Handling_Suite,
+        namespaceSeparator: *const XML_Char,
+    ) -> XML_Parser;
     pub fn XML_ParserReset(parser: XML_Parser, encoding: *const XML_Char) -> XML_Bool;
     pub fn XML_ParserFree(parser: XML_Parser);
 
     // Parsing
-    pub fn XML_Parse(parser: XML_Parser, s: *const c_char, len: c_int, isFinal: c_int) -> XML_Status;
+    pub fn XML_Parse(
+        parser: XML_Parser,
+        s: *const c_char,
+        len: c_int,
+        isFinal: c_int,
+    ) -> XML_Status;
     pub fn XML_GetBuffer(parser: XML_Parser, len: c_int) -> *mut c_void;
     pub fn XML_ParseBuffer(parser: XML_Parser, len: c_int, isFinal: c_int) -> XML_Status;
 

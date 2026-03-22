@@ -57,12 +57,95 @@ If the performance gap needs to be closed:
 
 These optimizations would likely bring Rust within 10-20% of C on all benchmarks while maintaining zero `unsafe`.
 
+---
+
+## Memory Usage
+
+Peak heap allocation comparison between `expat-rust` and C libexpat 2.7.5.
+
+### Environment
+
+- **Platform**: macOS (Apple Silicon)
+- **Methodology**: Rust allocations tracked via a custom `GlobalAlloc` wrapper. C allocations tracked via `XML_ParserCreate_MM` with custom malloc/realloc/free functions that prepend a size header. Both parsers register start-element, end-element, and character-data handlers. Minimum of 3 runs per scenario, minimum peak reported.
+
+### Streaming (the headline result)
+
+expat is a streaming parser — it's designed to parse arbitrarily large inputs with bounded memory. This is the most important memory property to verify. Both parsers are fed data in fixed 8 KB chunks.
+
+| Total Data Parsed | Rust Peak | C Peak | Ratio |
+|-------------------|-----------|--------|-------|
+| 10 MB (150K elements) | **35 KB** | 31 KB | 1.15x |
+| 50 MB (750K elements) | **35 KB** | 31 KB | 1.15x |
+| 200 MB (3M elements) | **35 KB** | 31 KB | 1.15x |
+
+**Both parsers use ~35 KB regardless of whether they parse 10 MB or 200 MB.** Memory is bounded by chunk size and parser state depth, not by total bytes parsed. Rust is within 15% of C in streaming mode.
+
+### One-shot parsing (entire document in memory)
+
+When the full document is passed to `parse()` in a single call, the parser must buffer internal state proportional to the input.
+
+| Scenario | Doc Size | expat-rust | libexpat (C) | Ratio |
+|----------|----------|-----------|-------------|-------|
+| Small document | 44 B | 2.9 KB | 8.4 KB | **0.35x** |
+| 10 KB | 29 KB | 119 KB | 39 KB | 3.1x |
+| 100 KB | 221 KB | 887 KB | 263 KB | 3.4x |
+| 1 MB | 2.2 MB | 8.8 MB | 4.0 MB | 2.2x |
+| 10 MB | 22.4 MB | 90 MB | 32 MB | 2.8x |
+| Deep nesting (100) | 1.8 KB | 11 KB | 26 KB | **0.43x** |
+| Deep nesting (1000) | 20 KB | 113 KB | 240 KB | **0.47x** |
+| Many attrs (25/elem) | 22 KB | 92 KB | 40 KB | 2.3x |
+| Many attrs (100/elem) | 84 KB | 347 KB | 142 KB | 2.4x |
+
+### Scaling verification
+
+With chunked parsing (8 KB chunks), memory stays flat regardless of document size:
+
+| Elements | Doc Size | Rust Peak | C Peak |
+|----------|----------|-----------|--------|
+| 100 | 14 KB | 35 KB | 15 KB |
+| 1,000 | 146 KB | 35 KB | 31 KB |
+| 10,000 | 1.5 MB | 35 KB | 31 KB |
+| 100,000 | 15 MB | 35 KB | 31 KB |
+| 1,000,000 | 151 MB | 35 KB | 31 KB |
+
+Both parsers achieve O(1) memory with respect to document size when streaming.
+
+### Analysis
+
+**Streaming mode (the common case)**: When parsing in chunks — the way expat is designed to be used — Rust and C are nearly identical. Both use ~35 KB regardless of input size. The 15% overhead comes from Rust's `Vec` and `String` metadata for the small amount of in-flight parser state.
+
+**One-shot mode**: When the entire document is passed at once, Rust uses 2-3x more memory than C. This is because:
+- C's `STRING_POOL` arena allocator has zero per-allocation overhead
+- Rust allocates individual `String`/`Vec` objects with allocator metadata (16-32 bytes each)
+- C interns repeated attribute names; Rust creates fresh `String` objects
+
+**Where Rust wins**: Small documents and deep nesting. Rust's `Parser::new()` allocates less upfront infrastructure (no hash tables, string pools, or arena blocks). Rust's `Vec`-based element stack is more compact than C's linked structures.
+
+**No leaks**: Verified over 200 consecutive parse cycles with zero memory growth.
+
+### The trade-off
+
+The 2-3x overhead in one-shot mode comes from the same design choice as the speed trade-off: standard library types instead of hand-rolled arenas. In streaming mode (how expat is meant to be used), the difference nearly vanishes.
+
+For real-world usage: stream large documents in chunks (even 8 KB is enough) and memory stays at ~35 KB regardless of input size.
+
+---
+
 ## Reproducing
 
 ```bash
-# Run all benchmarks
+# Run performance benchmarks (criterion)
 cargo bench -p expat-rust
 
 # Results are saved to target/criterion/ with HTML reports
 # Open target/criterion/report/index.html for detailed analysis
+
+# Run all memory tests
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test memory_usage_tests --release -- --nocapture
+
+# Run individual memory tests
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test memory_usage_tests --release streaming_memory_bounded -- --nocapture
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test memory_usage_tests --release memory_usage_comparison -- --nocapture
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test memory_usage_tests --release memory_scales_linearly -- --nocapture
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test memory_usage_tests --release no_memory_leak -- --nocapture
 ```
