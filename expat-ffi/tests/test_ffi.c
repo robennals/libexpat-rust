@@ -349,17 +349,25 @@ static int test_doctype_handlers(void) {
     XML_SetStartDoctypeDeclHandler(p, doctype_start_handler);
     XML_SetEndDoctypeDeclHandler(p, doctype_end_handler);
 
+    /* DOCTYPE with internal subset */
     const char *xml = "<!DOCTYPE root [ ]><root/>";
     XML_Status s = XML_Parse(p, xml, (int)strlen(xml), 1);
     ASSERT(s == XML_STATUS_OK, "parse should succeed");
-    ASSERT(state.doctype_start_count == 1, "expected 1 DOCTYPE start");
-    ASSERT(state.doctype_end_count == 1, "expected 1 DOCTYPE end");
+    ASSERT(state.doctype_start_count == 1, "expected 1 DOCTYPE start (internal subset)");
+    ASSERT(state.doctype_end_count == 1, "expected 1 DOCTYPE end (internal subset)");
 
-    /* Also test that DOCTYPE without internal subset at least parses OK */
+    /* DOCTYPE without internal subset (SYSTEM ID only) */
     XML_Parser p2 = XML_ParserCreate(NULL);
+    HandlerState state2;
+    init_state(&state2);
+    XML_SetUserData(p2, &state2);
+    XML_SetStartDoctypeDeclHandler(p2, doctype_start_handler);
+    XML_SetEndDoctypeDeclHandler(p2, doctype_end_handler);
     const char *xml2 = "<!DOCTYPE root SYSTEM \"test.dtd\"><root/>";
     s = XML_Parse(p2, xml2, (int)strlen(xml2), 1);
-    ASSERT(s == XML_STATUS_OK, "DOCTYPE with SYSTEM ID should parse OK");
+    ASSERT(s == XML_STATUS_OK, "DOCTYPE with SYSTEM ID should succeed");
+    ASSERT(state2.doctype_start_count == 1, "expected 1 DOCTYPE start (SYSTEM)");
+    ASSERT(state2.doctype_end_count == 1, "expected 1 DOCTYPE end (SYSTEM)");
     XML_ParserFree(p2);
 
     XML_ParserFree(p);

@@ -294,6 +294,12 @@ pub struct Parser {
     current_entity_system_id: Option<String>,
     /// Current entity's public ID (for external entities)
     current_entity_public_id: Option<String>,
+    /// DOCTYPE declaration state (accumulated across DoctypeName/SystemId/PublicId roles)
+    doctype_name: Option<String>,
+    doctype_system_id: Option<String>,
+    doctype_public_id: Option<String>,
+    /// Whether the start_doctype_decl_handler has been called for the current DOCTYPE
+    doctype_handler_called: bool,
     /// XML role state machine for prolog parsing
     prolog_state: XmlRoleState,
 
@@ -364,6 +370,10 @@ impl Parser {
             current_entity_name: None,
             current_entity_system_id: None,
             current_entity_public_id: None,
+            doctype_name: None,
+            doctype_system_id: None,
+            doctype_public_id: None,
+            doctype_handler_called: false,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
@@ -429,6 +439,10 @@ impl Parser {
             current_entity_name: None,
             current_entity_system_id: None,
             current_entity_public_id: None,
+            doctype_name: None,
+            doctype_system_id: None,
+            doctype_public_id: None,
+            doctype_handler_called: false,
             prolog_state: XmlRoleState::new(),
             start_element_handler: None,
             end_element_handler: None,
@@ -851,6 +865,11 @@ impl Parser {
             }
             Role::DoctypeName => {
                 // Store DOCTYPE name for subsequent roles
+                let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.doctype_name = Some(name);
+                self.doctype_system_id = None;
+                self.doctype_public_id = None;
+                self.doctype_handler_called = false;
                 XmlError::None
             }
             Role::DoctypePublicId | Role::EntityPublicId | Role::NotationPublicId => {
@@ -862,12 +881,16 @@ impl Parser {
                 }
                 if matches!(role, Role::DoctypePublicId) {
                     self.has_param_entity_refs = true;
+                    let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                    self.doctype_public_id = Some(pubid);
                 }
                 XmlError::None
             }
             Role::DoctypeSystemId => {
                 // DOCTYPE SYSTEM — implies external subset
                 self.has_param_entity_refs = true;
+                let sysid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.doctype_system_id = Some(sysid);
                 XmlError::None
             }
             Role::EntitySystemId => {
@@ -877,17 +900,37 @@ impl Parser {
                 XmlError::None
             }
             Role::DoctypeInternalSubset => {
-                // Internal subset — call start_doctype_decl_handler
-                if let Some(handler) = &mut self.start_doctype_decl_handler {
-                    handler("", None, None, true);
+                // Internal subset — call start_doctype_decl_handler with has_internal=true
+                if !self.doctype_handler_called {
+                    if let Some(handler) = &mut self.start_doctype_decl_handler {
+                        let name = self.doctype_name.clone().unwrap_or_default();
+                        let sysid = self.doctype_system_id.clone();
+                        let pubid = self.doctype_public_id.clone();
+                        handler(&name, sysid.as_deref(), pubid.as_deref(), true);
+                    }
+                    self.doctype_handler_called = true;
                 }
                 XmlError::None
             }
             Role::DoctypeClose => {
-                // End of DOCTYPE — call end_doctype_decl_handler
+                // Fire start handler if not already called (DOCTYPE without internal subset)
+                if !self.doctype_handler_called {
+                    if let Some(handler) = &mut self.start_doctype_decl_handler {
+                        let name = self.doctype_name.clone().unwrap_or_default();
+                        let sysid = self.doctype_system_id.clone();
+                        let pubid = self.doctype_public_id.clone();
+                        handler(&name, sysid.as_deref(), pubid.as_deref(), false);
+                    }
+                    self.doctype_handler_called = true;
+                }
+                // End of DOCTYPE
                 if let Some(handler) = &mut self.end_doctype_decl_handler {
                     handler();
                 }
+                // Clear DOCTYPE state
+                self.doctype_name = None;
+                self.doctype_system_id = None;
+                self.doctype_public_id = None;
                 XmlError::None
             }
             Role::InstanceStart => {
