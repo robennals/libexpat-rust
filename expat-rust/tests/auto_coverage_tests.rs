@@ -844,3 +844,378 @@ fn auto_version_info() {
     let features = expat_rust::xmlparse::get_feature_list();
     assert!(!features.is_empty());
 }
+
+// ============================================================================
+// Tests: handler setter API coverage
+// ============================================================================
+
+#[test]
+fn auto_handler_setters() {
+    // Exercise every handler setter to cover the trivial one-liner code
+    let mut p = Parser::new(None).unwrap();
+
+    p.set_start_element_handler(Some(Box::new(|_, _| {})));
+    p.set_end_element_handler(Some(Box::new(|_| {})));
+    p.set_element_handlers(Some(Box::new(|_, _| {})), Some(Box::new(|_| {})));
+    p.set_character_data_handler(Some(Box::new(|_: &[u8]| {})));
+    p.set_processing_instruction_handler(Some(Box::new(|_, _| {})));
+    p.set_comment_handler(Some(Box::new(|_: &[u8]| {})));
+    p.set_start_cdata_section_handler(Some(Box::new(|| {})));
+    p.set_end_cdata_section_handler(Some(Box::new(|| {})));
+    p.set_cdata_section_handlers(Some(Box::new(|| {})), Some(Box::new(|| {})));
+    p.set_default_handler(Some(Box::new(|_: &[u8]| {})));
+    p.set_default_handler_expand(Some(Box::new(|_: &[u8]| {})));
+    p.set_start_doctype_decl_handler(Some(Box::new(|_, _, _, _| {})));
+    p.set_end_doctype_decl_handler(Some(Box::new(|| {})));
+    p.set_doctype_decl_handlers(Some(Box::new(|_, _, _, _| {})), Some(Box::new(|| {})));
+    p.set_element_decl_handler(Some(Box::new(|_, _| {})));
+    p.set_attlist_decl_handler(Some(Box::new(|_: &str, _: &str, _: &str, _: Option<&str>, _: Option<&str>, _: bool| {})));
+    p.set_xml_decl_handler(Some(Box::new(|_: Option<&str>, _: Option<&str>, _: Option<i32>| {})));
+    p.set_unparsed_entity_decl_handler(Some(Box::new(|_: &str, _: Option<&str>, _: &str, _: Option<&str>| {})));
+    p.set_notation_decl_handler(Some(Box::new(|_: &str, _: Option<&str>, _: &str, _: Option<&str>| {})));
+    p.set_start_namespace_decl_handler(Some(Box::new(|_: Option<&str>, _: &str| {})));
+    p.set_namespace_decl_handlers(Some(Box::new(|_: Option<&str>, _: &str| {})), Some(Box::new(|_: Option<&str>| {})));
+    p.set_external_entity_ref_handler(Some(Box::new(|_: &str, _: Option<&str>, _: Option<&str>, _: Option<&str>| true)));
+    p.set_skipped_entity_handler(Some(Box::new(|_: &str, _: bool| {})));
+
+    // Parse something to verify handlers work
+    let s = p.parse(b"<r/>", true);
+    assert_eq!(s, XmlStatus::Ok);
+
+    // Clear all handlers
+    p.reset(None);
+    p.set_start_element_handler(None);
+    p.set_end_element_handler(None);
+    let s = p.parse(b"<r/>", true);
+    assert_eq!(s, XmlStatus::Ok);
+}
+
+// ============================================================================
+// Tests: explicit encoding via Parser::new(Some("..."))
+// ============================================================================
+
+#[test]
+fn auto_explicit_encoding_utf8() {
+    let mut r = Parser::new(Some("UTF-8")).unwrap();
+    let rs = r.parse(b"<r/>", true) as u32;
+    let c = CParser::new(Some("UTF-8")).unwrap();
+    let (cs, _) = c.parse(b"<r/>", true);
+    assert_eq!(rs, cs, "explicit UTF-8");
+}
+
+#[test]
+fn auto_explicit_encoding_ascii() {
+    let mut r = Parser::new(Some("US-ASCII")).unwrap();
+    let rs = r.parse(b"<r/>", true) as u32;
+    let c = CParser::new(Some("US-ASCII")).unwrap();
+    let (cs, _) = c.parse(b"<r/>", true);
+    assert_eq!(rs, cs, "explicit US-ASCII");
+}
+
+#[test]
+fn auto_explicit_encoding_latin1() {
+    let mut r = Parser::new(Some("ISO-8859-1")).unwrap();
+    let rs = r.parse(b"<r/>", true) as u32;
+    let c = CParser::new(Some("ISO-8859-1")).unwrap();
+    let (cs, _) = c.parse(b"<r/>", true);
+    assert_eq!(rs, cs, "explicit ISO-8859-1");
+}
+
+#[test]
+fn auto_explicit_encoding_utf16le() {
+    fn utf16le(s: &str) -> Vec<u8> {
+        let mut out = vec![0xFF, 0xFE];
+        for c in s.encode_utf16() {
+            out.push(c as u8);
+            out.push((c >> 8) as u8);
+        }
+        out
+    }
+    let xml = utf16le("<r/>");
+    let mut r = Parser::new(Some("UTF-16LE")).unwrap();
+    let rs = r.parse(&xml, true) as u32;
+    let c = CParser::new(Some("UTF-16LE")).unwrap();
+    let (cs, _) = c.parse(&xml, true);
+    assert_eq!(rs, cs, "explicit UTF-16LE");
+}
+
+#[test]
+fn auto_explicit_encoding_unknown() {
+    let mut r = Parser::new(Some("EBCDIC")).unwrap();
+    let rs = r.parse(b"<r/>", true) as u32;
+    let re = r.error_code() as u32;
+    let c = CParser::new(Some("EBCDIC")).unwrap();
+    let (cs, ce) = c.parse(b"<r/>", true);
+    assert_eq!(rs, cs, "unknown encoding status");
+    // Both should reject
+    assert_eq!(rs, 0, "unknown encoding should error");
+}
+
+// ============================================================================
+// Tests: parser state edges
+// ============================================================================
+
+#[test]
+fn auto_parse_after_finish() {
+    let mut r = Parser::new(None).unwrap();
+    r.parse(b"<r/>", true);
+    // Parse again after final — should error
+    let rs = r.parse(b"<s/>", true) as u32;
+    let re = r.error_code() as u32;
+
+    let c = CParser::new(None).unwrap();
+    c.parse(b"<r/>", true);
+    let (cs, ce) = c.parse(b"<s/>", true);
+    assert_eq!(rs, cs, "parse after finish status");
+    assert_eq!(re, ce, "parse after finish error");
+}
+
+#[test]
+fn auto_empty_final() {
+    let mut r = Parser::new(None).unwrap();
+    let rs = r.parse(b"", true) as u32;
+    let re = r.error_code() as u32;
+    let c = CParser::new(None).unwrap();
+    let (cs, ce) = c.parse(b"", true);
+    assert_eq!(rs, cs, "empty final status");
+    assert_eq!(re, ce, "empty final error");
+}
+
+#[test]
+fn auto_multiple_non_final_then_final() {
+    let chunks = [b"<r" as &[u8], b">", b"text", b"</r>"];
+    let mut r = Parser::new(None).unwrap();
+    for chunk in &chunks[..chunks.len() - 1] {
+        r.parse(chunk, false);
+    }
+    let rs = r.parse(chunks.last().unwrap(), true) as u32;
+    let re = r.error_code() as u32;
+
+    let c = CParser::new(None).unwrap();
+    for chunk in &chunks[..chunks.len() - 1] {
+        c.parse(chunk, false);
+    }
+    let (cs, ce) = c.parse(chunks.last().unwrap(), true);
+    assert_eq!(rs, cs, "multi-chunk status");
+    assert_eq!(re, ce, "multi-chunk error");
+}
+
+// ============================================================================
+// Tests: position tracking
+// ============================================================================
+
+#[test]
+fn auto_position_tracking() {
+    let xml = b"<r>\nline2\nline3</r>";
+    let mut r = Parser::new(None).unwrap();
+    r.parse(xml, true);
+    let r_line = r.current_line_number();
+    let r_col = r.current_column_number();
+
+    let c = CParser::new(None).unwrap();
+    c.parse(xml, true);
+    let c_line = c.current_line_number();
+    let c_col = c.current_column_number();
+
+    assert_eq!(r_line, c_line, "line number");
+    assert_eq!(r_col, c_col, "column number");
+}
+
+#[test]
+fn auto_position_on_error() {
+    let xml = b"<r><</r>";
+    let mut r = Parser::new(None).unwrap();
+    r.parse(xml, true);
+    let r_line = r.current_line_number();
+
+    let c = CParser::new(None).unwrap();
+    c.parse(xml, true);
+    let c_line = c.current_line_number();
+
+    assert_eq!(r_line, c_line, "error line number");
+}
+
+// ============================================================================
+// Tests: generated ATTLIST type combinations
+// ============================================================================
+
+#[test]
+fn auto_attlist_types() {
+    let types = [
+        ("CDATA", "#IMPLIED", "v"),
+        ("CDATA", "#REQUIRED", "v"),
+        ("ID", "#IMPLIED", "id1"),
+        ("IDREF", "#IMPLIED", "id1"),
+        ("IDREFS", "#IMPLIED", "id1 id2"),
+        ("NMTOKEN", "#IMPLIED", "tok"),
+        ("NMTOKENS", "#IMPLIED", "tok1 tok2"),
+    ];
+
+    for (atype, default, val) in &types {
+        let xml = format!(
+            "<!DOCTYPE r [<!ATTLIST r a {} {}>]><r a=\"{}\"/>",
+            atype, default, val
+        );
+        assert_status_equivalent(xml.as_bytes(), &format!("ATTLIST {} {}", atype, default));
+    }
+}
+
+// ============================================================================
+// Tests: entity edge cases
+// ============================================================================
+
+#[test]
+fn auto_entity_in_attr() {
+    // Entity reference in attribute value (via DTD)
+    assert_equivalent(
+        b"<!DOCTYPE r [<!ENTITY e 'val'>]><r a=\"&e;\"/>",
+        "entity in attr",
+    );
+}
+
+#[test]
+fn auto_entity_multiple_expansion() {
+    assert_equivalent(
+        b"<!DOCTYPE r [<!ENTITY e 'x'>]><r>&e;&e;&e;</r>",
+        "entity expanded multiple times",
+    );
+}
+
+#[test]
+fn auto_entity_empty() {
+    assert_equivalent(
+        b"<!DOCTYPE r [<!ENTITY e ''>]><r>&e;</r>",
+        "empty entity",
+    );
+}
+
+// ============================================================================
+// Tests: CDATA split across parse calls
+// ============================================================================
+
+#[test]
+fn auto_cdata_split() {
+    let xml = b"<r><![CDATA[hello world]]></r>";
+    // Split in various positions within CDATA
+    for split in [5, 10, 15, 18, 20, 25] {
+        if split < xml.len() {
+            let mut r = Parser::new(None).unwrap();
+            let _ = r.parse(&xml[..split], false);
+            let rs = r.parse(&xml[split..], true) as u32;
+            let re = r.error_code() as u32;
+
+            let c = CParser::new(None).unwrap();
+            let _ = c.parse(&xml[..split], false);
+            let (cs, ce) = c.parse(&xml[split..], true);
+            assert_eq!(rs, cs, "CDATA split@{split} status");
+            assert_eq!(re, ce, "CDATA split@{split} error");
+        }
+    }
+}
+
+// ============================================================================
+// Tests: XML declaration handler
+// ============================================================================
+
+#[test]
+fn auto_xmldecl_handler() {
+    let xml = b"<?xml version='1.0' encoding='UTF-8' standalone='yes'?><r/>";
+
+    // Rust
+    let mut r_version = String::new();
+    let mut r_encoding = String::new();
+    let mut r_standalone: Option<i32> = None;
+    {
+        let rv = &mut r_version as *mut String;
+        let re = &mut r_encoding as *mut String;
+        let rs = &mut r_standalone as *mut Option<i32>;
+        let mut p = Parser::new(None).unwrap();
+        p.set_xml_decl_handler(Some(Box::new(move |ver: Option<&str>, enc: Option<&str>, sa: Option<i32>| unsafe {
+            if let Some(v) = ver { (*rv).push_str(v); }
+            if let Some(e) = enc { (*re).push_str(e); }
+            *rs = sa;
+        })));
+        p.parse(xml, true);
+    }
+
+    // C
+    struct XmlDeclData {
+        version: RefCell<String>,
+        encoding: RefCell<String>,
+        standalone: RefCell<i32>,
+    }
+    let c_data = XmlDeclData {
+        version: RefCell::new(String::new()),
+        encoding: RefCell::new(String::new()),
+        standalone: RefCell::new(0),
+    };
+    unsafe extern "C" fn c_xmldecl(
+        ud: *mut c_void,
+        version: *const c_char,
+        encoding: *const c_char,
+        standalone: c_int,
+    ) {
+        let d = &*(ud as *const XmlDeclData);
+        if !version.is_null() {
+            *d.version.borrow_mut() = CStr::from_ptr(version).to_str().unwrap().to_string();
+        }
+        if !encoding.is_null() {
+            *d.encoding.borrow_mut() = CStr::from_ptr(encoding).to_str().unwrap().to_string();
+        }
+        *d.standalone.borrow_mut() = standalone;
+    }
+    let c_parser = CParser::new(None).unwrap();
+    unsafe {
+        expat_sys::XML_SetUserData(
+            c_parser.raw_parser(),
+            &c_data as *const XmlDeclData as *mut c_void,
+        );
+        expat_sys::XML_SetXmlDeclHandler(c_parser.raw_parser(), Some(c_xmldecl));
+    }
+    c_parser.parse(xml, true);
+
+    assert_eq!(r_version, *c_data.version.borrow(), "xmldecl version");
+    assert_eq!(r_encoding, *c_data.encoding.borrow(), "xmldecl encoding");
+    assert_eq!(r_standalone.unwrap_or(-1), *c_data.standalone.borrow(), "xmldecl standalone");
+}
+
+// ============================================================================
+// Tests: default handler coverage
+// ============================================================================
+
+#[test]
+fn auto_default_handler() {
+    // Exercise default handler code path — just verify it doesn't panic
+    let xml = b"<r>text</r>";
+    let mut p = Parser::new(None).unwrap();
+    p.set_default_handler(Some(Box::new(|_data: &[u8]| {
+        // Just exercise the handler
+    })));
+    let s = p.parse(xml, true);
+    assert_eq!(s, XmlStatus::Ok);
+}
+
+// ============================================================================
+// Tests: set_base / get_base coverage
+// ============================================================================
+
+#[test]
+fn auto_base_uri() {
+    let mut p = Parser::new(None).unwrap();
+    p.set_base("http://example.com/");
+    assert_eq!(p.base(), Some("http://example.com/"));
+}
+
+// ============================================================================
+// Tests: byte index tracking
+// ============================================================================
+
+#[test]
+fn auto_byte_index() {
+    let xml = b"<r>text</r>";
+    let mut r = Parser::new(None).unwrap();
+    r.parse(xml, true);
+    let _r_idx = r.current_byte_index();
+    // Just verify it doesn't panic
+}
+
