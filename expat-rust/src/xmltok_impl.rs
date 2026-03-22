@@ -575,20 +575,6 @@ pub fn cdata_section_tok<E: Encoding>(
         });
     }
 
-    if minbpc > 1 {
-        let n = end - pos;
-        if n & (minbpc - 1) != 0 {
-            let n = n & !(minbpc - 1);
-            if n == 0 {
-                return Ok(TokenResult {
-                    token: XmlTok::Partial,
-                    next_pos: pos,
-                });
-            }
-            end = pos + n;
-        }
-    }
-
     match enc.byte_type(data, pos) {
         ByteType::RSQB => {
             pos += minbpc;
@@ -1434,20 +1420,6 @@ pub fn content_tok<E: Encoding>(
         });
     }
 
-    if minbpc > 1 {
-        let n = end - pos;
-        if n & (minbpc - 1) != 0 {
-            let n = n & !(minbpc - 1);
-            if n == 0 {
-                return Ok(TokenResult {
-                    token: XmlTok::Partial,
-                    next_pos: pos,
-                });
-            }
-            end = pos + n;
-        }
-    }
-
     match enc.byte_type(data, pos) {
         ByteType::LT => {
             return scan_lt(enc, data, pos + minbpc, end);
@@ -1797,20 +1769,6 @@ pub fn prolog_tok<E: Encoding>(
             token: XmlTok::None,
             next_pos: pos,
         });
-    }
-
-    if minbpc > 1 {
-        let n = end - pos;
-        if n & (minbpc - 1) != 0 {
-            let n = n & !(minbpc - 1);
-            if n == 0 {
-                return Ok(TokenResult {
-                    token: XmlTok::Partial,
-                    next_pos: pos,
-                });
-            }
-            end = pos + n;
-        }
     }
 
     match enc.byte_type(data, pos) {
