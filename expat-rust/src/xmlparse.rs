@@ -176,6 +176,8 @@ pub enum Processor {
     Content,
     /// Processes CDATA section content (resumed from interrupted CDATA)
     CdataSection,
+    /// External entity — accepts optional text declaration then processes content
+    ExternalEntity,
     /// Processes after root element closes
     Epilog,
 }
@@ -686,6 +688,7 @@ impl Parser {
             Processor::Prolog => self.prolog_processor(),
             Processor::Content => self.content_processor(),
             Processor::CdataSection => self.cdata_section_processor(),
+            Processor::ExternalEntity => self.external_entity_init_processor(),
             Processor::Epilog => self.epilog_processor(),
         }
     }
@@ -696,6 +699,32 @@ impl Parser {
         // In a full implementation, this would call initializeEncoding()
         self.processor = Processor::Prolog;
         self.prolog_processor();
+    }
+
+    /// External entity initial processor — accepts optional text declaration then content
+    /// Matches C externalEntityInitProcessor behavior
+    fn external_entity_init_processor(&mut self) {
+        let data = std::mem::take(&mut self.buffer);
+        if data.is_empty() {
+            return;
+        }
+
+        // Check if data starts with an XML text declaration (<?xml ...)
+        // If so, process it in prolog mode, then switch to content
+        // If not, go straight to content
+        let enc = xmltok::Utf8Encoding;
+        if data.len() >= 5 && &data[0..5] == b"<?xml" {
+            // Has a text declaration — process via prolog to handle it
+            self.processor = Processor::Prolog;
+            self.buffer = data;
+            self.prolog_processor();
+        } else {
+            // No text declaration — go straight to content
+            self.processor = Processor::Content;
+            self.buffer = data;
+            let _ = enc; // suppress unused warning
+            self.content_processor();
+        }
     }
 
     /// Convert XmlTok to xmlrole::Token
@@ -4030,8 +4059,12 @@ impl Parser {
         child.attlist_types = self.attlist_types.clone();
         child.dtd_standalone = self.dtd_standalone;
         child.param_entity_parsing = self.param_entity_parsing;
-        // External entities can start with an XML text declaration
-        // so they stay in prolog mode to handle that, then transition to content
+        // For non-empty context (general entity), use ExternalEntity processor
+        // which accepts optional text declaration then content
+        // For empty context (DTD external subset), stay in prolog mode
+        if !context.is_empty() {
+            child.processor = Processor::ExternalEntity;
+        }
         Some(child)
     }
 }
