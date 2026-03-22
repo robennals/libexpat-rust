@@ -1594,6 +1594,20 @@ impl Parser {
             // Track byte count of current token for XML_GetCurrentByteCount
             self.event_cur_byte_count = (next - pos) as i32;
 
+            // Update line/column position up to current token before handler callbacks
+            // This ensures XML_GetCurrentLineNumber/ColumnNumber are correct inside handlers
+            if self.position_pos < pos {
+                let enc_ref = xmltok::Utf8Encoding;
+                let p = xmltok_impl::update_position(&enc_ref, data, self.position_pos, pos);
+                if p.line_number > 0 {
+                    self.line_number += p.line_number as u64;
+                    self.column_number = p.column_number as u64;
+                } else {
+                    self.column_number += p.column_number as u64;
+                }
+                self.position_pos = pos;
+            }
+
             match tok {
                 XmlTok::TrailingCr => {
                     if have_more {
@@ -1831,6 +1845,19 @@ impl Parser {
                         handler(&tag_name, &attr_refs);
                     } else if self.default_handler.is_some() {
                         self.report_default(enc, data, pos, next);
+                    }
+                    // For empty elements, update position to end of tag for end-element callback
+                    // (matches C: eventPtr points to end of tag for EndElement of empty tags)
+                    if self.position_pos < next {
+                        let enc_ref = xmltok::Utf8Encoding;
+                        let p = xmltok_impl::update_position(&enc_ref, data, self.position_pos, next);
+                        if p.line_number > 0 {
+                            self.line_number += p.line_number as u64;
+                            self.column_number = p.column_number as u64;
+                        } else {
+                            self.column_number += p.column_number as u64;
+                        }
+                        self.position_pos = next;
                     }
                     if let Some(handler) = &mut self.end_element_handler {
                         handler(&tag_name);
@@ -2522,9 +2549,6 @@ impl Parser {
         self.parse_data = self.buffer.clone();
         self.position_pos = 0;
         self.event_pos = self.buffer.len(); // default: end of buffer
-                                            // Save base position before processor modifies it via advance_pos
-        let base_line = self.line_number;
-        let base_column = self.column_number;
 
         // Run the current processor
         self.run_processor();
@@ -2532,6 +2556,7 @@ impl Parser {
         // Update position tracking from processed data
         // On error: calculate position up to event_pos (error location)
         // On success: calculate position up to end of all processed data
+        // Note: position_pos may have been advanced by inline updates in do_content
         {
             let calc_end =
                 if self.error_code != XmlError::None && self.event_pos < self.parse_data.len() {
@@ -2539,15 +2564,20 @@ impl Parser {
                 } else {
                     self.parse_data.len()
                 };
-            let enc = xmltok::Utf8Encoding;
-            let pos =
-                xmltok_impl::update_position(&enc, &self.parse_data, self.position_pos, calc_end);
-            if pos.line_number > 0 {
-                self.line_number = base_line + pos.line_number as u64;
-                self.column_number = pos.column_number as u64;
-            } else {
-                self.line_number = base_line;
-                self.column_number = base_column + pos.column_number as u64;
+            if self.position_pos < calc_end {
+                let enc = xmltok::Utf8Encoding;
+                let pos = xmltok_impl::update_position(
+                    &enc,
+                    &self.parse_data,
+                    self.position_pos,
+                    calc_end,
+                );
+                if pos.line_number > 0 {
+                    self.line_number += pos.line_number as u64;
+                    self.column_number = pos.column_number as u64;
+                } else {
+                    self.column_number += pos.column_number as u64;
+                }
             }
         }
 
