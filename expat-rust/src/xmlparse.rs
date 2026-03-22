@@ -1743,9 +1743,7 @@ impl Parser {
             match result {
                 Ok(TokenResult { token, next_pos }) => match token {
                     XmlTok::PrologS => {
-                        if let Some(handler) = &mut self.default_handler {
-                            handler(&data[pos..next_pos]);
-                        }
+                        self.report_default(&enc, &data, pos, next_pos);
                         pos = next_pos;
                     }
                     XmlTok::Comment => {
@@ -1776,7 +1774,7 @@ impl Parser {
                         return;
                     }
                     XmlTok::Invalid => {
-                        self.error_code = XmlError::JunkAfterDocElement;
+                        self.error_code = XmlError::InvalidToken;
                         return;
                     }
                     _ => {
