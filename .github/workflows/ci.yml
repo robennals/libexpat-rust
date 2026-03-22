@@ -27,6 +27,11 @@ jobs:
         run: cargo test -p expat-rust
       - name: Run FFI comparison tests
         run: cargo test -p expat-rust --test c_comparison_tests --test comprehensive_comparison --test generated_comparison_tests
+      - name: Build expat-ffi C library
+        run: cargo build --release -p expat-ffi
+      - name: Run C integration tests
+        if: runner.os != 'Windows'
+        run: make -C expat-ffi/tests
 
   clippy:
     name: Clippy
