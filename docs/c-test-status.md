@@ -2,7 +2,7 @@
 
 Running the original C libexpat test suite against our Rust parser via `expat-ffi`.
 
-**Current results: 157 pass, 133 fail** of 290 tests reached (process crashes near end due to stack corruption in deeply nested entity test).
+**Current results: 173 pass, 117 fail** of 290 tests reached (60% pass rate).
 
 ## How to run
 

@@ -2460,6 +2460,10 @@ impl Parser {
     ///
     /// Equivalent to XML_SetParamEntityParsing(parser, parsing) in C
     pub fn set_param_entity_parsing(&mut self, parsing: ParamEntityParsing) -> bool {
+        // Can't change once parsing has started
+        if self.parsing_state != ParsingState::Initialized {
+            return false;
+        }
         self.param_entity_parsing = parsing;
         true
     }

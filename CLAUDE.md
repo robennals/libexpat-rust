@@ -64,7 +64,7 @@ lldb -b -o "run" -o "quit" ./target/debug/c-tests-runner 2>&1 | grep -c "^PASS:"
 lldb -b -o "run" -o "quit" ./target/debug/c-tests-runner 2>&1 | grep -c "^FAIL "
 ```
 
-Current status: **157 pass, 133 fail** of 290 tests reached.
+Current status: **173 pass, 117 fail** of 290 tests reached (60% pass rate).
 No longer needs `lldb` — custom `assert.h` converts C asserts to test failures.
 ```bash
 cargo build -p c-tests-runner
