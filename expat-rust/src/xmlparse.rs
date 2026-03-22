@@ -2451,6 +2451,9 @@ impl Parser {
     ///
     /// Equivalent to XML_SetHashSalt(parser, salt) in C
     pub fn set_hash_salt(&mut self, salt: u64) -> bool {
+        if self.parsing_state != ParsingState::Initialized {
+            return false;
+        }
         self.hash_salt = salt;
         true
     }
@@ -2486,6 +2489,10 @@ impl Parser {
     ///
     /// Equivalent to XML_UseForeignDTD(parser, useDTD) in C
     pub fn use_foreign_dtd(&mut self, _use_dtd: bool) -> XmlError {
+        // Can't change feature once parsing has started
+        if self.parsing_state != ParsingState::Initialized {
+            return XmlError::CantChangeFeatureOnceParsing;
+        }
         XmlError::None
     }
 
