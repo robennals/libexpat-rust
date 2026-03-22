@@ -139,7 +139,15 @@ def extract_switch_cases_ast(func_node, lang):
                 body_text = node.text.decode()
                 errors = set(re.findall(r'XML_ERROR_(\w+)', body_text))
                 handlers = set(re.findall(r'parser->m_(\w+Handler)', body_text))
-                func_calls = set(re.findall(r'\b(\w+)\s*\(', body_text)) - {'if', 'while', 'for', 'switch', 'return', 'sizeof'}
+                raw_calls = set(re.findall(r'\b(\w+)\s*\(', body_text))
+                # Filter out: keywords, handler field accesses, C macros, type casts
+                func_calls = raw_calls - {
+                    'if', 'while', 'for', 'switch', 'return', 'sizeof', 'assert',
+                    'XML_T', 'XML_L', 'XML_TRUE', 'XML_FALSE', 'CHAR_HASH',
+                    'XCS', 'INT_MAX', 'UINT_MAX', 'SIZE_MAX',
+                }
+                # Remove handler field accesses (m_*Handler)
+                func_calls = {c for c in func_calls if not re.match(r'm_\w+Handler$', c)}
                 has_return = 'return' in body_text
                 cases.append({
                     "label": value,
@@ -267,6 +275,72 @@ HANDLER_MAP = {
     "attlistDeclHandler": "attlist_decl_handler",
     "elementDeclHandler": "element_decl_handler",
     "unparsedEntityDeclHandler": "unparsed_entity_decl_handler",
+}
+
+CALL_MAP = {
+    # Only exceptions to the standard camelCase→snake_case rule
+    # Standard rule: "doContent" → "do_content" is derived automatically
+    "storeAtts": "process_namespaces",  # Rust replaces C's storeAtts with namespace processing
+    "XmlNameLength": "name_length",     # Xml prefix stripped
+    "XmlGetAttributes": "get_atts",     # different abbreviation
+    "XmlContentTok": "content_tok",     # Xml prefix stripped
+    "XmlPrologTok": "prolog_tok",       # Xml prefix stripped
+    "XmlCdataSectionTok": "cdata_section_tok",  # Xml prefix stripped
+    "XmlCharRefNumber": "char_ref_number",      # Xml prefix stripped
+    "XmlIgnoreSectionTok": "ignore_section_tok", # Xml prefix stripped
+}
+
+
+def c_to_rust_call_name(c_name):
+    """Convert a C function name to its expected Rust equivalent.
+    Uses CALL_MAP for exceptions, otherwise converts camelCase to snake_case."""
+    if c_name in CALL_MAP:
+        return CALL_MAP[c_name]
+    # Convert camelCase/PascalCase to snake_case
+    import re
+    # Insert _ before uppercase letters that follow lowercase
+    s = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', c_name)
+    # Insert _ before uppercase letters that are followed by lowercase (for sequences like "XMLDecl")
+    s = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', s)
+    return s.lower()
+
+# C calls that are intentionally not in Rust (memory management, pools, etc.)
+SUPPRESSED_CALLS = {
+    # Memory management
+    "poolStoreString", "poolAppend", "poolAppendString", "poolCopyString",
+    "poolCopyStringN", "poolFinish", "poolDiscard", "poolStart", "poolGrow",
+    "poolClear", "poolDestroy", "poolInit", "poolLastString", "poolLength",
+    "poolBytesToAllocateFor", "poolChop", "poolCopyStringNoFinish",
+    "REALLOC", "MALLOC", "FREE",
+    # Hash tables
+    "lookup", "hash", "hashTableInit", "hashTableClear", "hashTableDestroy",
+    # Entropy/randomization
+    "generate_hash_secret_salt", "gather_time_entropy",
+    # C string/conversion ops that are handled inline in Rust
+    "memcpy", "memcmp", "strcmp", "strlen", "XML_T", "XmlConvert",
+    "mustConvert", "XmlEncode", "getContext",
+    "CHAR_HASH", "dtdCopy", "dtdReset",
+    # Type system / casting
+    "ENTITY", "ELEMENT_TYPE", "ATTRIBUTE_ID", "PREFIX", "TAG",
+    # Macro-like patterns
+    "charDataHandler", "XML_Char",
+    # C-only internal functions/macros with no Rust equivalent
+    "mustConvert", "MUST_CONVERT", "lines",
+    "poolAppendChar", "POOL_APPEND_CHAR",
+    "malloc_fcn", "free_fcn", "free",
+    "XmlConvert", "XmlEncode",
+    "XmlPredefinedEntityName", "XmlIsPublicId",
+    # Accounting (Rust doesn't do C-style accounting)
+    "accountingOnAbort", "accountingDiffTolerated",
+    # Content model building helpers (Rust uses different approach)
+    "buildModel", "nextScaffoldPart",
+    # Accounting
+    "accountingDiffTolerated", "entityTrackingOnOpen", "entityTrackingOnClose",
+    "entityTrackingReportStats",
+    # String ops that have Rust equivalents inline
+    "memcpy", "memcmp", "strcmp", "strlen",
+    # C-specific
+    "parserBusy", "parserInit",
 }
 
 TOKEN_MAP = {
@@ -416,6 +490,45 @@ def compare(c_func_name, r_func_name, extra_rust_funcs=None):
         case_missing_h = c_case_h - r_case_h - suppressed_handlers - {f"?{h}" for h in c_case["handlers"] if h not in HANDLER_MAP}
         if case_missing_h:
             divergences.append(("LOW", f"case {rust_label}: missing handlers", sorted(case_missing_h)))
+
+        # Compare function calls in this case
+        c_calls = set(c_case.get("calls", []))
+        r_calls = set(r_case.get("calls", []))
+        # Map C calls to Rust equivalents using auto snake_case + exceptions
+        c_mapped_calls = set()
+        for c in c_calls:
+            if c in SUPPRESSED_CALLS:
+                continue
+            # Skip ALL_CAPS names (C macros)
+            if c.isupper() or (c.replace('_', '').isupper() and '_' in c):
+                continue
+            # Skip single-letter names and very short names (loop vars, etc.)
+            if len(c) <= 2:
+                continue
+            c_mapped_calls.add(c_to_rust_call_name(c))
+        missing_calls = sorted(c_mapped_calls - r_calls)
+        if missing_calls:
+            divergences.append(("LOW", f"case {rust_label}: missing calls", missing_calls))
+
+    # 4. Overall function call comparison
+    c_all_calls = set()
+    for case in c_cases:
+        c_all_calls |= set(case.get("calls", []))
+    r_all_calls = set()
+    for case in r_cases:
+        r_all_calls |= set(case.get("calls", []))
+    c_mapped_all = set()
+    for c in c_all_calls:
+        if c in SUPPRESSED_CALLS:
+            continue
+        if c.isupper() or (c.replace('_', '').isupper() and '_' in c):
+            continue
+        if len(c) <= 2:
+            continue
+        c_mapped_all.add(c_to_rust_call_name(c))
+    missing_all_calls = sorted(c_mapped_all - r_all_calls)
+    if missing_all_calls:
+        divergences.append(("MEDIUM", "missing_function_calls", missing_all_calls))
 
     rust_total_lines = r_text.count('\n') + 1 + extra_lines
     return {
