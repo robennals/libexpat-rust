@@ -133,23 +133,47 @@ For detailed architecture documentation, see [docs/architecture.md](docs/archite
 
 ## C Drop-in Replacement
 
-The `expat-ffi` crate provides a C-compatible shared library with the same API as libexpat. Build it with:
+Already have a C/C++ app that uses libexpat? You can swap in `expat-rust` without changing any code:
 
 ```bash
+# 1. Clone and build
+git clone --recurse-submodules https://github.com/robennals/libexpat-rust.git
+cd libexpat-rust
 cargo build --release -p expat-ffi
+
+# 2. Run your app against the new library (Linux)
+LD_LIBRARY_PATH=target/release ./your_app
+
+# 2. Or on macOS
+DYLD_LIBRARY_PATH=target/release ./your_app
 ```
 
-This produces `target/release/libexpat.{so,dylib,dll}` which can replace the system libexpat in existing C/C++ applications. The library exposes the standard `XML_ParserCreate`, `XML_Parse`, `XML_SetElementHandler`, and other libexpat functions.
+That's it. The `expat-ffi` crate produces a `libexpat.so` / `libexpat.dylib` / `expat.dll` with the same function signatures as the real libexpat — `XML_ParserCreate`, `XML_Parse`, `XML_SetElementHandler`, and the rest. Your code doesn't need to change.
 
-## Benchmarks
+For a complete example of C code using the library, see [`expat-ffi/examples/basic_parse.c`](expat-ffi/examples/basic_parse.c). For detailed migration instructions, see [`expat-ffi/README.md`](expat-ffi/README.md).
 
-Run the benchmark suite comparing Rust vs C performance:
+## Performance
+
+Benchmarks comparing `expat-rust` against C libexpat 2.7.5 (Apple M-series, `cargo bench`):
+
+| Scenario | expat-rust | libexpat (C) | Ratio |
+|----------|-----------|-------------|-------|
+| Small document (44 B) | 1.25 us | 2.48 us | **0.50x (Rust 2x faster)** |
+| Medium document (~10 KB) | 171 us | 79 us | 2.2x |
+| Large document (~100 KB) | 1.65 ms | 898 us | 1.8x |
+| Deep nesting (100 levels) | 7.1 us | 20.8 us | **0.34x (Rust 2.9x faster)** |
+| Many attributes (25/elem) | 35 us | 17.9 us | 2.0x |
+| Error detection | 416 ns | 986 ns | **0.42x (Rust 2.4x faster)** |
+
+**Summary**: Rust is 2-3x faster on small documents, deeply nested structures, and error detection. C is ~2x faster on larger documents with many elements and attributes. The gap on larger documents is due to Rust's use of standard `String`/`Vec`/`HashMap` (with per-element allocation) versus C's pooled arena allocator. This is a deliberate trade-off: we chose memory safety and idiomatic Rust data structures over matching C's allocation performance.
+
+For most real-world use cases, the performance difference is negligible — both parsers process typical XML documents in microseconds.
+
+Run benchmarks yourself:
 
 ```bash
 cargo bench -p expat-rust
 ```
-
-This uses [criterion](https://github.com/bheisler/criterion.rs) to measure parsing performance across document sizes and complexity levels, comparing against the C library via FFI.
 
 ## Repository Structure
 
