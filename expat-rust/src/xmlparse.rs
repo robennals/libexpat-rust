@@ -1088,7 +1088,7 @@ impl Parser {
                 self.doctype_system_id = None;
                 self.doctype_public_id = None;
                 self.doctype_handler_called = false;
-                (XmlError::None, false)
+                (XmlError::None, self.start_doctype_decl_handler.is_some())
             }
             Role::DoctypePublicId | Role::EntityPublicId | Role::NotationPublicId => {
                 // Validate public ID characters (matches C normalizePublicId)
@@ -1097,33 +1097,34 @@ impl Parser {
                     self.event_pos = pos;
                     return (XmlError::Publicid, false);
                 }
-                if matches!(role, Role::DoctypePublicId) {
+                let suppress = if matches!(role, Role::DoctypePublicId) {
                     self.has_param_entity_refs = true;
                     let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                     self.doctype_public_id = Some(pubid);
-                }
-                if matches!(role, Role::EntityPublicId) {
+                    self.start_doctype_decl_handler.is_some()
+                } else if matches!(role, Role::EntityPublicId) {
                     let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                     self.current_entity_public_id = Some(pubid);
-                }
-                if matches!(role, Role::NotationPublicId) {
+                    self.entity_decl_handler.is_some()
+                } else {
                     let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                     self.current_notation_public_id = Some(pubid);
-                }
-                (XmlError::None, false)
+                    self.notation_decl_handler.is_some()
+                };
+                (XmlError::None, suppress)
             }
             Role::DoctypeSystemId => {
                 // DOCTYPE SYSTEM — implies external subset
                 self.has_param_entity_refs = true;
                 let sysid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.doctype_system_id = Some(sysid);
-                (XmlError::None, false)
+                (XmlError::None, self.start_doctype_decl_handler.is_some())
             }
             Role::EntitySystemId => {
                 // Entity SYSTEM ID — store for current entity
                 let sys_id = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.current_entity_system_id = Some(sys_id);
-                (XmlError::None, false)
+                (XmlError::None, self.entity_decl_handler.is_some())
             }
             Role::DoctypeInternalSubset => {
                 // Internal subset — call start_doctype_decl_handler with has_internal=true
@@ -1170,7 +1171,8 @@ impl Parser {
                 self.doctype_name = None;
                 self.doctype_system_id = None;
                 self.doctype_public_id = None;
-                (XmlError::None, handler_called)
+                let suppress = handler_called || self.start_doctype_decl_handler.is_some() || self.end_doctype_decl_handler.is_some();
+                (XmlError::None, suppress)
             }
             Role::InstanceStart => {
                 // If foreign DTD is enabled, call external entity ref handler
@@ -1205,12 +1207,12 @@ impl Parser {
                     .unwrap_or("")
                     .to_string();
                 self.current_entity_name = Some(name);
-                (XmlError::None, false)
+                (XmlError::None, self.entity_decl_handler.is_some())
             }
             Role::ParamEntityName => {
                 // Parameter entity — track name
                 self.current_entity_name = None; // We don't expand param entities
-                (XmlError::None, false)
+                (XmlError::None, self.entity_decl_handler.is_some())
             }
             Role::EntityValue => {
                 // Entity value — validate and store in internal_entities map
@@ -1276,7 +1278,7 @@ impl Parser {
                 self.current_notation_name = Some(name);
                 self.current_notation_system_id = None;
                 self.current_notation_public_id = None;
-                (XmlError::None, false)
+                (XmlError::None, self.notation_decl_handler.is_some())
             }
             Role::NotationSystemId => {
                 // Notation SYSTEM ID
@@ -1335,14 +1337,14 @@ impl Parser {
                 let elem_name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.current_attlist_element = Some(elem_name);
                 self.current_attlist_attr = None;
-                (XmlError::None, false)
+                (XmlError::None, self.attlist_decl_handler.is_some())
             }
             Role::AttributeName => {
                 // Attribute in ATTLIST — remember attribute name
                 let attr_name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.current_attlist_attr = Some(attr_name);
                 self.current_attlist_type = None;
-                (XmlError::None, false)
+                (XmlError::None, self.attlist_decl_handler.is_some())
             }
             Role::AttributeTypeCdata
             | Role::AttributeTypeId
@@ -1373,7 +1375,8 @@ impl Parser {
                         .or_default()
                         .insert(attr.clone(), type_name.to_string());
                 }
-                (XmlError::None, false)
+                let suppress = matches!(role, Role::AttributeTypeNmtokens) && self.attlist_decl_handler.is_some();
+                (XmlError::None, suppress)
             }
             Role::AttributeEnumValue => {
                 // Enumeration value — append to type string like (one|two|three)
@@ -1388,7 +1391,7 @@ impl Parser {
                 } else {
                     self.current_attlist_type = Some(format!("({}", val));
                 }
-                (XmlError::None, false)
+                (XmlError::None, self.attlist_decl_handler.is_some())
             }
             Role::AttributeNotationValue => {
                 // NOTATION enum value — append to type string like NOTATION(foo|bar)
@@ -1403,7 +1406,7 @@ impl Parser {
                 } else {
                     self.current_attlist_type = Some(format!("NOTATION({}", val));
                 }
-                (XmlError::None, false)
+                (XmlError::None, self.attlist_decl_handler.is_some())
             }
             Role::ImpliedAttributeValue => {
                 // #IMPLIED — no default value, not required
@@ -1439,7 +1442,7 @@ impl Parser {
                 self.current_element_decl_name = Some(name);
                 self.content_model_stack.clear();
                 self.group_connectors.clear();
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::ContentEmpty | Role::ContentAny => {
                 // ELEMENT name EMPTY or ANY — call handler immediately
@@ -1457,7 +1460,7 @@ impl Parser {
                     content_type: ContentType::Mixed, quant: ContentQuant::None,
                     children: Vec::new(), name: None,
                 });
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::GroupOpen => {
                 self.group_connectors.push(0);
@@ -1465,14 +1468,14 @@ impl Parser {
                     content_type: ContentType::Seq, quant: ContentQuant::None,
                     children: Vec::new(), name: None,
                 });
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::GroupSequence => {
                 if let Some(last) = self.group_connectors.last_mut() {
                     if *last == 2 { return (XmlError::Syntax, false); }
                     *last = 1;
                 }
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::GroupChoice => {
                 if let Some(last) = self.group_connectors.last_mut() {
@@ -1484,39 +1487,39 @@ impl Parser {
                         node.content_type = ContentType::Choice;
                     }
                 }
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::ContentElement => {
                 self.add_content_element(tok_text, ContentQuant::None);
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::ContentElementOpt => {
                 self.add_content_element(tok_text, ContentQuant::Opt);
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::ContentElementRep => {
                 self.add_content_element(tok_text, ContentQuant::Rep);
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::ContentElementPlus => {
                 self.add_content_element(tok_text, ContentQuant::Plus);
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::GroupClose => {
                 self.close_content_group(ContentQuant::None);
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::GroupCloseOpt => {
                 self.close_content_group(ContentQuant::Opt);
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::GroupCloseRep => {
                 self.close_content_group(ContentQuant::Rep);
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::GroupClosePlus => {
                 self.close_content_group(ContentQuant::Plus);
-                (XmlError::None, false)
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::Pi => {
                 // Processing instruction — suppress default (report_processing_instruction handles it)
@@ -1629,10 +1632,21 @@ impl Parser {
                 }
                 (XmlError::None, handler_called)
             }
-            Role::DoctypeNone | Role::EntityNone | Role::NotationNone | Role::AttlistNone | Role::ElementNone => {
-                // Whitespace/non-semantic tokens in DTD declarations — pass to default handler
-                self.report_default(&xmltok::Utf8Encoding, data, pos, next);
-                (XmlError::None, true)
+            Role::DoctypeNone => {
+                // Suppress default only when startDoctypeDeclHandler is set (matches C)
+                (XmlError::None, self.start_doctype_decl_handler.is_some())
+            }
+            Role::EntityNone => {
+                (XmlError::None, self.dtd_keep_processing && self.entity_decl_handler.is_some())
+            }
+            Role::NotationNone => {
+                (XmlError::None, self.notation_decl_handler.is_some())
+            }
+            Role::AttlistNone => {
+                (XmlError::None, self.dtd_keep_processing && self.attlist_decl_handler.is_some())
+            }
+            Role::ElementNone => {
+                (XmlError::None, self.element_decl_handler.is_some())
             }
             _ => {
                 // Other roles — ignore for now
