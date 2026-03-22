@@ -110,9 +110,10 @@ See [docs/architecture.md](docs/architecture.md) for details.
 ## Key Rules
 
 1. **Match C behavior exactly** — The C library's actual behavior (via FFI comparison tests and C test suite) is ground truth
-2. **Never edit xmlparse.rs with parallel agents** — They clobber each other's changes
+2. **Never edit xmlparse.rs with parallel agents** — They clobber each other's changes. Run Haiku agents **sequentially in the working branch**, not in parallel worktrees. Each agent should build on the previous one's committed work. Worktrees cause merge conflicts and agents working off stale code.
 3. **Zero `unsafe`** — No unsafe blocks anywhere in expat-rust
 4. **Use Rust standard library types** — `String`/`Vec`/`HashMap`, not C-style pools or hash tables
+5. **Opus coordinates, Haiku implements** — Opus should set up tooling, generate prompts (via `ast-compare.py --prompt`), and review. Haiku agents do the actual code writing, one subsystem at a time.
 
 ## expat-ffi Notes
 
@@ -133,7 +134,25 @@ Key tools:
 python3 meta/scripts/ast-compare.py --all
 python3 meta/scripts/ast-compare.py doContent do_content
 
+# Generate Haiku-ready porting prompts with C source for missing cases
+python3 meta/scripts/ast-compare.py --prompt doContent do_content
+python3 meta/scripts/ast-compare.py --prompt-all
+
 # Porting status and call tree
 python3 meta/scripts/port-function.py ready
 python3 meta/scripts/port-function.py analyze
+
+# Extract C function source for reference
+python3 meta/scripts/port-function.py extract storeAtts
 ```
+
+## Agent Workflow
+
+The proven workflow for implementing missing features:
+
+1. **Identify divergences**: `python3 meta/scripts/ast-compare.py --all`
+2. **Generate prompt**: `python3 meta/scripts/ast-compare.py --prompt <c_func> <rust_func>`
+3. **Dispatch Haiku agent** sequentially (not in parallel) in the working branch
+4. **Verify**: `cargo build && ./target/debug/c-tests-runner 2>/dev/null | grep -c "^PASS:"`
+5. **Commit**: Include test count in commit message
+6. **Repeat**: Pick next divergence
