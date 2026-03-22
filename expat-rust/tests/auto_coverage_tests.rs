@@ -846,6 +846,256 @@ fn auto_version_info() {
 }
 
 // ============================================================================
+// Tests: incremental UTF-8 multi-byte (hits Partial paths in scan functions)
+// ============================================================================
+
+#[test]
+fn auto_incremental_utf8_comment() {
+    let xml = "<r><!-- 日本語テスト --></r>".as_bytes();
+    assert_incremental_equivalent(xml, "UTF-8 comment incremental");
+}
+
+#[test]
+fn auto_incremental_utf8_pi() {
+    let xml = "<r><?target データ?></r>".as_bytes();
+    assert_incremental_equivalent(xml, "UTF-8 PI incremental");
+}
+
+#[test]
+fn auto_incremental_utf8_content() {
+    let xml = "<r>日本語テスト</r>".as_bytes();
+    assert_incremental_equivalent(xml, "UTF-8 content incremental");
+}
+
+#[test]
+fn auto_incremental_utf8_attr() {
+    let xml = "<r a=\"日本語\"/>".as_bytes();
+    assert_incremental_equivalent(xml, "UTF-8 attr incremental");
+}
+
+#[test]
+fn auto_incremental_utf8_entity() {
+    let xml = "<!DOCTYPE r [<!ENTITY e 'ñ'>]><r>&e;</r>".as_bytes();
+    assert_incremental_equivalent(xml, "UTF-8 entity incremental");
+}
+
+#[test]
+fn auto_incremental_utf8_cdata() {
+    let xml = "<r><![CDATA[日本語]]></r>".as_bytes();
+    assert_incremental_equivalent(xml, "UTF-8 CDATA incremental");
+}
+
+#[test]
+fn auto_incremental_utf8_literal() {
+    let xml = "<!DOCTYPE r [<!ENTITY e 'こんにちは'>]><r>&e;</r>".as_bytes();
+    assert_incremental_equivalent(xml, "UTF-8 literal incremental");
+}
+
+#[test]
+fn auto_incremental_utf8_mixed() {
+    let xml = "<?xml version='1.0'?><!-- コメント --><r a=\"値\">テキスト<![CDATA[データ]]></r>".as_bytes();
+    assert_incremental_equivalent(xml, "UTF-8 mixed incremental");
+}
+
+// ============================================================================
+// Tests: DTD internal subset edge cases (xmlrole.rs coverage)
+// ============================================================================
+
+#[test]
+fn auto_dtd_entity_with_external_subset() {
+    // DOCTYPE with SYSTEM but no external entity ref handler — has_param_entity_refs
+    assert_equivalent(
+        b"<!DOCTYPE r SYSTEM \"ext.dtd\" [<!ENTITY e 'v'>]><r>&e;</r>",
+        "DOCTYPE SYSTEM + internal entity",
+    );
+}
+
+#[test]
+fn auto_dtd_attlist_multiple_elements() {
+    assert_status_equivalent(
+        b"<!DOCTYPE r [<!ATTLIST a x CDATA #IMPLIED><!ATTLIST b y CDATA #IMPLIED>]><r/>",
+        "ATTLIST for multiple elements",
+    );
+}
+
+#[test]
+fn auto_dtd_notation_multiple() {
+    assert_status_equivalent(
+        b"<!DOCTYPE r [<!NOTATION n1 SYSTEM \"x\"><!NOTATION n2 PUBLIC \"-//T//EN\">]><r/>",
+        "multiple NOTATIONs",
+    );
+}
+
+#[test]
+fn auto_dtd_element_nested_groups() {
+    let models = [
+        "(a,(b|c))",
+        "((a,b),c)",
+        "((a|b)|(c|d))",
+        "(a,(b,c)*)",
+        "((a?,b+),c*)",
+    ];
+    for model in &models {
+        let xml = format!(
+            "<!DOCTYPE r [<!ELEMENT r {}><!ELEMENT a EMPTY><!ELEMENT b EMPTY><!ELEMENT c EMPTY><!ELEMENT d EMPTY>]><r><a/><b/><c/></r>",
+            model
+        );
+        assert_status_equivalent(xml.as_bytes(), &format!("nested model {}", model));
+    }
+}
+
+#[test]
+fn auto_dtd_attlist_all_types() {
+    let xml = b"<!DOCTYPE r [\
+        <!ATTLIST r \
+            a CDATA #IMPLIED \
+            b ID #IMPLIED \
+            c IDREF #IMPLIED \
+            d IDREFS #IMPLIED \
+            e ENTITY #IMPLIED \
+            f ENTITIES #IMPLIED \
+            g NMTOKEN #IMPLIED \
+            h NMTOKENS #IMPLIED \
+            i NOTATION (n1|n2) #IMPLIED \
+            j (x|y|z) #IMPLIED \
+        >\
+        <!NOTATION n1 SYSTEM \"x\">\
+        <!NOTATION n2 SYSTEM \"y\">\
+    ]><r a=\"1\"/>";
+    assert_status_equivalent(xml, "ATTLIST all types");
+}
+
+// ============================================================================
+// Tests: content_tok edge cases (xmltok_impl.rs coverage)
+// ============================================================================
+
+#[test]
+fn auto_content_rsqb_combinations() {
+    let cases = [
+        "<r>]</r>",
+        "<r>]]</r>",
+        "<r>]x</r>",
+        "<r>]]x</r>",
+        "<r>x]x</r>",
+        "<r>x]]x</r>",
+    ];
+    for case in &cases {
+        assert_equivalent(case.as_bytes(), &format!("rsqb {:?}", case));
+    }
+}
+
+#[test]
+fn auto_content_cr_combinations() {
+    let cases = [
+        "<r>a\rb</r>",
+        "<r>\r</r>",
+        "<r>\r\n</r>",
+        "<r>a\r</r>",
+        "<r>a\r\n</r>",
+        "<r>\r\r</r>",
+        "<r>\r\n\r</r>",
+    ];
+    for case in &cases {
+        assert_equivalent(case.as_bytes(), &format!("cr {:?}", case));
+    }
+}
+
+#[test]
+fn auto_content_incremental_cr() {
+    // CR at chunk boundaries
+    let cases: &[&[u8]] = &[
+        b"<r>a\rb</r>",
+        b"<r>\r\n</r>",
+        b"<r>text\r</r>",
+    ];
+    for case in cases {
+        assert_incremental_equivalent(case, &format!("cr incr {:?}", std::str::from_utf8(case).unwrap()));
+    }
+}
+
+// ============================================================================
+// Tests: attribute value tokenizer (xmltok_impl.rs attribute_value_tok coverage)
+// ============================================================================
+
+#[test]
+fn auto_attr_value_edge_cases() {
+    let cases = [
+        "<r a=\"\"/>",
+        "<r a=\" \"/>",
+        "<r a=\"\t\"/>",
+        "<r a=\"\n\"/>",
+        "<r a=\"\r\"/>",
+        "<r a=\"\r\n\"/>",
+        "<r a=\"a b c\"/>",
+        "<r a=\"a\tb\tc\"/>",
+        "<r a=\"a\nb\nc\"/>",
+        "<r a=\"a\rb\rc\"/>",
+        "<r a=\"&amp;\"/>",
+        "<r a=\"&lt;&gt;\"/>",
+        "<r a=\"&#65;\"/>",
+        "<r a=\"&#x41;\"/>",
+        "<r a=\"a&amp;b&lt;c\"/>",
+        "<r a=\"a&#65;b\"/>",
+    ];
+    for case in &cases {
+        assert_equivalent(case.as_bytes(), &format!("attr val {:?}", case));
+    }
+}
+
+// ============================================================================
+// Tests: CDATA section content tokenizer edges
+// ============================================================================
+
+#[test]
+fn auto_cdata_content_edge_cases() {
+    let cases = [
+        "<r><![CDATA[\r]]></r>",
+        "<r><![CDATA[\r\n]]></r>",
+        "<r><![CDATA[\n]]></r>",
+        "<r><![CDATA[a\rb]]></r>",
+        "<r><![CDATA[a\r\nb]]></r>",
+        "<r><![CDATA[]]]></r>",
+        "<r><![CDATA[]]]]></r>",
+        "<r><![CDATA[a]b]c]]></r>",
+    ];
+    for case in &cases {
+        assert_equivalent(case.as_bytes(), &format!("cdata edge {:?}", case));
+    }
+}
+
+#[test]
+fn auto_cdata_incremental() {
+    let cases: &[&[u8]] = &[
+        b"<r><![CDATA[hello]]></r>",
+        b"<r><![CDATA[\r\n]]></r>",
+        b"<r><![CDATA[a]b]]></r>",
+    ];
+    for case in cases {
+        assert_incremental_equivalent(case, &format!("cdata incr {:?}", std::str::from_utf8(case).unwrap()));
+    }
+}
+
+// ============================================================================
+// Tests: prolog tokenizer edge cases
+// ============================================================================
+
+#[test]
+fn auto_prolog_incremental_edges() {
+    let cases: &[&[u8]] = &[
+        b"<?xml version='1.0'?><r/>",
+        b"<!DOCTYPE r [<!ENTITY e 'v'>]><r/>",
+        b"<!-- comment --><r/>",
+        b"<?pi data?><r/>",
+        b"<!DOCTYPE r SYSTEM \"t.dtd\"><r/>",
+        b"<!DOCTYPE r [<!ELEMENT r EMPTY>]><r/>",
+        b"<!DOCTYPE r [<!ATTLIST r a CDATA #IMPLIED>]><r/>",
+    ];
+    for case in cases {
+        assert_incremental_equivalent(case, &format!("prolog incr {:?}", std::str::from_utf8(case).unwrap()));
+    }
+}
+
+// ============================================================================
 // Tests: namespace-aware parser (new_ns)
 // ============================================================================
 
