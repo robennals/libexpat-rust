@@ -278,8 +278,13 @@ pub struct Parser {
     has_param_entity_refs: bool,
     /// DTD standalone flag (from <?xml standalone='yes'?>)
     dtd_standalone: bool,
-    /// Total byte offset in input (for tracking position across parse calls)
-    byte_offset: u64,
+    /// Total original-encoding bytes consumed before the current parse() chunk.
+    /// Incremented by data.len() at the start of each parse() call.
+    original_bytes_before_chunk: u64,
+    /// The original-encoding bytes of the current chunk (kept for byte-index re-scan)
+    original_chunk: Vec<u8>,
+    /// Length of current chunk's BOM that was stripped (for offset correction)
+    original_chunk_bom_len: usize,
     /// Pending byte from incomplete UTF-16 code unit across chunk boundaries
     utf16_pending_byte: Option<u8>,
     /// Buffer for partial encoding detection (BOM bytes received across calls)
@@ -370,7 +375,9 @@ impl Parser {
             detected_encoding: None,
             has_param_entity_refs: false,
             dtd_standalone: false,
-            byte_offset: 0,
+            original_bytes_before_chunk: 0,
+            original_chunk: Vec::new(),
+            original_chunk_bom_len: 0,
             utf16_pending_byte: None,
             encoding_detection_buf: Vec::new(),
             internal_entities: HashMap::new(),
@@ -443,7 +450,9 @@ impl Parser {
             detected_encoding: None,
             has_param_entity_refs: false,
             dtd_standalone: false,
-            byte_offset: 0,
+            original_bytes_before_chunk: 0,
+            original_chunk: Vec::new(),
+            original_chunk_bom_len: 0,
             utf16_pending_byte: None,
             encoding_detection_buf: Vec::new(),
             internal_entities: HashMap::new(),
@@ -507,7 +516,9 @@ impl Parser {
         self.root_closed = false;
         self.seen_xml_decl = false;
         self.detected_encoding = None;
-        self.byte_offset = 0;
+        self.original_bytes_before_chunk = 0;
+        self.original_chunk.clear();
+        self.original_chunk_bom_len = 0;
         self.encoding_detection_buf.clear();
         self.internal_entities.clear();
         self.prolog_state = XmlRoleState::new();
@@ -793,7 +804,7 @@ impl Parser {
         match role {
             Role::XmlDecl => {
                 // Process XML declaration — matches C processXmlDecl()
-                if self.seen_xml_decl || self.byte_offset > 0 {
+                if self.seen_xml_decl || self.seen_root {
                     return XmlError::MisplacedXmlPi;
                 }
                 self.seen_xml_decl = true;
@@ -2120,6 +2131,10 @@ impl Parser {
         // Store the is_final flag
         self.is_final = is_final;
 
+        // Track original-encoding bytes for XML_GetCurrentByteIndex
+        self.original_bytes_before_chunk += self.original_chunk.len() as u64;
+        self.original_chunk = data.to_vec();
+
         // Add data to buffer, handling encoding detection on first parse
         if self.buffer.is_empty() && !self.seen_root && !self.seen_xml_decl {
             // First chunk — check for pre-set encoding validity
@@ -2324,10 +2339,10 @@ impl Parser {
     }
 
     fn detect_and_transcode_impl(&mut self, data: &[u8]) -> Result<Vec<u8>, XmlError> {
+        self.original_chunk_bom_len = 0;
         if data.len() >= 2 {
             // UTF-16 BE BOM: FE FF
             if data[0] == 0xFE && data[1] == 0xFF {
-                // Check if user declared a conflicting encoding
                 if let Some(ref enc) = self.encoding_name {
                     let enc_upper = enc.to_uppercase();
                     if enc_upper != "UTF-16" && enc_upper != "UTF-16BE" {
@@ -2335,6 +2350,7 @@ impl Parser {
                     }
                 }
                 self.detected_encoding = Some("UTF-16BE".to_string());
+                self.original_chunk_bom_len = 2;
                 return self.transcode_utf16_with_pending(&data[2..], true);
             }
             // UTF-16 LE BOM: FF FE
@@ -2346,17 +2362,16 @@ impl Parser {
                     }
                 }
                 self.detected_encoding = Some("UTF-16LE".to_string());
+                self.original_chunk_bom_len = 2;
                 return self.transcode_utf16_with_pending(&data[2..], false);
             }
             // Check for UTF-16 without BOM (NUL byte pattern)
             if data.len() >= 4 {
                 if data[0] == 0 && data[1] == b'<' {
-                    // UTF-16 BE without BOM
                     self.detected_encoding = Some("UTF-16BE".to_string());
                     return self.transcode_utf16_with_pending(data, true);
                 }
                 if data[0] == b'<' && data[1] == 0 {
-                    // UTF-16 LE without BOM
                     self.detected_encoding = Some("UTF-16LE".to_string());
                     return self.transcode_utf16_with_pending(data, false);
                 }
@@ -2364,6 +2379,7 @@ impl Parser {
         }
         // UTF-8 BOM: EF BB BF — skip it
         if data.len() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+            self.original_chunk_bom_len = 3;
             return Ok(data[3..].to_vec());
         }
         Ok(data.to_vec())
@@ -2507,11 +2523,87 @@ impl Parser {
         self.column_number
     }
 
-    /// Get the current byte index in the parse
+    /// Get the current byte index in the original input stream.
     ///
-    /// Equivalent to XML_GetCurrentByteIndex(parser) in C
+    /// Equivalent to XML_GetCurrentByteIndex(parser) in C.
+    /// Returns -1 if no event is active.
+    ///
+    /// For non-UTF-8 encodings, this re-scans the current parse chunk
+    /// to convert the internal UTF-8 position back to the original
+    /// encoding's byte offset. This is O(chunk_size) but only for
+    /// non-UTF-8 input and only when this function is called.
     pub fn current_byte_index(&self) -> i64 {
-        self.byte_offset as i64
+        if self.parse_data.is_empty() || self.event_pos > self.parse_data.len() {
+            return -1;
+        }
+
+        let utf8_event_pos = self.event_pos;
+
+        match self.detected_encoding.as_deref() {
+            None | Some("UTF-8") => {
+                // UTF-8: no transcoding, positions match directly
+                // Add BOM length back if one was stripped
+                self.original_bytes_before_chunk as i64
+                    + self.original_chunk_bom_len as i64
+                    + utf8_event_pos as i64
+            }
+            Some("UTF-16LE") | Some("UTF-16BE") => {
+                // Re-scan: walk the original chunk's code units, counting
+                // how many UTF-8 bytes each produces, until we reach utf8_event_pos
+                let is_be = self.detected_encoding.as_deref() == Some("UTF-16BE");
+                let orig = &self.original_chunk;
+                let bom_len = self.original_chunk_bom_len;
+                let mut orig_pos = bom_len; // skip BOM
+                let mut utf8_pos = 0usize;
+
+                while orig_pos + 1 < orig.len() && utf8_pos < utf8_event_pos {
+                    let code_unit = if is_be {
+                        ((orig[orig_pos] as u16) << 8) | (orig[orig_pos + 1] as u16)
+                    } else {
+                        (orig[orig_pos] as u16) | ((orig[orig_pos + 1] as u16) << 8)
+                    };
+                    orig_pos += 2;
+
+                    let cp = if (0xD800..=0xDBFF).contains(&code_unit) {
+                        // Surrogate pair
+                        if orig_pos + 1 < orig.len() {
+                            let low = if is_be {
+                                ((orig[orig_pos] as u16) << 8) | (orig[orig_pos + 1] as u16)
+                            } else {
+                                (orig[orig_pos] as u16) | ((orig[orig_pos + 1] as u16) << 8)
+                            };
+                            orig_pos += 2;
+                            0x10000 + ((code_unit as u32 - 0xD800) << 10) + (low as u32 - 0xDC00)
+                        } else {
+                            break;
+                        }
+                    } else {
+                        code_unit as u32
+                    };
+
+                    // Count UTF-8 bytes this code point produces
+                    let utf8_len = if cp < 0x80 { 1 } else if cp < 0x800 { 2 } else if cp < 0x10000 { 3 } else { 4 };
+                    utf8_pos += utf8_len;
+                }
+
+                self.original_bytes_before_chunk as i64 + orig_pos as i64
+            }
+            Some(_) => {
+                // Latin-1/ASCII: re-scan to count UTF-8 expansion
+                let orig = &self.original_chunk;
+                let mut orig_pos = 0usize;
+                let mut utf8_pos = 0usize;
+
+                while orig_pos < orig.len() && utf8_pos < utf8_event_pos {
+                    let byte = orig[orig_pos];
+                    orig_pos += 1;
+                    // Latin-1 bytes 0x80-0xFF become 2 UTF-8 bytes; rest are 1
+                    utf8_pos += if byte >= 0x80 { 2 } else { 1 };
+                }
+
+                self.original_bytes_before_chunk as i64 + orig_pos as i64
+            }
+        }
     }
 
     /// Get the number of bytes in the current event
