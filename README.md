@@ -7,7 +7,7 @@ A memory-safe, idiomatic Rust reimplementation of [libexpat](https://github.com/
 
 ## What is this?
 
-`expat-rust` is a complete rewrite of libexpat in safe Rust. It is **not** a wrapper or binding — it is a from-scratch reimplementation that reproduces libexpat's behavior, verified by 350+ automated comparison tests that run identical inputs through both parsers and compare outputs byte-for-byte.
+`expat-rust` is a complete rewrite of libexpat in safe Rust. It is **not** a wrapper or binding — it is a from-scratch reimplementation that reproduces libexpat's behavior, verified by 463 automated comparison tests that run identical XML inputs through both the C and Rust parsers and confirm identical SAX callback sequences, error codes, and parse results.
 
 Like libexpat, it is a **streaming SAX-style XML parser**: you register callback handlers, feed the parser chunks of XML data, and your handlers are called as the parser encounters elements, text, processing instructions, and other XML structures.
 
@@ -18,7 +18,7 @@ Like libexpat, it is a **streaming SAX-style XML parser**: you register callback
 `expat-rust` provides:
 
 - **Memory safety**: Zero `unsafe` blocks. Buffer overflows, use-after-free, and double-free bugs are structurally impossible.
-- **Behavioral compatibility**: Verified against libexpat 2.7.5 with 350+ comparison tests covering normal parsing, error handling, encodings, DTDs, namespaces, and security limits.
+- **Behavioral compatibility**: Verified against libexpat 2.7.5 with [463 comparison tests](docs/verification.md) covering normal parsing, error handling, encodings, DTDs, namespaces, and security limits.
 - **Familiar API**: The same SAX callback model that libexpat users know, expressed in idiomatic Rust.
 - **DoS protection**: Built-in billion laughs attack protection, matching libexpat's security features.
 
@@ -28,11 +28,13 @@ Like libexpat, it is a **streaming SAX-style XML parser**: you register callback
 
 | Metric | Value |
 |--------|-------|
-| Comparison tests passing | 350+ |
-| Unit tests | 55 |
+| C-vs-Rust comparison tests | 463 |
+| Line coverage (reachable code) | 76% |
 | Lines of Rust | ~8,500 |
 | `unsafe` blocks | 0 |
 | Minimum Rust version | 1.70 |
+
+Every comparison test runs the same XML through both the C library and the Rust port, comparing SAX callback sequences, error codes, and parse status. See [docs/verification.md](docs/verification.md) for the full testing methodology.
 
 ## Quick Start
 
@@ -93,7 +95,7 @@ This port was created using an AI-assisted methodology with rigorous automated v
 
 3. **Structural verification**: A custom AST comparison tool verified that each Rust function structurally matched its C counterpart — same switch/match arms, same error paths, same handler calls.
 
-4. **Behavioral verification**: 350+ FFI comparison tests run identical XML inputs through both the C library and the Rust port, comparing every output (handler calls, error codes, byte positions) for exact equivalence.
+4. **Behavioral verification**: 463 FFI comparison tests run identical XML inputs through both the C library and the Rust port, comparing full SAX event traces (handler calls, error codes, attribute values) for exact equivalence. See [docs/verification.md](docs/verification.md) for the detailed methodology.
 
 5. **C2Rust reference**: The C2Rust transpiler produced a mechanically-correct (but unsafe) Rust translation, used as a reference when C behavior was ambiguous due to preprocessor macros or implicit conversions.
 

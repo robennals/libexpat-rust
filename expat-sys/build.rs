@@ -8,6 +8,7 @@ fn main() {
         .join("expat")
         .join("expat");
     let build_dir = expat_dir.join("build");
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
     // Build expat from source using cc
     cc::Build::new()
@@ -15,7 +16,8 @@ fn main() {
         .file(expat_dir.join("lib/xmlrole.c"))
         .file(expat_dir.join("lib/xmltok.c"))
         .include(expat_dir.join("lib"))
-        .include(&build_dir) // for expat_config.h
+        .include(&build_dir) // for expat_config.h (from cmake)
+        .include(&manifest_dir) // for expat_config.h (checked-in fallback)
         .define("XML_ENABLE_VISIBILITY", "1")
         .define("HAVE_ARC4RANDOM_BUF", None)
         .define("XML_DEV_URANDOM", None)

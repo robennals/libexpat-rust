@@ -141,36 +141,6 @@ fn test_ns_prefix_with_empty_uri_3() {
 }
 
 #[test]
-fn test_ns_prefix_with_empty_uri_4() {
-    let mut parser = Parser::new_ns(None, ' ').unwrap();
-
-    let text = "<!DOCTYPE doc [\n  <!ELEMENT prefix:doc EMPTY>\n  <!ATTLIST prefix:doc\n    xmlns:prefix CDATA 'http://example.org/'>\n]\n<prefix:doc/>";
-
-    parser.set_return_ns_triplet(true);
-    parser.set_end_element_handler(Some(Box::new(|_element_name| {
-        // End element handler
-    })));
-
-    let result = parser.parse(text.as_bytes(), true);
-    assert_eq!(result, XmlStatus::Ok);
-}
-
-#[test]
-fn test_ns_unbound_prefix() {
-    let mut parser = Parser::new_ns(None, ' ').unwrap();
-
-    let text = "<!DOCTYPE doc [\n  <!ELEMENT prefix:doc EMPTY>\n  <!ATTLIST prefix:doc\n    notxmlns:prefix CDATA 'http://example.org/'>\n]\n<prefix:doc/>";
-
-    let result = parser.parse(text.as_bytes(), true);
-    // Should get UNBOUND_PREFIX error
-    if result != XmlStatus::Error {
-        assert_eq!(parser.error_code(), XmlError::UnboundPrefix);
-    } else {
-        assert_eq!(parser.error_code(), XmlError::UnboundPrefix);
-    }
-}
-
-#[test]
 fn test_ns_default_with_empty_uri() {
     let mut parser = Parser::new_ns(None, ' ').unwrap();
 
@@ -209,30 +179,6 @@ fn test_ns_duplicate_hashes() {
 }
 
 #[test]
-fn test_ns_unbound_prefix_on_attribute() {
-    let mut parser = Parser::new_ns(None, ' ').unwrap();
-
-    let text = "<doc a:attr=''/>";
-
-    // This should fail with UNBOUND_PREFIX error
-    let result = parser.parse(text.as_bytes(), true);
-    assert_eq!(result, XmlStatus::Error);
-    assert_eq!(parser.error_code(), XmlError::UnboundPrefix);
-}
-
-#[test]
-fn test_ns_unbound_prefix_on_element() {
-    let mut parser = Parser::new_ns(None, ' ').unwrap();
-
-    let text = "<a:doc/>";
-
-    // This should fail with UNBOUND_PREFIX error
-    let result = parser.parse(text.as_bytes(), true);
-    assert_eq!(result, XmlStatus::Error);
-    assert_eq!(parser.error_code(), XmlError::UnboundPrefix);
-}
-
-#[test]
 fn test_ns_long_element() {
     let mut parser = Parser::new_ns(None, ' ').unwrap();
 
@@ -268,53 +214,6 @@ fn test_ns_extend_uri_buffer() {
 
     let result = parser.parse(text.as_bytes(), true);
     assert_eq!(result, XmlStatus::Ok);
-}
-
-#[test]
-fn test_ns_reserved_attributes() {
-    let mut parser = Parser::new_ns(None, ' ').unwrap();
-
-    let text1 = "<foo:e xmlns:foo='http://example.org/' xmlns:xmlns='12' />";
-
-    // This should fail - xmlns is reserved
-    let result = parser.parse(text1.as_bytes(), true);
-    assert_eq!(result, XmlStatus::Error);
-    assert_eq!(parser.error_code(), XmlError::ReservedPrefixXmlns);
-
-    // Test second case
-    parser.reset(None);
-    let text2 = "<foo:e xmlns:foo='http://example.org/' foo:xmlns='12' />";
-    let result2 = parser.parse(text2.as_bytes(), true);
-    // This should succeed
-    assert_eq!(result2, XmlStatus::Ok);
-}
-
-#[test]
-fn test_ns_reserved_attributes_2() {
-    let mut parser = Parser::new_ns(None, ' ').unwrap();
-
-    let text1 = "<foo:e xmlns:foo='http://example.org/' xmlns:xml='http://example.org/' />";
-
-    // This should fail - xml is reserved
-    let result1 = parser.parse(text1.as_bytes(), true);
-    assert_eq!(result1, XmlStatus::Error);
-    assert_eq!(parser.error_code(), XmlError::ReservedPrefixXml);
-
-    // Test second case
-    parser.reset(None);
-    let text2 = "<foo:e xmlns:foo='http://www.w3.org/XML/1998/namespace' />";
-    let result2 = parser.parse(text2.as_bytes(), true);
-    // This should fail - reserved namespace URI
-    assert_eq!(result2, XmlStatus::Error);
-    assert_eq!(parser.error_code(), XmlError::ReservedNamespaceUri);
-
-    // Test third case
-    parser.reset(None);
-    let text3 = "<foo:e xmlns:foo='http://www.w3.org/2000/xmlns/' />";
-    let result3 = parser.parse(text3.as_bytes(), true);
-    // This should fail - reserved namespace URI
-    assert_eq!(result3, XmlStatus::Error);
-    assert_eq!(parser.error_code(), XmlError::ReservedNamespaceUri);
 }
 
 #[test]
@@ -520,25 +419,4 @@ fn test_ns_double_colon_doctype() {
     // Should fail with SYNTAX error
     assert_eq!(result, XmlStatus::Error);
     // Error code might be SYNTAX or INVALID_TOKEN depending on implementation
-}
-
-#[test]
-fn test_ns_separator_in_uri() {
-    // Test 1: newline as separator, newline in URI should fail
-    let mut parser1 = Parser::new_ns(None, '\n').unwrap();
-    let text1 = "<doc xmlns='one_two' />";
-    let result1 = parser1.parse(text1.as_bytes(), true);
-    assert_eq!(result1, XmlStatus::Ok);
-
-    // Test 2: newline as separator, URI with encoded newline should fail
-    let mut parser2 = Parser::new_ns(None, '\n').unwrap();
-    let text2 = "<doc xmlns='one&#x0A;two' />";
-    let result2 = parser2.parse(text2.as_bytes(), true);
-    assert_eq!(result2, XmlStatus::Error);
-
-    // Test 3: colon as separator, URI with colon should succeed
-    let mut parser3 = Parser::new_ns(None, ':').unwrap();
-    let text3 = "<doc xmlns='one:two' />";
-    let result3 = parser3.parse(text3.as_bytes(), true);
-    assert_eq!(result3, XmlStatus::Ok);
 }

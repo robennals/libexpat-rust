@@ -49,17 +49,18 @@ The Rust port uses the same `XmlError` error codes and `XmlStatus` return values
 
 For the public API, this means callers check `parser.error_code()` after a failed `parse()` call, just like in C. A future version could add a `Result`-based API wrapper without changing the core logic.
 
-## 5. Encoding Handling Via Parameters, Not Preprocessor
+## 5. Transcode to UTF-8, Then Tokenize
 
-C's tokenizer uses a clever (and confusing) technique: `xmltok_impl.c` is `#include`-d three times by `xmltok.c`, each time with different macro definitions that change byte widths and character access patterns. This produces three copies of the tokenizer for UTF-8, UTF-16 LE, and UTF-16 BE.
+C libexpat tokenizes XML in its **native encoding** — it has separate encoding structs with encoding-specific byte-type tables for UTF-8, Latin-1, ASCII, and UTF-16. The encoding struct is selected based on the BOM and XML declaration.
 
-The Rust port passes encoding as an explicit parameter:
+The Rust parser takes a different approach: **transcode all non-UTF-8 input to UTF-8 first**, then tokenize. The tokenizer always operates on UTF-8 data using a single `Utf8Encoding` implementation.
 
-```rust
-fn content_tok(enc: Encoding, buf: &[u8]) -> TokResult { ... }
-```
+**Why this is better for Rust:**
+- **Type safety**: Rust's `String`/`&str` types guarantee valid UTF-8. Transcoding upfront means all internal string handling uses Rust's native types.
+- **Simplicity**: One tokenizer code path instead of four. The C technique of `#include`-ing `xmltok_impl.c` three times with different macros is eliminated.
+- **Correctness**: The XML spec defines the same abstract character model regardless of encoding. Lossless transcoding produces identical tokens, confirmed by 463 comparison tests across UTF-8, UTF-16 LE/BE, Latin-1, and ASCII inputs.
 
-**Why**: Rust has no preprocessor, and macro-based code duplication is not idiomatic. Explicit parameters achieve the same effect, the compiler can inline and optimize, and the code is dramatically easier to read and debug.
+**Byte offset handling**: `XML_GetCurrentByteIndex` returns byte offsets in the **original** input encoding, matching C behavior. For non-UTF-8 input, this requires a re-scan of the current parse chunk to convert the internal UTF-8 event position back to the original encoding's byte offset. This is O(chunk_size) per call but only happens when `XML_GetCurrentByteIndex` is actually called and only for non-UTF-8 input. No per-byte overhead during normal parsing, and no O(N) data structures in stream size — just a running `u64` counter of original bytes consumed by previous `parse()` calls.
 
 ## 6. No `unsafe` Code
 
