@@ -2020,6 +2020,11 @@ impl Parser {
                                 return (XmlError::RecursiveEntityRef, pos);
                             }
                             // Expand through do_content (matches C processEntity → internalEntityProcessor)
+                            // Save event_pos/data since entity expansion will modify it
+                            let saved_event_pos = self.event_pos;
+                            let saved_event_cur_byte_count = self.event_cur_byte_count;
+                            let saved_event_cur_data = self.event_cur_data.clone();
+
                             let entity_name = name.to_string();
                             self.open_entities.insert(entity_name.clone());
                             let entity_bytes = value.as_bytes().to_vec();
@@ -2032,6 +2037,12 @@ impl Parser {
                                 false,
                             );
                             self.open_entities.remove(&entity_name);
+
+                            // Restore event context to point to the entity reference, not expanded content
+                            self.event_pos = saved_event_pos;
+                            self.event_cur_byte_count = saved_event_cur_byte_count;
+                            self.event_cur_data = saved_event_cur_data;
+
                             if entity_err != XmlError::None {
                                 return (entity_err, pos);
                             }
