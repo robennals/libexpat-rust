@@ -1629,7 +1629,8 @@ impl Parser {
                         .or_default()
                         .insert(attr.clone(), type_name.to_string());
                 }
-                let suppress = matches!(role, Role::AttributeTypeNmtokens) && self.attlist_decl_handler.is_some();
+                // Suppress default handler for all attribute type roles — they're part of ATTLIST handling
+                let suppress = self.attlist_decl_handler.is_some();
                 (XmlError::None, suppress)
             }
             Role::AttributeEnumValue => {
