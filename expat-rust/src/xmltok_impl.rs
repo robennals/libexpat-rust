@@ -748,7 +748,7 @@ pub fn scan_end_tag<E: Encoding>(
         ByteType::LEAD2 => {
             if end - pos < 2 {
                 return Ok(TokenResult {
-                    token: XmlTok::Partial,
+                    token: XmlTok::PartialChar,
                     next_pos: pos,
                 });
             }
@@ -757,7 +757,7 @@ pub fn scan_end_tag<E: Encoding>(
         ByteType::LEAD3 => {
             if end - pos < 3 {
                 return Ok(TokenResult {
-                    token: XmlTok::Partial,
+                    token: XmlTok::PartialChar,
                     next_pos: pos,
                 });
             }
@@ -766,7 +766,7 @@ pub fn scan_end_tag<E: Encoding>(
         ByteType::LEAD4 => {
             if end - pos < 4 {
                 return Ok(TokenResult {
-                    token: XmlTok::Partial,
+                    token: XmlTok::PartialChar,
                     next_pos: pos,
                 });
             }
@@ -814,7 +814,7 @@ pub fn scan_end_tag<E: Encoding>(
             ByteType::LEAD2 => {
                 if end - pos < 2 {
                     return Ok(TokenResult {
-                        token: XmlTok::Partial,
+                        token: XmlTok::PartialChar,
                         next_pos: pos,
                     });
                 }
@@ -823,7 +823,7 @@ pub fn scan_end_tag<E: Encoding>(
             ByteType::LEAD3 => {
                 if end - pos < 3 {
                     return Ok(TokenResult {
-                        token: XmlTok::Partial,
+                        token: XmlTok::PartialChar,
                         next_pos: pos,
                     });
                 }
@@ -1017,7 +1017,7 @@ pub fn scan_atts<E: Encoding>(
             ByteType::LEAD2 => {
                 if end - pos < 2 {
                     return Ok(TokenResult {
-                        token: XmlTok::Partial,
+                        token: XmlTok::PartialChar,
                         next_pos: pos,
                     });
                 }
@@ -1027,7 +1027,7 @@ pub fn scan_atts<E: Encoding>(
             ByteType::LEAD3 => {
                 if end - pos < 3 {
                     return Ok(TokenResult {
-                        token: XmlTok::Partial,
+                        token: XmlTok::PartialChar,
                         next_pos: pos,
                     });
                 }
@@ -1037,7 +1037,7 @@ pub fn scan_atts<E: Encoding>(
             ByteType::LEAD4 => {
                 if end - pos < 4 {
                     return Ok(TokenResult {
-                        token: XmlTok::Partial,
+                        token: XmlTok::PartialChar,
                         next_pos: pos,
                     });
                 }
@@ -1281,7 +1281,7 @@ pub fn scan_lt<E: Encoding>(
         ByteType::LEAD2 => {
             if end - pos < 2 {
                 return Ok(TokenResult {
-                    token: XmlTok::Partial,
+                    token: XmlTok::PartialChar,
                     next_pos: pos,
                 });
             }
@@ -1291,7 +1291,7 @@ pub fn scan_lt<E: Encoding>(
         ByteType::LEAD3 => {
             if end - pos < 3 {
                 return Ok(TokenResult {
-                    token: XmlTok::Partial,
+                    token: XmlTok::PartialChar,
                     next_pos: pos,
                 });
             }
@@ -1379,7 +1379,7 @@ pub fn scan_lt<E: Encoding>(
             ByteType::LEAD2 => {
                 if end - pos < 2 {
                     return Ok(TokenResult {
-                        token: XmlTok::Partial,
+                        token: XmlTok::PartialChar,
                         next_pos: pos,
                     });
                 }
@@ -1388,7 +1388,7 @@ pub fn scan_lt<E: Encoding>(
             ByteType::LEAD3 => {
                 if end - pos < 3 {
                     return Ok(TokenResult {
-                        token: XmlTok::Partial,
+                        token: XmlTok::PartialChar,
                         next_pos: pos,
                     });
                 }
