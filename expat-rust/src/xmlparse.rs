@@ -1514,14 +1514,15 @@ impl Parser {
                     // We track this via param_entity_read flag set by child parsers.
                     let had_param_entity_refs = self.has_param_entity_refs;
                     self.has_param_entity_refs = true;
-                    self.param_entity_read = false;
-                    // (handler was already called above and returned OK)
+                    // Handler was already called above (line 1505) and may have set param_entity_read
+                    // Check BEFORE clearing it
                     if self.param_entity_read {
-                        // DTD was actually read — check not-standalone
+                        // DTD was actually read — keep has_param_entity_refs = true
                     } else {
-                        // DTD was not read — restore hasParamEntityRefs
+                        // DTD was not read — restore has_param_entity_refs
                         self.has_param_entity_refs = had_param_entity_refs;
                     }
+                    self.param_entity_read = false;
                     // Check not-standalone after foreign DTD processing
                     if !self.dtd_standalone {
                         if let Some(handler) = &mut self.not_standalone_handler {
@@ -1544,8 +1545,9 @@ impl Parser {
                 (XmlError::None, self.entity_decl_handler.is_some())
             }
             Role::ParamEntityName => {
-                // Parameter entity — track name
-                self.current_entity_name = None; // We don't expand param entities
+                // Parameter entity — don't track name for entity value storage
+                // (Parameter entities don't have internal values like general entities)
+                self.current_entity_name = None;
                 (XmlError::None, self.entity_decl_handler.is_some())
             }
             Role::EntityValue => {
@@ -2432,6 +2434,10 @@ impl Parser {
                                 let saved_event_cur_data = self.event_cur_data.clone();
                                 let saved_entity_ref_context = self.entity_reference_context.clone();
 
+                                // Set event_pos to entity reference position BEFORE recursion so async errors
+                                // report the correct column
+                                self.event_pos = pos;
+
                                 let entity_name = name.to_string();
                                 self.open_entities.insert(entity_name.clone());
                                 // Save the entity reference text for XML_GetInputContext
@@ -2452,8 +2458,6 @@ impl Parser {
                                 self.entity_reference_context = saved_entity_ref_context;
 
                                 if entity_err != XmlError::None {
-                                    // Set event_pos to the entity reference position so line/column are calculated correctly
-                                    self.event_pos = pos;
                                     return (entity_err, pos);
                                 }
 
@@ -2472,6 +2476,10 @@ impl Parser {
                                 let saved_event_cur_data = self.event_cur_data.clone();
                                 let saved_entity_ref_context = self.entity_reference_context.clone();
 
+                                // Set event_pos to entity reference position BEFORE recursion so async errors
+                                // report the correct column
+                                self.event_pos = pos;
+
                                 let entity_name = name.to_string();
                                 self.open_entities.insert(entity_name.clone());
                                 // Save the entity reference text for XML_GetInputContext
@@ -2492,8 +2500,6 @@ impl Parser {
                                 self.entity_reference_context = saved_entity_ref_context;
 
                                 if entity_err != XmlError::None {
-                                    // Set event_pos to the entity reference position so line/column are calculated correctly
-                                    self.event_pos = pos;
                                     return (entity_err, pos);
                                 }
 
