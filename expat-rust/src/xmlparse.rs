@@ -2358,6 +2358,11 @@ impl Parser {
                         }
                         return (self.error_code, end);
                     }
+                    // For external entities: return when tag_level returns to start level
+                    // Matches C: if (parser->m_tagLevel == startTagLevel) return XML_ERROR_NONE;
+                    if start_tag_level > 0 && self.tag_level == start_tag_level {
+                        return (XmlError::None, next);
+                    }
                 }
 
                 XmlTok::CharRef => {
