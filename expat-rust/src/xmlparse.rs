@@ -3466,7 +3466,10 @@ impl Parser {
         self.original_chunk = data.to_vec();
 
         // Add data to buffer, handling encoding detection on first parse
-        if self.buffer.is_empty() && !self.seen_root && !self.seen_xml_decl {
+        // Also allow re-entry if we have buffered data for encoding detection but haven't
+        // detected the encoding yet (happens when parsing single bytes)
+        if (self.buffer.is_empty() && !self.seen_root && !self.seen_xml_decl)
+            || (!self.encoding_detection_buf.is_empty() && self.detected_encoding.is_none()) {
             // First chunk — check for pre-set encoding validity
             if let Some(ref enc) = self.encoding_name {
                 let enc_upper = enc.to_uppercase();
@@ -3685,20 +3688,21 @@ impl Parser {
         }
 
         // If non-final and too few bytes to determine encoding, buffer for later
+        if !self.is_final && data.len() < 2 {
+            // Need at least 2 bytes to detect UTF-16 without BOM
+            // Buffer any single byte
+            self.encoding_detection_buf = data.to_vec();
+            return Ok(Vec::new());
+        }
+
+        // If non-final and 2-3 bytes, check if we might need more data for detection
         if !self.is_final && data.len() < 4 {
             // Check if first bytes could be a BOM prefix
-            let could_be_bom = match data.len() {
-                0 => true,
-                1 => data[0] == 0xFF || data[0] == 0xFE || data[0] == 0xEF || data[0] == 0x00,
-                2 | 3 => {
-                    (data[0] == 0xFF && data[1] == 0xFE)
-                        || (data[0] == 0xFE && data[1] == 0xFF)
-                        || (data[0] == 0xEF && (data.len() < 3 || data[1] == 0xBB))
-                        || data[0] == 0x00
-                        || data[1] == 0x00
-                }
-                _ => false,
-            };
+            let could_be_bom = (data[0] == 0xFF && data[1] == 0xFE)
+                || (data[0] == 0xFE && data[1] == 0xFF)
+                || (data[0] == 0xEF && (data.len() < 3 || data[1] == 0xBB))
+                || data[0] == 0x00
+                || data[1] == 0x00;
             if could_be_bom {
                 self.encoding_detection_buf = data.to_vec();
                 return Ok(Vec::new());
