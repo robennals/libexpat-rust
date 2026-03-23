@@ -382,6 +382,8 @@ pub struct Parser {
     /// For external entity parsers: content start_tag_level (1 for ext entities, 0 for main)
     /// This prevents do_content from returning NoElements for external entities
     content_start_tag_level: u32,
+    /// Whether external parameter entity was actually read (C: dtd->paramEntityRead)
+    pub param_entity_read: bool,
 
     // Handler fields
     start_element_handler: Option<StartElementHandler>,
@@ -489,6 +491,7 @@ impl Parser {
             ns_map: HashMap::new(),
             ns_triplets: false,
             content_start_tag_level: 0,
+            param_entity_read: false,
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -596,6 +599,7 @@ impl Parser {
             ns_map,
             ns_triplets: false,
             content_start_tag_level: 0,
+            param_entity_read: false,
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -1396,9 +1400,20 @@ impl Parser {
                             return (XmlError::ExternalEntityHandling, false);
                         }
                     }
-                    // After foreign DTD processing, undefined entities in the document
-                    // should be skipped (they might be defined in the external DTD)
+                    // C: saves hadParamEntityRefs, sets it true, calls handler.
+                    // After handler, if paramEntityRead is true → keep hasParamEntityRefs.
+                    // If paramEntityRead is false → restore original value.
+                    // We track this via param_entity_read flag set by child parsers.
+                    let had_param_entity_refs = self.has_param_entity_refs;
                     self.has_param_entity_refs = true;
+                    self.param_entity_read = false;
+                    // (handler was already called above and returned OK)
+                    if self.param_entity_read {
+                        // DTD was actually read — check not-standalone
+                    } else {
+                        // DTD was not read — restore hasParamEntityRefs
+                        self.has_param_entity_refs = had_param_entity_refs;
+                    }
                     // Check not-standalone after foreign DTD processing
                     if !self.dtd_standalone {
                         if let Some(handler) = &mut self.not_standalone_handler {

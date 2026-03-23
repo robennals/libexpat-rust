@@ -1303,7 +1303,7 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
     if parser.is_null() {
         return ptr::null_mut();
     }
-    let handle = &*parser;
+    let handle = &mut *parser;
 
     let ctx_str = if context.is_null() {
         ""
@@ -1322,6 +1322,11 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
 
     match handle.parser.create_external_entity_parser(ctx_str, enc) {
         Some(ext_parser) => {
+            // If creating a DTD subset parser (empty context), mark param entity as read
+            // This matches C's behavior where creating a child parser implies DTD content will be processed
+            if ctx_str.is_empty() {
+                handle.parser.param_entity_read = true;
+            }
             let new_ptr = new_handle(ext_parser);
             // Copy user_data and handler settings from parent (matches C behavior)
             (*new_ptr).user_data = handle.user_data;
