@@ -1626,7 +1626,14 @@ impl Parser {
                 if self.doctype_system_id.is_some() || self.foreign_dtd {
                     let had_param_entity_refs = self.dtd.borrow().has_param_entity_refs;
                     self.dtd.borrow_mut().has_param_entity_refs = true;
-                    if self.param_entity_parsing != ParamEntityParsing::Never {
+                    // C: if (parser->m_paramEntityParsing && parser->m_externalEntityRefHandler)
+                    // UnlessStandalone with standalone=yes → don't call handler
+                    let should_parse = match self.param_entity_parsing {
+                        ParamEntityParsing::Never => false,
+                        ParamEntityParsing::Always => true,
+                        ParamEntityParsing::UnlessStandalone => !self.dtd.borrow().standalone,
+                    };
+                    if should_parse {
                         if let Some(handler) = &mut self.external_entity_ref_handler {
                             let base = self.base_uri.clone();
                             let sys_id = self.doctype_system_id.clone();
