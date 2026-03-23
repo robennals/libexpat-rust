@@ -2245,13 +2245,17 @@ impl Parser {
                             self.open_entities.remove(&entity_name);
 
                             // Restore event context to point to the entity reference, not expanded content
-                            self.event_pos = saved_event_pos;
                             self.event_cur_byte_count = saved_event_cur_byte_count;
                             self.event_cur_data = saved_event_cur_data;
 
                             if entity_err != XmlError::None {
+                                // Set event_pos to the entity reference position so line/column are calculated correctly
+                                self.event_pos = pos;
                                 return (entity_err, pos);
                             }
+
+                            // On success, restore the saved event position
+                            self.event_pos = saved_event_pos;
                         }
                         // 2. Check external entities (have system ID)
                         else if self.external_entities.contains_key(name) {
