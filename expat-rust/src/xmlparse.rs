@@ -333,6 +333,8 @@ pub struct Parser {
     unparsed_entities: std::collections::HashSet<String>,
     /// Set of currently open (being expanded) entities for recursion detection
     open_entities: std::collections::HashSet<String>,
+    /// During entity expansion, the entity reference text (e.g., "&entity;") for XML_GetInputContext
+    entity_reference_context: Option<Vec<u8>>,
     /// Current entity name being declared in DTD (for GeneralEntityName → EntityValue flow)
     current_entity_name: Option<String>,
     /// Current entity's system ID (for external entities)
@@ -470,6 +472,7 @@ impl Parser {
             external_entities: HashMap::new(),
             unparsed_entities: std::collections::HashSet::new(),
             open_entities: std::collections::HashSet::new(),
+            entity_reference_context: None,
             current_entity_name: None,
             current_entity_system_id: None,
             current_entity_public_id: None,
@@ -580,6 +583,7 @@ impl Parser {
             external_entities: HashMap::new(),
             unparsed_entities: std::collections::HashSet::new(),
             open_entities: std::collections::HashSet::new(),
+            entity_reference_context: None,
             current_entity_name: None,
             current_entity_system_id: None,
             current_entity_public_id: None,
@@ -1157,7 +1161,7 @@ impl Parser {
                         }
                         // Report the entire ignore section to the default handler
                         // The section runs from 'pos' (start of <![) to 'ignore_end' (after ]]>)
-                        if self.default_handler.is_some() {
+                        if self.default_handler.is_some() || self.default_handler_expand.is_some() {
                             self.report_default(&xmltok::Utf8Encoding, data, pos, ignore_end);
                         }
                         self.advance_pos_slice(&data[pos..ignore_end]);
@@ -1184,7 +1188,7 @@ impl Parser {
                     // Forward to default handler if suppress_default is false
                     // In C libexpat, reportDefault() is called for prolog tokens
                     // ONLY when no specific handler consumed them.
-                    if self.default_handler.is_some() && !suppress_default {
+                    if (self.default_handler.is_some() || self.default_handler_expand.is_some()) && !suppress_default {
                         self.report_default(&xmltok::Utf8Encoding, data, pos, next);
                     }
 
@@ -1933,7 +1937,7 @@ impl Parser {
                 // Ignore section: <![IGNORE[ ... ]]> — suppress default (already called internally)
                 // NOTE: This handler is now unreachable since do_prolog handles IgnoreSect specially
                 // before calling handle_prolog_role. Keeping for safety but should not be reached.
-                if self.default_handler.is_some() {
+                if self.default_handler.is_some() || self.default_handler_expand.is_some() {
                     self.report_default(&xmltok::Utf8Encoding, data, pos, next);
                 }
                 let (result, _) = self.do_ignore_section(data, next, data.len());
@@ -2426,9 +2430,12 @@ impl Parser {
                                 let saved_event_pos = self.event_pos;
                                 let saved_event_cur_byte_count = self.event_cur_byte_count;
                                 let saved_event_cur_data = self.event_cur_data.clone();
+                                let saved_entity_ref_context = self.entity_reference_context.clone();
 
                                 let entity_name = name.to_string();
                                 self.open_entities.insert(entity_name.clone());
+                                // Save the entity reference text for XML_GetInputContext
+                                self.entity_reference_context = Some(data[pos..next].to_vec());
                                 let entity_bytes = value.as_bytes().to_vec();
                                 let (entity_err, _) = self.do_content(
                                     self.tag_level,
@@ -2441,8 +2448,8 @@ impl Parser {
                                 self.open_entities.remove(&entity_name);
 
                                 // Restore event context to point to the entity reference, not expanded content
-                                self.event_cur_byte_count = saved_event_cur_byte_count;
                                 self.event_cur_data = saved_event_cur_data;
+                                self.entity_reference_context = saved_entity_ref_context;
 
                                 if entity_err != XmlError::None {
                                     // Set event_pos to the entity reference position so line/column are calculated correctly
@@ -2463,9 +2470,12 @@ impl Parser {
                                 let saved_event_pos = self.event_pos;
                                 let saved_event_cur_byte_count = self.event_cur_byte_count;
                                 let saved_event_cur_data = self.event_cur_data.clone();
+                                let saved_entity_ref_context = self.entity_reference_context.clone();
 
                                 let entity_name = name.to_string();
                                 self.open_entities.insert(entity_name.clone());
+                                // Save the entity reference text for XML_GetInputContext
+                                self.entity_reference_context = Some(data[pos..next].to_vec());
                                 let entity_bytes = value.as_bytes().to_vec();
                                 let (entity_err, _) = self.do_content(
                                     self.tag_level,
@@ -2478,8 +2488,8 @@ impl Parser {
                                 self.open_entities.remove(&entity_name);
 
                                 // Restore event context to point to the entity reference, not expanded content
-                                self.event_cur_byte_count = saved_event_cur_byte_count;
                                 self.event_cur_data = saved_event_cur_data;
+                                self.entity_reference_context = saved_entity_ref_context;
 
                                 if entity_err != XmlError::None {
                                     // Set event_pos to the entity reference position so line/column are calculated correctly
@@ -2625,7 +2635,7 @@ impl Parser {
                             .map(|(k, v)| (k.as_str(), v.as_str()))
                             .collect();
                         handler(&effective_tag_name, &attr_refs);
-                    } else if self.default_handler.is_some() {
+                    } else if self.default_handler.is_some() || self.default_handler_expand.is_some() {
                         self.report_default(enc, data, pos, next);
                     }
                 }
@@ -2708,7 +2718,7 @@ impl Parser {
                         handler(&effective_tag_name);
                         no_elm_handlers = false;
                     }
-                    if no_elm_handlers && self.default_handler.is_some() {
+                    if no_elm_handlers && (self.default_handler.is_some() || self.default_handler_expand.is_some()) {
                         self.report_default(enc, data, pos, next);
                     }
 
@@ -2802,7 +2812,7 @@ impl Parser {
 
                     if let Some(handler) = &mut self.end_element_handler {
                         handler(&handler_name);
-                    } else if self.default_handler.is_some() {
+                    } else if self.default_handler.is_some() || self.default_handler_expand.is_some() {
                         self.report_default(enc, data, pos, next);
                     }
 
@@ -2860,7 +2870,7 @@ impl Parser {
                 XmlTok::CdataSectOpen => {
                     if let Some(handler) = &mut self.start_cdata_section_handler {
                         handler();
-                    } else if self.default_handler.is_some() {
+                    } else if self.default_handler.is_some() || self.default_handler_expand.is_some() {
                         self.report_default(enc, data, pos, next);
                     }
                     // Scan CDATA content
@@ -2889,7 +2899,7 @@ impl Parser {
                     }
                     if let Some(handler) = &mut self.character_data_handler {
                         handler(&data[pos..end]);
-                    } else if self.default_handler.is_some() {
+                    } else if self.default_handler.is_some() || self.default_handler_expand.is_some() {
                         self.report_default(enc, data, pos, end);
                     }
                     if start_tag_level == 0 {
@@ -2969,7 +2979,7 @@ impl Parser {
                 XmlTok::CdataSectClose => {
                     if let Some(handler) = &mut self.end_cdata_section_handler {
                         handler();
-                    } else if self.default_handler.is_some() {
+                    } else if self.default_handler.is_some() || self.default_handler_expand.is_some() {
                         self.report_default(enc, data, pos, next);
                     }
                     // Signal that CDATA section has closed
@@ -4393,12 +4403,20 @@ impl Parser {
     ///
     /// Equivalent to XML_GetCurrentByteCount(parser) in C
     pub fn current_byte_count(&self) -> i32 {
+        // During entity expansion, return the entity reference size
+        if let Some(entity_ref) = &self.entity_reference_context {
+            return entity_ref.len() as i32;
+        }
         self.event_cur_byte_count
     }
 
     /// Get the input context buffer and the offset of the current event within it.
     /// Returns (buffer_slice, event_offset). Empty slice if no context available.
     pub fn get_input_context(&self) -> (&[u8], usize) {
+        // If we're in entity expansion, return the entity reference context
+        if let Some(entity_ref) = &self.entity_reference_context {
+            return (entity_ref, 0);
+        }
         if self.parse_data.is_empty() {
             return (&[], 0);
         }
@@ -4693,7 +4711,9 @@ impl Parser {
         // Forward the current event's raw bytes to the default handler
         if !self.event_cur_data.is_empty() {
             let data = self.event_cur_data.clone();
-            if let Some(handler) = &mut self.default_handler {
+            if let Some(handler) = &mut self.default_handler_expand {
+                handler(&data);
+            } else if let Some(handler) = &mut self.default_handler {
                 handler(&data);
             }
         }
