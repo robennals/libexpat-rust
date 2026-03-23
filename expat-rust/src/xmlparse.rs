@@ -16,6 +16,16 @@ use std::cell::RefCell;
 
 /// DTD state — shared between parent and child DTD parsers via Rc<RefCell<>>.
 /// Matches C's `DTD` struct which is shared via `m_dtd` pointer.
+/// Parameter entity record
+#[derive(Debug, Clone, Default)]
+pub struct ParamEntity {
+    pub system_id: Option<String>,
+    pub public_id: Option<String>,
+    pub value: Option<String>,
+    pub is_internal: bool,
+    pub open: bool,
+}
+
 /// For DTD child parsers (empty context), parent and child share the same DtdState.
 /// For content child parsers (non-empty context), DtdState is cloned for isolation.
 #[derive(Debug, Clone)]
@@ -25,6 +35,7 @@ pub struct DtdState {
     pub attlist_defaults: HashMap<String, Vec<(String, String)>>,
     pub attlist_types: HashMap<String, HashMap<String, String>>,
     pub unparsed_entities: HashSet<String>,
+    pub param_entities: HashMap<String, ParamEntity>,
     pub has_param_entity_refs: bool,
     pub standalone: bool,
     pub keep_processing: bool,
@@ -38,6 +49,7 @@ impl Default for DtdState {
             attlist_defaults: HashMap::new(),
             attlist_types: HashMap::new(),
             unparsed_entities: HashSet::new(),
+            param_entities: HashMap::new(),
             has_param_entity_refs: false,
             standalone: false,
             keep_processing: true,
@@ -384,6 +396,7 @@ pub struct Parser {
     entity_reference_context: Option<Vec<u8>>,
     /// Current entity name being declared in DTD (for GeneralEntityName → EntityValue flow)
     current_entity_name: Option<String>,
+    current_is_param_entity: bool,
     /// Current entity's system ID (for external entities)
     current_entity_system_id: Option<String>,
     /// Current entity's public ID (for external entities)
@@ -524,6 +537,7 @@ impl Parser {
             open_entities: std::collections::HashSet::new(),
             entity_reference_context: None,
             current_entity_name: None,
+            current_is_param_entity: false,
             current_entity_system_id: None,
             current_entity_public_id: None,
             current_entity_notation: None,
@@ -633,6 +647,7 @@ impl Parser {
             open_entities: std::collections::HashSet::new(),
             entity_reference_context: None,
             current_entity_name: None,
+            current_is_param_entity: false,
             current_entity_system_id: None,
             current_entity_public_id: None,
             current_entity_notation: None,
@@ -1731,24 +1746,34 @@ impl Parser {
                 (XmlError::None, handler_called)
             }
             Role::GeneralEntityName => {
-                // General entity declaration — store name for EntityValue
+                // General entity declaration
                 let name = std::str::from_utf8(&data[pos..next])
                     .unwrap_or("")
                     .to_string();
                 self.current_entity_name = Some(name);
+                self.current_is_param_entity = false;
                 (XmlError::None, self.entity_decl_handler.is_some())
             }
             Role::ParamEntityName => {
-                // Parameter entity — don't track name for entity value storage
-                // (Parameter entities don't have internal values like general entities)
-                self.current_entity_name = None;
+                // PE declaration — store name and mark as param entity
+                let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                self.current_entity_name = Some(name);
+                self.current_is_param_entity = true;
                 (XmlError::None, self.entity_decl_handler.is_some())
             }
             Role::EntityValue => {
-                // Entity value — validate and store in internal_entities map
-                // Matches C callStoreEntityValue/storeEntityValue
+                // Entity value — validate and store
                 let mut handler_called = false;
                 if let Some(ref name) = self.current_entity_name {
+                    if self.current_is_param_entity {
+                        // PE value → store in param_entities (not internal_entities)
+                        if let Ok(value) = self.store_entity_value(tok_text) {
+                            if let Some(pe) = self.dtd.borrow_mut().param_entities.get_mut(name) {
+                                pe.value = Some(value);
+                            }
+                        }
+                        return (XmlError::None, self.entity_decl_handler.is_some());
+                    }
                     // tok_text has quotes already stripped by extract_token_text
                     match self.store_entity_value(tok_text) {
                         Ok(value) => {
@@ -1788,13 +1813,15 @@ impl Parser {
                             handler_called = true;
                         }
                     }
-                    self.dtd.borrow_mut().external_entities.insert(
-                        name.clone(),
-                        (
-                            self.current_entity_system_id.take(),
-                            self.current_entity_public_id.take(),
-                        ),
-                    );
+                    if !self.current_is_param_entity {
+                        self.dtd.borrow_mut().external_entities.insert(
+                            name.clone(),
+                            (
+                                self.current_entity_system_id.take(),
+                                self.current_entity_public_id.take(),
+                            ),
+                        );
+                    }
                 }
                 self.current_entity_name = None;
                 self.current_entity_system_id = None;
