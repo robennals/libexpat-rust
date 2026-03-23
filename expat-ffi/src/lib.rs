@@ -349,7 +349,8 @@ pub unsafe extern "C" fn XML_GetBuffer(parser: XML_Parser, len: c_int) -> *mut c
         return ptr::null_mut();
     }
     // Reject excessively large buffers (matches C overflow detection)
-    if len as usize > (i32::MAX as usize) / 2 {
+    // Maximum is INT_MAX / 2 + 1, which is 1073741824 for INT_MAX = 2147483647
+    if len as usize > (i32::MAX as usize + 1) / 2 {
         return ptr::null_mut();
     }
     let handle = &mut *parser;
@@ -1216,6 +1217,30 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
             // Copy user_data and handler settings from parent (matches C behavior)
             (*new_ptr).user_data = handle.user_data;
             (*new_ptr).use_parser_as_handler_arg = handle.use_parser_as_handler_arg;
+
+            // Copy ext_entity_ref_handler_arg: if parent's arg is the parent parser itself,
+            // set child's arg to child parser; otherwise copy the arg
+            if handle.ext_entity_ref_handler_arg == parser as *mut c_void {
+                (*new_ptr).ext_entity_ref_handler_arg = new_ptr as *mut c_void;
+            } else {
+                (*new_ptr).ext_entity_ref_handler_arg = handle.ext_entity_ref_handler_arg;
+            }
+
+            // Copy C handler function pointers from parent to child
+            // These are DTD-related handlers that don't require closures
+            (*new_ptr).c_ext_entity_ref_handler = handle.c_ext_entity_ref_handler;
+            (*new_ptr).c_not_standalone_handler = handle.c_not_standalone_handler;
+            (*new_ptr).c_skipped_entity_handler = handle.c_skipped_entity_handler;
+            (*new_ptr).c_element_decl_handler = handle.c_element_decl_handler;
+            (*new_ptr).c_attlist_decl_handler = handle.c_attlist_decl_handler;
+            (*new_ptr).c_entity_decl_handler = handle.c_entity_decl_handler;
+            (*new_ptr).c_unparsed_entity_decl_handler = handle.c_unparsed_entity_decl_handler;
+            (*new_ptr).c_notation_decl_handler = handle.c_notation_decl_handler;
+            (*new_ptr).c_start_ns_handler = handle.c_start_ns_handler;
+            (*new_ptr).c_end_ns_handler = handle.c_end_ns_handler;
+            (*new_ptr).c_unknown_encoding_handler = handle.c_unknown_encoding_handler;
+            (*new_ptr).c_unknown_encoding_data = handle.c_unknown_encoding_data;
+
             new_ptr
         }
         None => ptr::null_mut(),
@@ -1755,7 +1780,52 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
                     convert: None,
                     release: None,
                 };
-                handler_fn(enc_data, nb.as_ptr() as _, &mut enc) != 0
+                if handler_fn(enc_data, nb.as_ptr() as _, &mut enc) == 0 {
+                    return false;
+                }
+
+                // Validate the encoding map according to C libexpat rules (xmltok.c:1401-1470)
+                // Key validation points:
+                // 1. Multi-byte indicators must be -2, -3, or -4 (not < -4)
+                // 2. Multi-byte sequences require a converter function
+                // 3. High bytes (>= 0x80) with value -1 require a converter (unmapped needs conversion)
+                // 4. Values must not exceed 0xFFFF
+                // 5. Surrogate values (0xD800-0xDFFF) are invalid
+                // 6. For ASCII range (0-127), identity mapping is generally expected
+
+                let has_converter = enc.convert.is_some();
+
+                for i in 0..256 {
+                    let c = enc.map[i];
+
+                    if c == -1 {
+                        // Unmapped byte: high bytes need converter
+                        if i >= 0x80 && !has_converter {
+                            return false;
+                        }
+                    } else if c < -4 {
+                        // Invalid multi-byte indicator (must be -2, -3, or -4)
+                        return false;
+                    } else if c < 0 {
+                        // Multi-byte sequence: -2, -3, or -4
+                        // These require a convert function
+                        if !has_converter {
+                            return false;
+                        }
+                    } else if c > 0xFFFF {
+                        // Out of Unicode range
+                        return false;
+                    } else if c as u32 >= 0xD800 && c as u32 <= 0xDFFF {
+                        // Surrogate pairs are invalid
+                        return false;
+                    } else if i < 128 && c != i as i32 {
+                        // ASCII range (0-127) should map to themselves (identity)
+                        // This rejects encodings like invalid-a which map 0x82->'a'
+                        return false;
+                    }
+                }
+
+                true
             })));
     } else {
         handle.parser.set_unknown_encoding_handler(None);

@@ -1308,6 +1308,17 @@ impl Parser {
                     self.event_pos = pos;
                     return e;
                 }
+
+                // Check for namespace declaration violations
+                if let Some(ref attr) = self.current_attlist_attr {
+                    if self.ns_enabled && (attr == "xmlns" || attr.starts_with("xmlns:")) {
+                        // Default value is empty and it's a prefixed namespace declaration
+                        if tok_text.is_empty() && attr != "xmlns" {
+                            return XmlError::UndeclaringPrefix;
+                        }
+                    }
+                }
+
                 // Store the default value for this element/attribute
                 if let (Some(ref elem), Some(ref attr)) =
                     (&self.current_attlist_element, &self.current_attlist_attr)
@@ -1773,8 +1784,32 @@ impl Parser {
                         Vec::new()
                     };
 
-                    // Apply ATTLIST defaults and track attribute info
+                    // Namespace validation and processing (if enabled)
                     let mut attrs = attrs;
+                    if self.ns_enabled {
+                        let mut ns_attrs = Vec::new();
+                        let mut non_ns_attrs = Vec::new();
+
+                        for (name, value) in attrs.iter() {
+                            if name == "xmlns" || name.starts_with("xmlns:") {
+                                // Validate namespace declaration
+                                // Empty URI is only valid for default namespace (no prefix)
+                                if value.is_empty() && name != "xmlns" {
+                                    // This is a prefixed declaration with empty URI
+                                    return (XmlError::UndeclaringPrefix, pos);
+                                }
+                                ns_attrs.push((name.clone(), value.clone()));
+                            } else {
+                                non_ns_attrs.push((name.clone(), value.clone()));
+                            }
+                        }
+
+                        // For now, just keep non-namespace attributes (namespace processing
+                        // beyond validation is a larger task involving binding tracking)
+                        attrs = non_ns_attrs;
+                    }
+
+                    // Apply ATTLIST defaults and track attribute info
                     let specified_count = attrs.len() as i32;
                     if let Some(defaults) = self.attlist_defaults.get(tag_name) {
                         for (dname, dval) in defaults {
@@ -1853,6 +1888,22 @@ impl Parser {
                     } else {
                         Vec::new()
                     };
+
+                    // Namespace validation and processing (if enabled)
+                    if self.ns_enabled {
+                        let mut non_ns_attrs = Vec::new();
+                        for (name, value) in attrs.iter() {
+                            if name == "xmlns" || name.starts_with("xmlns:") {
+                                // Validate namespace declaration
+                                if value.is_empty() && name != "xmlns" {
+                                    return (XmlError::UndeclaringPrefix, pos);
+                                }
+                            } else {
+                                non_ns_attrs.push((name.clone(), value.clone()));
+                            }
+                        }
+                        attrs = non_ns_attrs;
+                    }
 
                     // Apply ATTLIST defaults and track attribute info
                     let specified_count = attrs.len() as i32;
