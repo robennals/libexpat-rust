@@ -326,6 +326,8 @@ pub struct Parser {
     current_attlist_attr: Option<String>,
     /// External entity definitions — maps entity name to (system_id, public_id)
     external_entities: HashMap<String, (Option<String>, Option<String>)>,
+    /// Entities that have NDATA notation (unparsed entities — can't be referenced with &entity;)
+    unparsed_entities: std::collections::HashSet<String>,
     /// Set of currently open (being expanded) entities for recursion detection
     open_entities: std::collections::HashSet<String>,
     /// Current entity name being declared in DTD (for GeneralEntityName → EntityValue flow)
@@ -456,6 +458,7 @@ impl Parser {
             current_attlist_element: None,
             current_attlist_attr: None,
             external_entities: HashMap::new(),
+            unparsed_entities: std::collections::HashSet::new(),
             open_entities: std::collections::HashSet::new(),
             current_entity_name: None,
             current_entity_system_id: None,
@@ -561,6 +564,7 @@ impl Parser {
             current_attlist_element: None,
             current_attlist_attr: None,
             external_entities: HashMap::new(),
+            unparsed_entities: std::collections::HashSet::new(),
             open_entities: std::collections::HashSet::new(),
             current_entity_name: None,
             current_entity_system_id: None,
@@ -646,6 +650,7 @@ impl Parser {
         self.dtd_keep_processing = true;
         self.internal_entities.clear();
         self.external_entities.clear();
+        self.unparsed_entities.clear();
         self.open_entities.clear();
         self.get_buffer_data.clear();
         self.suspended_data.clear();
@@ -1321,6 +1326,11 @@ impl Parser {
                 // Entity NDATA notation name — store notation and call unparsed entity handler
                 let notation = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.current_entity_notation = Some(notation);
+
+                // Mark this entity as unparsed (has NDATA notation)
+                if let Some(ref name) = self.current_entity_name {
+                    self.unparsed_entities.insert(name.clone());
+                }
 
                 // Call unparsed entity handler if set (matches C XML_ROLE_ENTITY_NOTATION_NAME)
                 let mut handler_called = false;
@@ -2013,6 +2023,11 @@ impl Parser {
                     } else {
                         // General entity reference — matches C doContent entity handling
                         let name = std::str::from_utf8(&data[name_start..name_end]).unwrap_or("");
+
+                        // Check for unparsed entity (NDATA notation) — can't be referenced with &
+                        if self.unparsed_entities.contains(name) {
+                            return (XmlError::BinaryEntityRef, pos);
+                        }
 
                         // 1. Check internal entities
                         if let Some(value) = self.internal_entities.get(name).cloned() {
@@ -4191,6 +4206,7 @@ impl Parser {
         child.external_entities = self.external_entities.clone();
         child.attlist_defaults = self.attlist_defaults.clone();
         child.attlist_types = self.attlist_types.clone();
+        child.unparsed_entities = self.unparsed_entities.clone();
         child.dtd_standalone = self.dtd_standalone;
         child.param_entity_parsing = self.param_entity_parsing;
         // For non-empty context (general entity), use ExternalEntity processor
