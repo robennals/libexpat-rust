@@ -1669,7 +1669,7 @@ pub unsafe extern "C" fn XML_SetElementDeclHandler(
 
                         // Now build the array with stable name pointers
                         let mut array: Vec<XML_Content> = Vec::with_capacity(rust_model.len());
-                        for (idx, (type_u, quant_u, _, _numchildren)) in rust_model.iter().enumerate() {
+                        for (idx, (type_u, quant_u, name_bytes, numchildren)) in rust_model.iter().enumerate() {
                             let name_ptr = if !h.last_content_model_names[idx].is_empty() {
                                 h.last_content_model_names[idx].as_ptr() as *mut c_char
                             } else {

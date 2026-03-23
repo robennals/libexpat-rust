@@ -3136,7 +3136,21 @@ impl Parser {
 
     /// Add a content element child to the current group in the content model stack
     fn add_content_element(&mut self, tok_text: &[u8], quant: ContentQuant) {
-        let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+        // For quantified elements, the tokenizer includes the quantifier character at the end
+        // The C code subtracts minBytesPerChar (1 for UTF-8) when extracting the name
+        // So we need to strip the last character for Opt, Rep, Plus quantifiers
+        let name_bytes = match quant {
+            ContentQuant::None => tok_text,
+            ContentQuant::Opt | ContentQuant::Rep | ContentQuant::Plus => {
+                // Strip the last character (the quantifier)
+                if tok_text.is_empty() {
+                    tok_text
+                } else {
+                    &tok_text[..tok_text.len() - 1]
+                }
+            }
+        };
+        let name = std::str::from_utf8(name_bytes).unwrap_or("").to_string();
         let child = ContentNode {
             content_type: ContentType::Name, quant,
             children: Vec::new(), name: Some(name),
