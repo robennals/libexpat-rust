@@ -764,7 +764,7 @@ impl Parser {
                     //    parser->m_tagLevel = 1;
                     //    return externalEntityContentProcessor(parser, start, end, endPtr);
                     self.processor = Processor::Content;
-                    self.tag_level = self.content_start_tag_level;
+                    // tag_level already set at parser creation time
                     // Pass ALL data to content processor (it will re-tokenize from start)
                     self.buffer = data;
                     self.content_processor();
@@ -4252,6 +4252,10 @@ impl Parser {
         if !context.is_empty() {
             child.processor = Processor::ExternalEntity;
             child.content_start_tag_level = 1;
+            // C sets m_tagLevel=1 in externalEntityInitProcessor3 after detecting
+            // the first token. Since our init processor delegates to content_processor
+            // which needs tag_level == content_start_tag_level, set it at creation.
+            child.tag_level = 1;
         }
         Some(child)
     }
