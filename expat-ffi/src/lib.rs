@@ -2134,10 +2134,21 @@ pub static mut g_reparseDeferralEnabledDefault: XML_Bool = 1; // XML_TRUE
 
 #[no_mangle]
 pub unsafe extern "C" fn _INTERNAL_trim_to_complete_utf8_characters(
-    _from: *const c_char,
-    _from_lim_ref: *mut *const c_char,
+    from: *const c_char,
+    from_lim_ref: *mut *const c_char,
 ) {
-    // Stub
+    if from.is_null() || from_lim_ref.is_null() || (*from_lim_ref).is_null() {
+        return;
+    }
+    let from_ptr = from as *const u8;
+    let lim_ptr = *from_lim_ref as *const u8;
+    let len = lim_ptr.offset_from(from_ptr) as usize;
+    if len == 0 {
+        return;
+    }
+    let data = std::slice::from_raw_parts(from_ptr, len);
+    let new_len = expat_rust::xmltok::trim_to_complete_utf8_characters(data);
+    *from_lim_ref = from.add(new_len);
 }
 
 #[no_mangle]

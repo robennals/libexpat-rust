@@ -368,6 +368,46 @@ pub fn parse_xml_decl(data: &[u8], is_text_decl: bool) -> Result<XmlDeclInfo, us
     })
 }
 
+/// Trim a byte slice to the last complete UTF-8 character boundary.
+/// Returns the new end position (may be less than data.len()).
+/// Port of C _INTERNAL_trim_to_complete_utf8_characters.
+pub fn trim_to_complete_utf8_characters(data: &[u8]) -> usize {
+    let mut end = data.len();
+    let mut walked: usize = 0;
+    while end > 0 {
+        end -= 1;
+        walked += 1;
+        let prev = data[end];
+        if (prev & 0xf8) == 0xf0 {
+            // 4-byte lead by 0b11110xxx
+            if walked >= 4 {
+                return end + 4;
+            } else {
+                walked = 0;
+            }
+        } else if (prev & 0xf0) == 0xe0 {
+            // 3-byte lead by 0b1110xxxx
+            if walked >= 3 {
+                return end + 3;
+            } else {
+                walked = 0;
+            }
+        } else if (prev & 0xe0) == 0xc0 {
+            // 2-byte lead by 0b110xxxxx
+            if walked >= 2 {
+                return end + 2;
+            } else {
+                walked = 0;
+            }
+        } else if (prev & 0x80) == 0x00 {
+            // 1-byte char, matching 0b0xxxxxxx
+            return end + 1;
+        }
+        // else: continuation byte (0x80..0xBF), keep walking
+    }
+    end // return 0 if we walked past the beginning
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
