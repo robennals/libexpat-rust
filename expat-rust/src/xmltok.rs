@@ -243,7 +243,7 @@ pub fn parse_xml_decl(data: &[u8], is_text_decl: bool) -> Result<XmlDeclInfo, us
     let mut encoding_end = 0;
     let mut standalone = None;
 
-    // Parse version attribute
+    // Parse first attribute (for XML decl: version, for text decl: version or encoding)
     let (name_start, name_end, val_start, next_pos, success) =
         parse_pseudo_attribute(enc, data, pos, end - 2 * minbpc);
 
@@ -253,101 +253,85 @@ pub fn parse_xml_decl(data: &[u8], is_text_decl: bool) -> Result<XmlDeclInfo, us
 
     pos = next_pos;
 
-    // Check first attribute is "version"
+    // Check first attribute
     if name_start == 0 {
+        // No attributes at all
         if !is_text_decl {
             return Err(next_pos);
         }
-    } else {
-        // Check if name matches "version"
-        let name_matches_version = name_end > name_start
-            && name_end - name_start == 7
-            && &data[name_start..name_end] == b"version";
+        // Text declaration with no attributes is OK
+        return Ok(XmlDeclInfo {
+            version_start: 0,
+            version_end: 0,
+            encoding_start: 0,
+            encoding_end: 0,
+            standalone: None,
+        });
+    }
 
-        if !name_matches_version {
-            if !is_text_decl {
-                return Err(name_start);
-            }
+    // Determine what the first attribute is
+    let name_matches_version = name_end > name_start
+        && name_end - name_start == 7
+        && &data[name_start..name_end] == b"version";
+    let name_matches_encoding = name_end > name_start
+        && name_end - name_start == 8
+        && &data[name_start..name_end] == b"encoding";
+
+    if !name_matches_version && !name_matches_encoding {
+        // Unknown first attribute
+        if is_text_decl && !name_matches_version {
+            // For text decl, first attr can be encoding
+            return Err(name_start);
         } else {
-            version_start = val_start;
-            version_end = next_pos - minbpc; // exclude closing quote
+            // For XML decl, first attr must be version
+            return Err(name_start);
+        }
+    }
 
-            // Try to parse second attribute
-            let (name_start2, name_end2, val_start2, next_pos2, success2) =
+    if name_matches_version {
+        version_start = val_start;
+        version_end = next_pos - minbpc; // exclude closing quote
+
+        // Try to parse second attribute (should be encoding or standalone)
+        let (name_start2, name_end2, val_start2, next_pos2, success2) =
+            parse_pseudo_attribute(enc, data, pos, end - 2 * minbpc);
+
+        if !success2 {
+            return Err(next_pos2);
+        }
+
+        if name_start2 == 0 {
+            // No second attribute - OK for both xml and text decl
+            return Ok(XmlDeclInfo {
+                version_start,
+                version_end,
+                encoding_start: 0,
+                encoding_end: 0,
+                standalone,
+            });
+        }
+
+        pos = next_pos2;
+
+        // Check if second attribute is "encoding"
+        let name_matches_encoding2 = name_end2 > name_start2
+            && name_end2 - name_start2 == 8
+            && &data[name_start2..name_end2] == b"encoding";
+
+        if name_matches_encoding2 {
+            encoding_start = val_start2;
+            encoding_end = next_pos2 - minbpc; // exclude closing quote
+
+            // Try to parse third attribute (should be standalone for XML decl only)
+            let (name_start3, name_end3, val_start3, next_pos3, success3) =
                 parse_pseudo_attribute(enc, data, pos, end - 2 * minbpc);
 
-            if !success2 {
-                return Err(next_pos2);
+            if !success3 {
+                return Err(next_pos3);
             }
 
-            if name_start2 == 0 {
-                if is_text_decl {
-                    return Err(next_pos2);
-                }
-                return Ok(XmlDeclInfo {
-                    version_start,
-                    version_end,
-                    encoding_start: 0,
-                    encoding_end: 0,
-                    standalone,
-                });
-            }
-
-            pos = next_pos2;
-
-            // Check if second attribute is "encoding"
-            let name_matches_encoding = name_end2 > name_start2
-                && name_end2 - name_start2 == 8
-                && &data[name_start2..name_end2] == b"encoding";
-
-            if name_matches_encoding {
-                encoding_start = val_start2;
-                encoding_end = next_pos2 - minbpc; // exclude closing quote
-
-                // Try to parse third attribute
-                let (name_start3, name_end3, val_start3, next_pos3, success3) =
-                    parse_pseudo_attribute(enc, data, pos, end - 2 * minbpc);
-
-                if !success3 {
-                    return Err(next_pos3);
-                }
-
-                if name_start3 == 0 {
-                    return Ok(XmlDeclInfo {
-                        version_start,
-                        version_end,
-                        encoding_start,
-                        encoding_end,
-                        standalone,
-                    });
-                }
-
-                // Check if third attribute is "standalone"
-                let name_matches_standalone = name_end3 > name_start3
-                    && name_end3 - name_start3 == 10
-                    && &data[name_start3..name_end3] == b"standalone";
-
-                if !name_matches_standalone || is_text_decl {
-                    return Err(name_start3);
-                }
-
-                // Check standalone value (next_pos3 is past closing quote, so subtract minbpc)
-                let val_end3 = next_pos3 - minbpc;
-                let val_matches_yes = val_start3 < val_end3
-                    && val_end3 - val_start3 == 3
-                    && &data[val_start3..val_end3] == b"yes";
-                let val_matches_no = val_start3 < val_end3
-                    && val_end3 - val_start3 == 2
-                    && &data[val_start3..val_end3] == b"no";
-
-                if val_matches_yes {
-                    standalone = Some(true);
-                } else if val_matches_no {
-                    standalone = Some(false);
-                } else {
-                    return Err(val_start3);
-                }
-
+            if name_start3 == 0 {
+                // No third attribute - OK
                 return Ok(XmlDeclInfo {
                     version_start,
                     version_end,
@@ -356,7 +340,71 @@ pub fn parse_xml_decl(data: &[u8], is_text_decl: bool) -> Result<XmlDeclInfo, us
                     standalone,
                 });
             }
+
+            // Check if third attribute is "standalone"
+            let name_matches_standalone = name_end3 > name_start3
+                && name_end3 - name_start3 == 10
+                && &data[name_start3..name_end3] == b"standalone";
+
+            if !name_matches_standalone || is_text_decl {
+                return Err(name_start3);
+            }
+
+            // Check standalone value (next_pos3 is past closing quote, so subtract minbpc)
+            let val_end3 = next_pos3 - minbpc;
+            let val_matches_yes = val_start3 < val_end3
+                && val_end3 - val_start3 == 3
+                && &data[val_start3..val_end3] == b"yes";
+            let val_matches_no = val_start3 < val_end3
+                && val_end3 - val_start3 == 2
+                && &data[val_start3..val_end3] == b"no";
+
+            if val_matches_yes {
+                standalone = Some(true);
+            } else if val_matches_no {
+                standalone = Some(false);
+            } else {
+                return Err(val_start3);
+            }
+
+            return Ok(XmlDeclInfo {
+                version_start,
+                version_end,
+                encoding_start,
+                encoding_end,
+                standalone,
+            });
         }
+    } else if name_matches_encoding {
+        // First attribute is encoding (only for text declarations)
+        if !is_text_decl {
+            // XML declaration must have version first
+            return Err(name_start);
+        }
+
+        encoding_start = val_start;
+        encoding_end = next_pos - minbpc; // exclude closing quote
+
+        // Text declarations can't have more attributes after encoding
+        let (name_start2, name_end2, _val_start2, next_pos2, success2) =
+            parse_pseudo_attribute(enc, data, pos, end - 2 * minbpc);
+
+        if !success2 {
+            return Err(next_pos2);
+        }
+
+        if name_start2 != 0 {
+            // Text decl can only have encoding, nothing after
+            return Err(name_start2);
+        }
+
+        return Ok(XmlDeclInfo {
+            version_start: 0,
+            version_end: 0,
+            encoding_start,
+            encoding_end,
+            standalone: None,
+        });
     }
 
     Ok(XmlDeclInfo {

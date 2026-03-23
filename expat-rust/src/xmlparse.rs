@@ -262,8 +262,11 @@ pub struct Parser {
     event_pos: usize,
     /// Is this the final buffer?
     is_final: bool,
-    /// Declared encoding name
+    /// Declared encoding name (set via XML_SetEncoding or constructor)
     encoding_name: Option<String>,
+    /// Whether encoding_name was set via XML_SetEncoding (protocol encoding)
+    /// If true, conflicts with XML declaration encoding are ignored
+    protocol_encoding_set: bool,
     /// Enable namespace processing
     #[allow(dead_code)]
     ns_enabled: bool,
@@ -433,6 +436,7 @@ impl Parser {
             event_pos: 0,
             is_final: false,
             encoding_name: encoding.map(|s| s.to_string()),
+            protocol_encoding_set: false,
             ns_enabled: false,
             ns_separator: '\0',
             tag_level: 0,
@@ -541,6 +545,7 @@ impl Parser {
             event_pos: 0,
             is_final: false,
             encoding_name: encoding.map(|s| s.to_string()),
+            protocol_encoding_set: false,
             ns_enabled: true,
             ns_separator: separator,
             tag_level: 0,
@@ -641,6 +646,7 @@ impl Parser {
         self.event_pos = 0;
         self.is_final = false;
         self.encoding_name = encoding.map(|s| s.to_string());
+        self.protocol_encoding_set = false;
         self.tag_level = 0;
         self.tag_stack.clear();
         self.seen_root = false;
@@ -1213,7 +1219,20 @@ impl Parser {
                 self.seen_xml_decl = true;
 
                 let decl_data = &data[pos..next];
-                match xmltok::parse_xml_decl(decl_data, false) {
+                // For external entities (non-document), parse as text declaration
+                // For document entities, parse as full XML declaration
+                let is_text_decl = !self.prolog_state.document_entity;
+
+                // If parsing fails as a declaration, try accepting it for text declarations
+                let parse_result = xmltok::parse_xml_decl(decl_data, is_text_decl);
+                let parse_result = if parse_result.is_err() && is_text_decl {
+                    // Text declarations are more lenient - try parsing as XML decl then ignore version requirement
+                    xmltok::parse_xml_decl(decl_data, false)
+                } else {
+                    parse_result
+                };
+
+                match parse_result {
                     Ok(info) => {
                         // Extract version string
                         let version_str = if info.version_end > info.version_start {
@@ -1257,31 +1276,35 @@ impl Parser {
                         }
 
                         // Check encoding — matches C processXmlDecl logic
-                        if let Some(ref enc_name) = encoding_str {
-                            let upper = enc_name.to_uppercase();
-                            if upper == "UTF-16" || upper == "UTF-16LE" || upper == "UTF-16BE" {
-                                // UTF-16 declared in what we're parsing as UTF-8 → error
-                                if self.detected_encoding.is_none() {
-                                    self.event_pos = pos;
-                                    return (XmlError::IncorrectEncoding, false);
-                                }
-                            } else if upper == "ISO-8859-1"
-                                || upper == "LATIN1"
-                                || upper.starts_with("ISO-8859-")
-                                || upper == "WINDOWS-1252"
-                            {
-                                // Latin-1 or similar single-byte encoding
-                                // Set detected_encoding so parse() transcodes subsequent data
-                                self.detected_encoding = Some(upper.clone());
-                            } else if !is_known_encoding(&upper) {
-                                // Unknown encoding — try handler
-                                let mut handled = false;
-                                if let Some(handler) = &mut self.unknown_encoding_handler {
-                                    handled = handler(enc_name);
-                                }
-                                if !handled {
-                                    self.event_pos = pos;
-                                    return (XmlError::UnknownEncoding, false);
+                        // If protocol_encoding_set (XML_SetEncoding was called), skip encoding conflict checks
+                        // The C code skips these checks entirely if m_protocolEncodingName is set
+                        if !self.protocol_encoding_set {
+                            if let Some(ref enc_name) = encoding_str {
+                                let upper = enc_name.to_uppercase();
+                                if upper == "UTF-16" || upper == "UTF-16LE" || upper == "UTF-16BE" {
+                                    // UTF-16 declared in what we're parsing as UTF-8 → error
+                                    if self.detected_encoding.is_none() {
+                                        self.event_pos = pos;
+                                        return (XmlError::IncorrectEncoding, false);
+                                    }
+                                } else if upper == "ISO-8859-1"
+                                    || upper == "LATIN1"
+                                    || upper.starts_with("ISO-8859-")
+                                    || upper == "WINDOWS-1252"
+                                {
+                                    // Latin-1 or similar single-byte encoding
+                                    // Set detected_encoding so parse() transcodes subsequent data
+                                    self.detected_encoding = Some(upper.clone());
+                                } else if !is_known_encoding(&upper) {
+                                    // Unknown encoding — try handler
+                                    let mut handled = false;
+                                    if let Some(handler) = &mut self.unknown_encoding_handler {
+                                        handled = handler(enc_name);
+                                    }
+                                    if !handled {
+                                        self.event_pos = pos;
+                                        return (XmlError::UnknownEncoding, false);
+                                    }
                                 }
                             }
                         }
@@ -3785,10 +3808,14 @@ impl Parser {
         if data.len() >= 2 {
             // UTF-16 BE BOM: FE FF
             if data[0] == 0xFE && data[1] == 0xFF {
-                if let Some(ref enc) = self.encoding_name {
-                    let enc_upper = enc.to_uppercase();
-                    if enc_upper != "UTF-16" && enc_upper != "UTF-16BE" {
-                        return Err(XmlError::IncorrectEncoding);
+                // Only check encoding conflict if protocol_encoding_set is false
+                // If XML_SetEncoding was called, the protocol encoding overrides any BOM
+                if !self.protocol_encoding_set {
+                    if let Some(ref enc) = self.encoding_name {
+                        let enc_upper = enc.to_uppercase();
+                        if enc_upper != "UTF-16" && enc_upper != "UTF-16BE" {
+                            return Err(XmlError::IncorrectEncoding);
+                        }
                     }
                 }
                 self.detected_encoding = Some("UTF-16BE".to_string());
@@ -3797,10 +3824,13 @@ impl Parser {
             }
             // UTF-16 LE BOM: FF FE
             if data[0] == 0xFF && data[1] == 0xFE {
-                if let Some(ref enc) = self.encoding_name {
-                    let enc_upper = enc.to_uppercase();
-                    if enc_upper != "UTF-16" && enc_upper != "UTF-16LE" {
-                        return Err(XmlError::IncorrectEncoding);
+                // Only check encoding conflict if protocol_encoding_set is false
+                if !self.protocol_encoding_set {
+                    if let Some(ref enc) = self.encoding_name {
+                        let enc_upper = enc.to_uppercase();
+                        if enc_upper != "UTF-16" && enc_upper != "UTF-16LE" {
+                            return Err(XmlError::IncorrectEncoding);
+                        }
                     }
                 }
                 self.detected_encoding = Some("UTF-16LE".to_string());
@@ -4216,6 +4246,7 @@ impl Parser {
             return XmlStatus::Error;
         }
         self.encoding_name = Some(encoding.to_string());
+        self.protocol_encoding_set = true;
         XmlStatus::Ok
     }
 
@@ -4223,6 +4254,7 @@ impl Parser {
     /// Always succeeds — matches C behavior where NULL encoding is accepted in any state
     pub fn clear_encoding(&mut self) {
         self.encoding_name = None;
+        self.protocol_encoding_set = false;
     }
 
     /// Get the number of specified attributes in the last element
@@ -4495,6 +4527,11 @@ impl Parser {
         } else {
             Parser::new(encoding)?
         };
+        // If an encoding was passed to XML_ExternalEntityParserCreate, mark it as protocol encoding
+        // This matches C behavior where the encoding parameter sets m_protocolEncodingName
+        if encoding.is_some() {
+            child.protocol_encoding_set = true;
+        }
         // Inherit DTD state from parent
         child.internal_entities = self.internal_entities.clone();
         child.external_entities = self.external_entities.clone();
