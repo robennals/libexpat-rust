@@ -444,6 +444,12 @@ pub struct Parser {
     external_entity_ref_handler: Option<ExternalEntityRefHandler>,
     skipped_entity_handler: Option<SkippedEntityHandler>,
     unknown_encoding_handler: Option<UnknownEncodingHandler>,
+    /// Custom encoding map from unknown encoding handler (for transcode of non-UTF-8 content)
+    pub custom_encoding_map: Option<[i32; 256]>,
+    /// Custom encoding converter function pointer
+    pub custom_encoding_converter: Option<unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_char) -> std::ffi::c_int>,
+    /// User data for custom encoding converter
+    pub custom_encoding_data: *mut std::ffi::c_void,
 }
 
 impl Parser {
@@ -555,6 +561,9 @@ impl Parser {
             external_entity_ref_handler: None,
             skipped_entity_handler: None,
             unknown_encoding_handler: None,
+            custom_encoding_map: None,
+            custom_encoding_converter: None,
+            custom_encoding_data: std::ptr::null_mut(),
         })
     }
 
@@ -668,6 +677,9 @@ impl Parser {
             external_entity_ref_handler: None,
             skipped_entity_handler: None,
             unknown_encoding_handler: None,
+            custom_encoding_map: None,
+            custom_encoding_converter: None,
+            custom_encoding_data: std::ptr::null_mut(),
         })
     }
 
@@ -751,6 +763,9 @@ impl Parser {
         self.external_entity_ref_handler = None;
         self.skipped_entity_handler = None;
         self.unknown_encoding_handler = None;
+        self.custom_encoding_map = None;
+        self.custom_encoding_converter = None;
+        self.custom_encoding_data = std::ptr::null_mut();
         true
     }
 
@@ -822,15 +837,31 @@ impl Parser {
 
             // If processor changed, re-dispatch with remaining data
             if self.processor != prev_processor && next_pos < end {
-                // If transitioning from Prolog and Latin-1 encoding was detected,
-                // we need to transcode remaining data before content processing
-                if prev_processor == Processor::Prolog
+                // If transitioning from Prolog and need to transcode, do it now
+                let mut transcoded_data = None;
+
+                // Check if we need to transcode custom encoding
+                if prev_processor == Processor::Prolog && self.custom_encoding_map.is_some() {
+                    let remaining = &data[next_pos..end];
+                    match self.transcode_custom_encoding(remaining) {
+                        Ok(t) => {
+                            transcoded_data = Some(t);
+                        }
+                        Err(err) => {
+                            self.error_code = err;
+                            return;
+                        }
+                    }
+                } else if prev_processor == Processor::Prolog
                     && is_latin1_encoding(self.detected_encoding.as_deref())
                 {
                     let remaining = &data[next_pos..end];
-                    let transcoded = transcode_latin1_to_utf8(remaining);
+                    transcoded_data = Some(transcode_latin1_to_utf8(remaining));
+                }
+
+                if let Some(new_data) = transcoded_data {
                     // Put transcoded data in buffer for next iteration
-                    self.buffer = transcoded;
+                    self.buffer = new_data;
                     // Re-take buffer with transcoded data
                     let new_data = std::mem::take(&mut self.buffer);
                     let (error2, next2) = match self.processor {
@@ -850,6 +881,7 @@ impl Parser {
                     }
                     return;
                 }
+
                 start = next_pos;
                 continue;
             }
@@ -4437,6 +4469,114 @@ impl Parser {
             result.extend_from_slice(encoded.as_bytes());
         }
         Ok(result)
+    }
+
+    /// Transcode data from custom encoding to UTF-8
+    fn transcode_custom_encoding(&self, data: &[u8]) -> Result<Vec<u8>, XmlError> {
+        if let Some(ref map) = self.custom_encoding_map {
+            let mut result = Vec::new();
+            let mut i = 0;
+
+            while i < data.len() {
+                let byte = data[i] as u8;
+                let map_val = map[byte as usize];
+
+                if map_val == -1 {
+                    // Malformed byte — error
+                    return Err(XmlError::InvalidToken);
+                } else if map_val >= 0 {
+                    // Single-byte mapping to Unicode codepoint
+                    let codepoint = map_val as u32;
+                    // Validate codepoint
+                    if (0xD800..=0xDFFF).contains(&codepoint) {
+                        // Surrogate pair — invalid
+                        return Err(XmlError::InvalidToken);
+                    }
+                    if codepoint > 0x10FFFF {
+                        // Out of Unicode range
+                        return Err(XmlError::InvalidToken);
+                    }
+                    // Encode codepoint to UTF-8
+                    if codepoint <= 0x7F {
+                        result.push(codepoint as u8);
+                    } else if codepoint <= 0x7FF {
+                        result.push(0xC0 | ((codepoint >> 6) as u8));
+                        result.push(0x80 | ((codepoint & 0x3F) as u8));
+                    } else if codepoint <= 0xFFFF {
+                        result.push(0xE0 | ((codepoint >> 12) as u8));
+                        result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
+                        result.push(0x80 | ((codepoint & 0x3F) as u8));
+                    } else {
+                        result.push(0xF0 | ((codepoint >> 18) as u8));
+                        result.push(0x80 | (((codepoint >> 12) & 0x3F) as u8));
+                        result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
+                        result.push(0x80 | ((codepoint & 0x3F) as u8));
+                    }
+                    i += 1;
+                } else if map_val < -4 {
+                    // Invalid multi-byte length indicator
+                    return Err(XmlError::InvalidToken);
+                } else {
+                    // Multi-byte sequence: map_val in [-4, -2]
+                    let n_bytes = (-map_val) as usize;
+                    if i + n_bytes > data.len() {
+                        // Not enough bytes — return what we have so far
+                        // The remaining bytes will be transcoded in the next call
+                        return Ok(result);
+                    }
+
+                    if let Some(conv_fn) = self.custom_encoding_converter {
+                        // Build a buffer for the converter
+                        let mut conv_buf = [0u8; 4];
+                        for j in 0..n_bytes {
+                            conv_buf[j] = data[i + j];
+                        }
+
+                        let codepoint = unsafe { conv_fn(self.custom_encoding_data, conv_buf.as_ptr() as *const std::ffi::c_char) };
+
+                        if codepoint < 0 {
+                            // Converter failed
+                            return Err(XmlError::InvalidToken);
+                        }
+
+                        // Encode codepoint to UTF-8
+                        let codepoint = codepoint as u32;
+                        // Validate codepoint
+                        if (0xD800..=0xDFFF).contains(&codepoint) {
+                            // Surrogate pair — invalid
+                            return Err(XmlError::InvalidToken);
+                        }
+                        if codepoint > 0x10FFFF {
+                            // Out of Unicode range
+                            return Err(XmlError::InvalidToken);
+                        }
+                        if codepoint <= 0x7F {
+                            result.push(codepoint as u8);
+                        } else if codepoint <= 0x7FF {
+                            result.push(0xC0 | ((codepoint >> 6) as u8));
+                            result.push(0x80 | ((codepoint & 0x3F) as u8));
+                        } else if codepoint <= 0xFFFF {
+                            result.push(0xE0 | ((codepoint >> 12) as u8));
+                            result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
+                            result.push(0x80 | ((codepoint & 0x3F) as u8));
+                        } else {
+                            result.push(0xF0 | ((codepoint >> 18) as u8));
+                            result.push(0x80 | (((codepoint >> 12) & 0x3F) as u8));
+                            result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
+                            result.push(0x80 | ((codepoint & 0x3F) as u8));
+                        }
+                        i += n_bytes;
+                    } else {
+                        // No converter but multi-byte needed
+                        return Err(XmlError::InvalidToken);
+                    }
+                }
+            }
+
+            Ok(result)
+        } else {
+            Ok(data.to_vec())
+        }
     }
 
     /// Get a buffer for incremental parsing

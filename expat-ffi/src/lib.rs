@@ -70,6 +70,12 @@ struct ParserHandle {
     last_content_model_array: Option<Box<[XML_Content]>>,
     /// Name buffers for the content model (kept alive with the array)
     last_content_model_names: Vec<Vec<u8>>,
+    /// Custom encoding map from unknown encoding handler
+    custom_encoding_map: Option<Box<[i32; 256]>>,
+    /// Custom encoding converter function from unknown encoding handler
+    custom_encoding_converter: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int>,
+    /// User data for custom encoding converter
+    custom_encoding_data: *mut c_void,
 }
 
 type XML_Parser = *mut ParserHandle;
@@ -287,6 +293,9 @@ fn new_handle(parser: Parser) -> XML_Parser {
         c_end_doctype_handler: None,
         last_content_model_array: None,
         last_content_model_names: Vec::new(),
+        custom_encoding_map: None,
+        custom_encoding_converter: None,
+        custom_encoding_data: ptr::null_mut(),
     });
     Box::into_raw(handle)
 }
@@ -359,6 +368,98 @@ pub unsafe extern "C" fn XML_ParserFree(parser: XML_Parser) {
 // Parsing
 // ============================================================================
 
+/// Transcode data from custom encoding to UTF-8 using the encoding map and converter.
+/// Returns Ok(transcoded_data) or Err(error_code) if transcoding fails.
+fn transcode_custom_encoding(
+    data: &[u8],
+    map: &[i32; 256],
+    converter: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int>,
+    conv_data: *mut c_void,
+) -> Result<Vec<u8>, i32> {
+    let mut result = Vec::new();
+    let mut i = 0;
+
+    while i < data.len() {
+        let byte = data[i] as u8;
+        let map_val = map[byte as usize];
+
+        if map_val == -1 {
+            // Malformed byte — skip it but continue
+            i += 1;
+            continue;
+        } else if map_val >= 0 {
+            // Single-byte mapping to Unicode codepoint
+            let codepoint = map_val as u32;
+            // Encode codepoint to UTF-8
+            if codepoint <= 0x7F {
+                result.push(codepoint as u8);
+            } else if codepoint <= 0x7FF {
+                result.push(0xC0 | ((codepoint >> 6) as u8));
+                result.push(0x80 | ((codepoint & 0x3F) as u8));
+            } else if codepoint <= 0xFFFF {
+                result.push(0xE0 | ((codepoint >> 12) as u8));
+                result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
+                result.push(0x80 | ((codepoint & 0x3F) as u8));
+            } else {
+                result.push(0xF0 | ((codepoint >> 18) as u8));
+                result.push(0x80 | (((codepoint >> 12) & 0x3F) as u8));
+                result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
+                result.push(0x80 | ((codepoint & 0x3F) as u8));
+            }
+            i += 1;
+        } else if map_val < -4 {
+            // Invalid multi-byte length indicator
+            return Err(-1);
+        } else {
+            // Multi-byte sequence: map_val in [-4, -2]
+            let n_bytes = (-map_val) as usize;
+            if i + n_bytes > data.len() {
+                // Not enough bytes
+                break;
+            }
+
+            if let Some(conv_fn) = converter {
+                // Build a buffer for the converter: first byte + remaining bytes
+                let mut conv_buf = [0u8; 4];
+                for j in 0..n_bytes {
+                    conv_buf[j] = data[i + j];
+                }
+
+                let codepoint = unsafe { conv_fn(conv_data, conv_buf.as_ptr() as *const c_char) };
+
+                if codepoint < 0 {
+                    // Converter failed
+                    return Err(codepoint as i32);
+                }
+
+                // Encode codepoint to UTF-8
+                let codepoint = codepoint as u32;
+                if codepoint <= 0x7F {
+                    result.push(codepoint as u8);
+                } else if codepoint <= 0x7FF {
+                    result.push(0xC0 | ((codepoint >> 6) as u8));
+                    result.push(0x80 | ((codepoint & 0x3F) as u8));
+                } else if codepoint <= 0xFFFF {
+                    result.push(0xE0 | ((codepoint >> 12) as u8));
+                    result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
+                    result.push(0x80 | ((codepoint & 0x3F) as u8));
+                } else {
+                    result.push(0xF0 | ((codepoint >> 18) as u8));
+                    result.push(0x80 | (((codepoint >> 12) & 0x3F) as u8));
+                    result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
+                    result.push(0x80 | ((codepoint & 0x3F) as u8));
+                }
+                i += n_bytes;
+            } else {
+                // No converter but multi-byte needed — this shouldn't happen after validation
+                return Err(-1);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn XML_Parse(
     parser: XML_Parser,
@@ -380,7 +481,26 @@ pub unsafe extern "C" fn XML_Parse(
     } else {
         std::slice::from_raw_parts(s as *const u8, len as usize)
     };
-    let status = handle.parser.parse(data, is_final != 0);
+
+    // If custom encoding is pre-set (from a previous parse call), transcode the data
+    let transcoded: Vec<u8>;
+    let parse_data = if let Some(ref map) = handle.custom_encoding_map {
+        match transcode_custom_encoding(data, map, handle.custom_encoding_converter, handle.custom_encoding_data) {
+            Ok(t) => {
+                transcoded = t;
+                transcoded.as_slice()
+            }
+            Err(_err_code) => {
+                // Transcoding failed — treat as a parse error
+                handle.parser.set_error(XmlError::InvalidToken);
+                return XML_STATUS_ERROR;
+            }
+        }
+    } else {
+        data
+    };
+
+    let status = handle.parser.parse(parse_data, is_final != 0);
     status_to_c(status)
 }
 
@@ -2026,6 +2146,7 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
     handle.c_unknown_encoding_data = data;
     if let Some(handler_fn) = handler {
         let enc_data = data;
+        let parser_ptr = parser;
         handle
             .parser
             .set_unknown_encoding_handler(Some(Box::new(move |name: &str| -> bool {
@@ -2063,6 +2184,17 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
                         return false;
                     }
                 }
+                // Store the encoding map and converter on the ParserHandle and Rust Parser
+                let ffi_handle = &mut *(parser_ptr as *mut ParserHandle);
+                ffi_handle.custom_encoding_map = Some(Box::new(enc.map));
+                ffi_handle.custom_encoding_converter = enc.convert;
+                ffi_handle.custom_encoding_data = enc.data;
+
+                // Also store on the Rust Parser so the transcoding logic can use it
+                ffi_handle.parser.custom_encoding_map = Some(enc.map);
+                ffi_handle.parser.custom_encoding_converter = enc.convert;
+                ffi_handle.parser.custom_encoding_data = enc.data;
+
                 true
             })));
     } else {
