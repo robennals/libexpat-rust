@@ -386,7 +386,7 @@ pub fn parse_xml_decl(data: &[u8], is_text_decl: bool) -> Result<XmlDeclInfo, us
         encoding_end = next_pos - minbpc; // exclude closing quote
 
         // Text declarations can't have more attributes after encoding
-        let (name_start2, name_end2, _val_start2, next_pos2, success2) =
+        let (name_start2, _name_end2, _val_start2, next_pos2, success2) =
             parse_pseudo_attribute(enc, data, pos, end - 2 * minbpc);
 
         if !success2 {

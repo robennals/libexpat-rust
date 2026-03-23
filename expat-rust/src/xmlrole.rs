@@ -1108,14 +1108,12 @@ fn external_subset1(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u
             Role::None
         }
         Token::PrologS => Role::None,
-        Token::CloseBracket => {
-            return common(state, tok);
-        }
+        Token::CloseBracket => common(state, tok),
         Token::None => {
             if state.include_level == 0 {
                 return Role::None;
             }
-            return common(state, tok);
+            common(state, tok)
         }
         _ => internal_subset(state, tok, _ptr, _end),
     }

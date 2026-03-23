@@ -485,7 +485,12 @@ pub unsafe extern "C" fn XML_Parse(
     // If custom encoding is pre-set (from a previous parse call), transcode the data
     let transcoded: Vec<u8>;
     let parse_data = if let Some(ref map) = handle.custom_encoding_map {
-        match transcode_custom_encoding(data, map, handle.custom_encoding_converter, handle.custom_encoding_data) {
+        match transcode_custom_encoding(
+            data,
+            map,
+            handle.custom_encoding_converter,
+            handle.custom_encoding_data,
+        ) {
             Ok(t) => {
                 transcoded = t;
                 transcoded.as_slice()
@@ -932,10 +937,7 @@ pub unsafe extern "C" fn XML_SetEndElementHandler(
                 } else {
                     (*parser_ptr).user_data
                 };
-                end_fn(
-                    handler_arg,
-                    name_bytes.as_ptr() as *const XML_Char,
-                );
+                end_fn(handler_arg, name_bytes.as_ptr() as *const XML_Char);
             })));
     } else {
         handle.parser.set_end_element_handler(None);
@@ -1306,12 +1308,7 @@ pub unsafe extern "C" fn XML_SetXmlDeclHandler(parser: XML_Parser, handler: XML_
                     (*parser_ptr).user_data
                 };
 
-                handler_fn(
-                    handler_arg,
-                    version_ptr,
-                    encoding_ptr,
-                    standalone_int,
-                );
+                handler_fn(handler_arg, version_ptr, encoding_ptr, standalone_int);
             })));
     } else {
         handle.parser.set_xml_decl_handler(None);
@@ -1382,7 +1379,13 @@ pub unsafe extern "C" fn XML_SetExternalEntityRefHandler(
                     }
                 };
 
-                let result = handler_fn(handler_arg as XML_Parser, ctx_ptr, base_ptr, sysid_ptr, pubid_ptr);
+                let result = handler_fn(
+                    handler_arg as XML_Parser,
+                    ctx_ptr,
+                    base_ptr,
+                    sysid_ptr,
+                    pubid_ptr,
+                );
                 result != 0
             },
         )));
@@ -1500,14 +1503,22 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
             (*new_ptr).c_end_ns_handler = handle.c_end_ns_handler;
 
             // Re-register handlers on child parser (creates closures with correct parser pointer)
-            XML_SetElementHandler(new_ptr, handle.c_start_element_handler, handle.c_end_element_handler);
+            XML_SetElementHandler(
+                new_ptr,
+                handle.c_start_element_handler,
+                handle.c_end_element_handler,
+            );
             XML_SetCharacterDataHandler(new_ptr, handle.c_character_data_handler);
             XML_SetProcessingInstructionHandler(new_ptr, handle.c_processing_instruction_handler);
             XML_SetCommentHandler(new_ptr, handle.c_comment_handler);
             if handle.c_default_handler.is_some() {
                 XML_SetDefaultHandler(new_ptr, handle.c_default_handler);
             }
-            XML_SetCdataSectionHandler(new_ptr, handle.c_start_cdata_handler, handle.c_end_cdata_handler);
+            XML_SetCdataSectionHandler(
+                new_ptr,
+                handle.c_start_cdata_handler,
+                handle.c_end_cdata_handler,
+            );
             XML_SetXmlDeclHandler(new_ptr, handle.c_xml_decl_handler);
             XML_SetStartDoctypeDeclHandler(new_ptr, handle.c_start_doctype_handler);
             XML_SetEndDoctypeDeclHandler(new_ptr, handle.c_end_doctype_handler);
@@ -1799,7 +1810,9 @@ pub unsafe extern "C" fn XML_SetElementDeclHandler(
 
                         // Now build the array with stable name pointers
                         let mut array: Vec<XML_Content> = Vec::with_capacity(rust_model.len());
-                        for (idx, (type_u, quant_u, name_bytes, numchildren)) in rust_model.iter().enumerate() {
+                        for (idx, (type_u, quant_u, name_bytes, numchildren)) in
+                            rust_model.iter().enumerate()
+                        {
                             let name_ptr = if !h.last_content_model_names[idx].is_empty() {
                                 h.last_content_model_names[idx].as_ptr() as *mut c_char
                             } else {
@@ -1831,7 +1844,8 @@ pub unsafe extern "C" fn XML_SetElementDeclHandler(
                         }
 
                         // Store the array on the handle
-                        h.last_content_model_array = Some(array.into_boxed_slice() as Box<[XML_Content]>);
+                        h.last_content_model_array =
+                            Some(array.into_boxed_slice() as Box<[XML_Content]>);
 
                         // Return pointer to the stored array
                         if let Some(ref boxed) = h.last_content_model_array {
@@ -2121,10 +2135,7 @@ pub unsafe extern "C" fn XML_SetEndNamespaceDeclHandler(
                     b.push(0);
                     b
                 });
-                handler_fn(
-                    ud,
-                    pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
-                );
+                handler_fn(ud, pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _));
             },
         )));
     } else {

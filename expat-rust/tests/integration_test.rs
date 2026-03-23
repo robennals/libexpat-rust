@@ -1,5 +1,4 @@
-
-use expat_rust::xmlparse::{Parser, XmlStatus, XmlError};
+use expat_rust::xmlparse::{Parser, XmlError, XmlStatus};
 
 #[test]
 fn test_unbound_prefix_element() {
@@ -11,7 +10,11 @@ fn test_unbound_prefix_element() {
     println!("Error code: {:?}", parser.error_code());
 
     assert_eq!(status, XmlStatus::Error, "Expected parse to fail");
-    assert_eq!(parser.error_code(), XmlError::UnboundPrefix, "Expected UnboundPrefix error");
+    assert_eq!(
+        parser.error_code(),
+        XmlError::UnboundPrefix,
+        "Expected UnboundPrefix error"
+    );
 }
 
 #[test]
@@ -24,7 +27,11 @@ fn test_unbound_prefix_attribute() {
     println!("Attribute test Error code: {:?}", parser.error_code());
 
     assert_eq!(status, XmlStatus::Error, "Expected parse to fail");
-    assert_eq!(parser.error_code(), XmlError::UnboundPrefix, "Expected UnboundPrefix error");
+    assert_eq!(
+        parser.error_code(),
+        XmlError::UnboundPrefix,
+        "Expected UnboundPrefix error"
+    );
 }
 
 #[test]
