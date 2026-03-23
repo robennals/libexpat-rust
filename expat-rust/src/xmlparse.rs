@@ -1441,6 +1441,19 @@ impl Parser {
                         }
                     }
                     self.foreign_dtd = false;
+                    // If we didn't load the external DTD (no handler or parsing disabled),
+                    // still need to check not-standalone for docs with external subset
+                    if self.param_entity_parsing == ParamEntityParsing::Never
+                        || self.external_entity_ref_handler.is_none()
+                    {
+                        if !self.dtd_standalone {
+                            if let Some(handler) = &mut self.not_standalone_handler {
+                                if !handler() {
+                                    return (XmlError::NotStandalone, false);
+                                }
+                            }
+                        }
+                    }
                 } else {
                     // No external subset — check not-standalone
                     if self.has_param_entity_refs && !self.dtd_standalone {
