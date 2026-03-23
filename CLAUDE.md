@@ -115,6 +115,19 @@ See [docs/architecture.md](docs/architecture.md) for details.
 4. **Use Rust standard library types** — `String`/`Vec`/`HashMap`, not C-style pools or hash tables
 5. **Opus coordinates, Haiku implements** — Opus should set up tooling, generate prompts (via `ast-compare.py --prompt`), and review. Haiku agents do the actual code writing, one subsystem at a time.
 6. **Match C architecture unless there's a specific Rust reason to diverge** — Function signatures, processor patterns, data flow should mirror C. Diverge only for safety (no unsafe) or Rust types (HashMap vs hash table). Don't "Rustify" the architecture in ways that break behavioral equivalence. E.g., processors take `(data, start, end) -> (error, next_pos)` matching C's `processor(parser, start, end, &endPtr)`.
+7. **Never do workarounds — always port the C function** — When a test fails because a C function is missing, port that function 1:1. Don't try custom approaches. Use `--missing-functions` to find what's needed, extract the C source, port it line-by-line, verify with `--prompt`.
+
+## Principled Test Skips
+
+These C tests don't apply to the Rust port and are intentionally skipped:
+
+| Test | Reason |
+|------|--------|
+| `test_accounting_precision` | Tests C-specific byte counting for DoS protection (`XML_ACCOUNT_*` macros). Rust uses different memory model. |
+| `test_amplification_isolated_external_parser` | Tests C amplification limit thresholds. Not applicable to Rust's allocation model. |
+| `test_billion_laughs_attack_protection_api` | Tests `XML_SetBillionLaughsAttackProtection*` API which uses C-specific byte accounting. |
+| `test_misc_alloc_create_parser` | Tests custom `malloc`/`realloc`/`free` hooks via `XML_ParserCreate_MM`. Rust uses its own allocator. |
+| `test_misc_alloc_create_parser_with_encoding` | Same as above but with encoding parameter. |
 
 ## expat-ffi Notes
 
