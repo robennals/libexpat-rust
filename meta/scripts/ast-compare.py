@@ -384,14 +384,15 @@ ROLE_MAP = {
 }
 
 
-def compare(c_func_name, r_func_name, extra_rust_funcs=None):
+def compare(c_func_name, r_func_name, extra_rust_funcs=None, c_file=None, r_file=None):
     """Main comparison function.
 
     extra_rust_funcs: list of additional Rust function names whose errors/handlers/cases
     should be merged into the Rust side (for split functions like handle_prolog_role).
+    c_file/r_file: override default C/Rust source files (for comparing tokenizer, etc.)
     """
-    c_src = open(C_FILE, 'rb').read()
-    r_src = open(RUST_FILE, 'rb').read()
+    c_src = open(c_file or C_FILE, 'rb').read()
+    r_src = open(r_file or RUST_FILE, 'rb').read()
 
     c_tree = parse_c(c_src)
     r_tree = parse_rust(r_src)
@@ -814,6 +815,35 @@ def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
+
+    # Parse --files flag to override C/Rust source files
+    # Usage: --files <c_file> <rust_file> <command> ...
+    global C_FILE, RUST_FILE
+    if sys.argv[1] == "--files":
+        if len(sys.argv) < 5:
+            print("Usage: ast-compare.py --files <c_file> <rust_file> <command> ...")
+            sys.exit(1)
+        C_FILE = os.path.join(ROOT, sys.argv[2])
+        RUST_FILE = os.path.join(ROOT, sys.argv[3])
+        sys.argv = [sys.argv[0]] + sys.argv[4:]  # Remove --files args
+
+    # Shorthand: --tok sets files to tokenizer sources
+    if sys.argv[1] == "--tok":
+        tok_c = os.path.join(ROOT, "expat", "expat", "lib", "xmltok.c")
+        if not os.path.exists(tok_c):
+            tok_c = os.path.join(ROOT, "expat", "lib", "xmltok.c")
+        C_FILE = tok_c
+        RUST_FILE = os.path.join(ROOT, "expat-rust", "src", "xmltok.rs")
+        sys.argv = [sys.argv[0]] + sys.argv[2:]  # Remove --tok
+
+    # Shorthand: --tok-impl sets files to tokenizer implementation
+    if sys.argv[1] == "--tok-impl":
+        tok_c = os.path.join(ROOT, "expat", "expat", "lib", "xmltok_impl.c")
+        if not os.path.exists(tok_c):
+            tok_c = os.path.join(ROOT, "expat", "lib", "xmltok_impl.c")
+        C_FILE = tok_c
+        RUST_FILE = os.path.join(ROOT, "expat-rust", "src", "xmltok_impl.rs")
+        sys.argv = [sys.argv[0]] + sys.argv[2:]  # Remove --tok-impl
 
     if sys.argv[1] == "--all":
         pairs = get_pairs()
