@@ -1130,6 +1130,28 @@ impl Parser {
                     let role =
                         xmlrole::xml_token_role(&mut self.prolog_state, role_tok, &tok_text, &[]);
 
+
+                    // Handle IgnoreSect specially: scan past the closing ]]>
+                    if role == xmlrole::Role::IgnoreSect {
+                        let (error, ignore_end) = self.do_ignore_section(data, next, end);
+                        if error != XmlError::None {
+                            // If ignore section is incomplete and we expect more data, buffer and wait
+                            if have_more {
+                                self.buffer = data[pos..].to_vec();
+                                return (XmlError::None, end);
+                            }
+                            return (error, pos);
+                        }
+                        // Report the entire ignore section to the default handler
+                        // The section runs from 'pos' (start of <![) to 'ignore_end' (after ]]>)
+                        if self.default_handler.is_some() {
+                            self.report_default(&xmltok::Utf8Encoding, data, pos, ignore_end);
+                        }
+                        self.advance_pos_slice(&data[pos..ignore_end]);
+                        pos = ignore_end;
+                        continue;
+                    }
+
                     // Dispatch on role
                     let (error, suppress_default) = self.handle_prolog_role(role, tok, data, pos, next, &tok_text);
                     if error != XmlError::None {
@@ -1883,10 +1905,12 @@ impl Parser {
             }
             Role::IgnoreSect => {
                 // Ignore section: <![IGNORE[ ... ]]> — suppress default (already called internally)
+                // NOTE: This handler is now unreachable since do_prolog handles IgnoreSect specially
+                // before calling handle_prolog_role. Keeping for safety but should not be reached.
                 if self.default_handler.is_some() {
                     self.report_default(&xmltok::Utf8Encoding, data, pos, next);
                 }
-                let result = self.do_ignore_section(data, next, data.len());
+                let (result, _) = self.do_ignore_section(data, next, data.len());
                 (result, true)
             }
             Role::ParamEntityRef => {
@@ -2934,14 +2958,14 @@ impl Parser {
     /// - Expand character references (&#NN; &#xNN;)
     /// Process an ignore section: <![IGNORE[ ... ]]>
     /// Scans from start position for ]]> while tracking nested <![
-    fn do_ignore_section(&self, data: &[u8], start: usize, end: usize) -> XmlError {
+    fn do_ignore_section(&self, data: &[u8], start: usize, end: usize) -> (XmlError, usize) {
         let mut level = 1; // Already inside one IGNORE section
         let mut i = start;
         while i < end {
             if i + 3 <= end && &data[i..i + 3] == b"]]>" {
                 level -= 1;
                 if level == 0 {
-                    return XmlError::None;
+                    return (XmlError::None, i + 3);
                 }
                 i += 3;
             } else if i + 3 <= end && &data[i..i + 3] == b"<![" {
@@ -2951,7 +2975,7 @@ impl Parser {
                 i += 1;
             }
         }
-        XmlError::Syntax
+        (XmlError::Syntax, start)
     }
 
     /// Add a content element child to the current group in the content model stack
