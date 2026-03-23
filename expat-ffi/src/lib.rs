@@ -1346,6 +1346,17 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
             (*new_ptr).c_start_doctype_handler = handle.c_start_doctype_handler;
             (*new_ptr).c_end_doctype_handler = handle.c_end_doctype_handler;
 
+            // Copy DTD handlers
+            (*new_ptr).c_element_decl_handler = handle.c_element_decl_handler;
+            (*new_ptr).c_attlist_decl_handler = handle.c_attlist_decl_handler;
+            (*new_ptr).c_entity_decl_handler = handle.c_entity_decl_handler;
+            (*new_ptr).c_notation_decl_handler = handle.c_notation_decl_handler;
+            (*new_ptr).c_unparsed_entity_decl_handler = handle.c_unparsed_entity_decl_handler;
+
+            // Copy namespace handlers
+            (*new_ptr).c_start_ns_handler = handle.c_start_ns_handler;
+            (*new_ptr).c_end_ns_handler = handle.c_end_ns_handler;
+
             // Re-register handlers on child parser (creates closures with correct parser pointer)
             XML_SetElementHandler(new_ptr, handle.c_start_element_handler, handle.c_end_element_handler);
             XML_SetCharacterDataHandler(new_ptr, handle.c_character_data_handler);
@@ -1367,6 +1378,27 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
             if handle.c_skipped_entity_handler.is_some() {
                 XML_SetSkippedEntityHandler(new_ptr, handle.c_skipped_entity_handler);
             }
+
+            // Re-register DTD handlers on child parser
+            if handle.c_element_decl_handler.is_some() {
+                XML_SetElementDeclHandler(new_ptr, handle.c_element_decl_handler);
+            }
+            if handle.c_attlist_decl_handler.is_some() {
+                XML_SetAttlistDeclHandler(new_ptr, handle.c_attlist_decl_handler);
+            }
+            if handle.c_entity_decl_handler.is_some() {
+                XML_SetEntityDeclHandler(new_ptr, handle.c_entity_decl_handler);
+            }
+            if handle.c_notation_decl_handler.is_some() {
+                XML_SetNotationDeclHandler(new_ptr, handle.c_notation_decl_handler);
+            }
+            if handle.c_unparsed_entity_decl_handler.is_some() {
+                XML_SetUnparsedEntityDeclHandler(new_ptr, handle.c_unparsed_entity_decl_handler);
+            }
+
+            // Re-register namespace handlers on child parser
+            XML_SetStartNamespaceDeclHandler(new_ptr, handle.c_start_ns_handler);
+            XML_SetEndNamespaceDeclHandler(new_ptr, handle.c_end_ns_handler);
 
             new_ptr
         }
@@ -1834,6 +1866,11 @@ pub unsafe extern "C" fn XML_SetStartNamespaceDeclHandler(
             .set_start_namespace_decl_handler(Some(Box::new(
                 move |prefix: Option<&str>, uri: &str| {
                     let h = &*parser_ptr;
+                    let ud = if h.use_parser_as_handler_arg {
+                        parser_ptr as *mut c_void
+                    } else {
+                        h.user_data
+                    };
                     let pb = prefix.map(|s| {
                         let mut b = s.as_bytes().to_vec();
                         b.push(0);
@@ -1842,7 +1879,7 @@ pub unsafe extern "C" fn XML_SetStartNamespaceDeclHandler(
                     let mut ub = uri.as_bytes().to_vec();
                     ub.push(0);
                     handler_fn(
-                        h.user_data,
+                        ud,
                         pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
                         ub.as_ptr() as _,
                     );
@@ -1868,13 +1905,18 @@ pub unsafe extern "C" fn XML_SetEndNamespaceDeclHandler(
         handle.parser.set_end_namespace_decl_handler(Some(Box::new(
             move |prefix: Option<&str>| {
                 let h = &*parser_ptr;
+                let ud = if h.use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    h.user_data
+                };
                 let pb = prefix.map(|s| {
                     let mut b = s.as_bytes().to_vec();
                     b.push(0);
                     b
                 });
                 handler_fn(
-                    h.user_data,
+                    ud,
                     pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
                 );
             },
