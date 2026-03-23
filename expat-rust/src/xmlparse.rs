@@ -2323,7 +2323,7 @@ impl Parser {
                     }
 
                     // Check if root element closed (empty root element)
-                    if self.tag_level == 0 && start_tag_level == 0 {
+                    if self.tag_level == start_tag_level {
                         self.root_closed = true;
                         self.processor = Processor::Epilog;
                         if next < end {
@@ -2337,7 +2337,8 @@ impl Parser {
 
                 XmlTok::EndTag => {
                     // Check for async entity — tag level mismatch indicates an entity was opened but not closed
-                    if self.tag_level == start_tag_level {
+                    // Only applies at top level (start_tag_level == 0)
+                    if start_tag_level == 0 && self.tag_level == start_tag_level {
                         return (XmlError::AsyncEntity, pos);
                     }
 
@@ -2412,7 +2413,7 @@ impl Parser {
                     }
 
                     // Check if root element closed
-                    if self.tag_level == 0 && start_tag_level == 0 {
+                    if self.tag_level == start_tag_level {
                         self.root_closed = true;
                         self.processor = Processor::Epilog;
                         if next < end {
