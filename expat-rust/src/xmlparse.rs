@@ -4303,72 +4303,78 @@ impl Parser {
 
     fn detect_and_transcode_impl(&mut self, data: &[u8]) -> Result<Vec<u8>, XmlError> {
         self.original_chunk_bom_len = 0;
-        if data.len() >= 2 {
-            // UTF-16 BE BOM: FE FF
-            if data[0] == 0xFE && data[1] == 0xFF {
-                // Only check encoding conflict if protocol_encoding_set is false
-                // If XML_SetEncoding was called, the protocol encoding overrides any BOM
-                if !self.protocol_encoding_set {
-                    if let Some(ref enc) = self.encoding_name {
-                        let enc_upper = enc.to_uppercase();
-                        if enc_upper != "UTF-16" && enc_upper != "UTF-16BE" {
-                            return Err(XmlError::IncorrectEncoding);
-                        }
+
+        // Use init_scan to detect encoding, matching C libexpat logic exactly
+        // is_content_state is false for initial parse (prolog), will be true for external entity content
+        let is_content_state = matches!(self.processor, Processor::ExternalEntity);
+        let scan_result = xmltok::init_scan(data, is_content_state);
+
+        match scan_result {
+            xmltok::InitScanResult::Bom(enc, bom_len) => {
+                // BOM found — skip these bytes and set encoding
+                self.original_chunk_bom_len = bom_len;
+                let data_after_bom = &data[bom_len..];
+
+                match enc {
+                    xmltok::DetectedEncoding::Utf8 => {
+                        // UTF-8 BOM — just skip it
+                        Ok(data_after_bom.to_vec())
                     }
-                }
-                self.detected_encoding = Some("UTF-16BE".to_string());
-                self.original_chunk_bom_len = 2;
-                return self.transcode_utf16_with_pending(&data[2..], true);
-            }
-            // UTF-16 LE BOM: FF FE
-            if data[0] == 0xFF && data[1] == 0xFE {
-                // Only check encoding conflict if protocol_encoding_set is false
-                if !self.protocol_encoding_set {
-                    if let Some(ref enc) = self.encoding_name {
-                        let enc_upper = enc.to_uppercase();
-                        if enc_upper != "UTF-16" && enc_upper != "UTF-16LE" {
-                            return Err(XmlError::IncorrectEncoding);
+                    xmltok::DetectedEncoding::Utf16BE => {
+                        // Check encoding conflict if protocol encoding not set
+                        if !self.protocol_encoding_set {
+                            if let Some(ref enc_name) = self.encoding_name {
+                                let enc_upper = enc_name.to_uppercase();
+                                if enc_upper != "UTF-16" && enc_upper != "UTF-16BE" {
+                                    return Err(XmlError::IncorrectEncoding);
+                                }
+                            }
                         }
+                        self.detected_encoding = Some("UTF-16BE".to_string());
+                        self.transcode_utf16_with_pending(data_after_bom, true)
                     }
-                }
-                self.detected_encoding = Some("UTF-16LE".to_string());
-                self.original_chunk_bom_len = 2;
-                return self.transcode_utf16_with_pending(&data[2..], false);
-            }
-            // Check for UTF-16 without BOM (NUL byte pattern)
-            if data.len() >= 2 {
-                if data[0] == 0 && data[1] != 0 {
-                    // UTF-16BE: high byte is 0, low byte is not
-                    self.detected_encoding = Some("UTF-16BE".to_string());
-                    return self.transcode_utf16_with_pending(data, true);
-                }
-                if data[0] != 0 && data[1] == 0 {
-                    // UTF-16LE: high byte is not 0, low byte is 0
-                    // This requires at least 2 bytes to be confident
-                    if data.len() >= 2 {
+                    xmltok::DetectedEncoding::Utf16LE => {
+                        // Check encoding conflict if protocol encoding not set
+                        if !self.protocol_encoding_set {
+                            if let Some(ref enc_name) = self.encoding_name {
+                                let enc_upper = enc_name.to_uppercase();
+                                if enc_upper != "UTF-16" && enc_upper != "UTF-16LE" {
+                                    return Err(XmlError::IncorrectEncoding);
+                                }
+                            }
+                        }
                         self.detected_encoding = Some("UTF-16LE".to_string());
-                        return self.transcode_utf16_with_pending(data, false);
+                        self.transcode_utf16_with_pending(data_after_bom, false)
                     }
                 }
             }
-            // More specific check if we have 4+ bytes
-            if data.len() >= 4 {
-                if data[0] == 0 && data[1] == b'<' {
-                    self.detected_encoding = Some("UTF-16BE".to_string());
-                    return self.transcode_utf16_with_pending(data, true);
-                }
-                if data[0] == b'<' && data[1] == 0 {
-                    self.detected_encoding = Some("UTF-16LE".to_string());
-                    return self.transcode_utf16_with_pending(data, false);
+            xmltok::InitScanResult::Encoding(enc) => {
+                // Encoding detected without BOM
+                match enc {
+                    xmltok::DetectedEncoding::Utf8 => {
+                        // UTF-8 encoding, use data as-is
+                        Ok(data.to_vec())
+                    }
+                    xmltok::DetectedEncoding::Utf16BE => {
+                        self.detected_encoding = Some("UTF-16BE".to_string());
+                        self.transcode_utf16_with_pending(data, true)
+                    }
+                    xmltok::DetectedEncoding::Utf16LE => {
+                        self.detected_encoding = Some("UTF-16LE".to_string());
+                        self.transcode_utf16_with_pending(data, false)
+                    }
                 }
             }
+            xmltok::InitScanResult::Partial => {
+                // Need more bytes for reliable encoding detection
+                // Return empty to signal that we need to buffer and wait
+                Ok(Vec::new())
+            }
+            xmltok::InitScanResult::None => {
+                // No data
+                Ok(Vec::new())
+            }
         }
-        // UTF-8 BOM: EF BB BF — skip it
-        if data.len() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
-            self.original_chunk_bom_len = 3;
-            return Ok(data[3..].to_vec());
-        }
-        Ok(data.to_vec())
     }
 
     /// Transcode UTF-16 data to UTF-8, saving any odd trailing byte

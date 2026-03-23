@@ -456,6 +456,98 @@ pub fn trim_to_complete_utf8_characters(data: &[u8]) -> usize {
     end // return 0 if we walked past the beginning
 }
 
+/// Detected encoding from initial BOM or byte patterns
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectedEncoding {
+    Utf8,
+    Utf16BE,
+    Utf16LE,
+}
+
+/// Result of initial encoding scan
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitScanResult {
+    /// BOM found — skip these bytes, then use the detected encoding
+    Bom(DetectedEncoding, usize),
+    /// Encoding detected without BOM (no bytes to skip)
+    Encoding(DetectedEncoding),
+    /// Need more bytes to determine encoding
+    Partial,
+    /// No data provided
+    None,
+}
+
+/// Scan the first bytes of input to detect encoding and BOM.
+///
+/// This is based on the C libexpat's `initScan()` function. It checks for:
+/// - UTF-16 BOMs (FE FF = BE, FF FE = LE)
+/// - UTF-8 BOM (EF BB BF)
+/// - UTF-16 patterns without BOM (null bytes)
+///
+/// The `is_content_state` parameter is true for external entity content
+/// (where we're more lenient) and false for document entities (where we require
+/// certain patterns).
+pub fn init_scan(data: &[u8], is_content_state: bool) -> InitScanResult {
+    if data.is_empty() {
+        return InitScanResult::None;
+    }
+
+    // Single byte — check if it could be start of BOM
+    if data.len() == 1 {
+        match data[0] {
+            0xFE | 0xFF | 0xEF | 0x00 | 0x3C => InitScanResult::Partial,
+            _ => InitScanResult::Encoding(DetectedEncoding::Utf8),
+        }
+    } else {
+        // 2+ bytes — check BOM patterns and UTF-16 detection
+        match (data[0], data[1]) {
+            // UTF-16 BE BOM
+            (0xFE, 0xFF) => InitScanResult::Bom(DetectedEncoding::Utf16BE, 2),
+            // UTF-16 LE BOM
+            (0xFF, 0xFE) => InitScanResult::Bom(DetectedEncoding::Utf16LE, 2),
+            // Possible UTF-8 BOM (EF BB BF)
+            (0xEF, 0xBB) => {
+                if data.len() < 3 {
+                    InitScanResult::Partial
+                } else if data[2] == 0xBF {
+                    InitScanResult::Bom(DetectedEncoding::Utf8, 3)
+                } else {
+                    InitScanResult::Encoding(DetectedEncoding::Utf8)
+                }
+            }
+            // 3C 00 = UTF-16LE ('<' followed by null in LE)
+            (0x3C, 0x00) => {
+                // In prolog state (not content), treat as UTF-16LE
+                // In content state (external entity), only if we're not already told it's UTF-16BE
+                if !is_content_state {
+                    InitScanResult::Encoding(DetectedEncoding::Utf16LE)
+                } else {
+                    InitScanResult::Encoding(DetectedEncoding::Utf8)
+                }
+            }
+            // Null first byte — likely UTF-16BE
+            (0x00, _) => {
+                // If not in content state, or if second byte is '<', it's UTF-16BE
+                if !is_content_state || data[1] == 0x3C {
+                    InitScanResult::Encoding(DetectedEncoding::Utf16BE)
+                } else {
+                    InitScanResult::Encoding(DetectedEncoding::Utf8)
+                }
+            }
+            // Null second byte — likely UTF-16LE
+            (_, 0x00) => {
+                // If not in content state, treat as UTF-16LE
+                if !is_content_state {
+                    InitScanResult::Encoding(DetectedEncoding::Utf16LE)
+                } else {
+                    InitScanResult::Encoding(DetectedEncoding::Utf8)
+                }
+            }
+            _ => InitScanResult::Encoding(DetectedEncoding::Utf8),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
