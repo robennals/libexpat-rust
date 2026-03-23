@@ -2297,23 +2297,27 @@ impl Parser {
                         }
                     }
 
+                    // For empty elements, call start and end handlers if they exist.
+                    // If neither exists, report to default handler (matches C logic).
+                    let mut no_elm_handlers = true;
                     if let Some(handler) = &mut self.start_element_handler {
                         let attr_refs: Vec<(&str, &str)> = attrs
                             .iter()
                             .map(|(k, v)| (k.as_str(), v.as_str()))
                             .collect();
                         handler(&effective_tag_name, &attr_refs);
-                    } else if self.default_handler.is_some() {
-                        self.report_default(enc, data, pos, next);
+                        no_elm_handlers = false;
                     }
-                    // For empty elements, set event_pos to end of tag for end-element callback
-                    // (matches C: eventPtr points to end of tag for EndElement of empty tags)
-                    self.event_pos = next;
                     if let Some(handler) = &mut self.end_element_handler {
+                        // (matches C: eventPtr points to end of tag only if both start and end handlers exist)
+                        if self.start_element_handler.is_some() {
+                            self.event_pos = next;
+                        }
                         handler(&effective_tag_name);
-                    } else if self.start_element_handler.is_none() && self.default_handler.is_some()
-                    {
-                        // Only forward end of empty element if we didn't already forward the whole thing
+                        no_elm_handlers = false;
+                    }
+                    if no_elm_handlers && self.default_handler.is_some() {
+                        self.report_default(enc, data, pos, next);
                     }
 
                     // Pop namespace bindings for empty element (tag_level still at binding level)
@@ -3201,7 +3205,8 @@ impl Parser {
 
     fn report_default<E: Encoding>(&mut self, _enc: &E, data: &[u8], start: usize, end: usize) {
         if let Some(handler) = &mut self.default_handler {
-            handler(&data[start..end]);
+            let chunk = &data[start..end];
+            handler(chunk);
         }
     }
 
