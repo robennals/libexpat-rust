@@ -384,7 +384,8 @@ pub unsafe extern "C" fn XML_GetBuffer(parser: XML_Parser, len: c_int) -> *mut c
         return ptr::null_mut();
     }
     // Reject excessively large buffers (matches C overflow detection)
-    if len as usize > (i32::MAX as usize) / 2 {
+    // C allows up to INT_MAX/2 + (INT_MAX & 1) which rounds up to (INT_MAX+1)/2
+    if len as usize > ((i32::MAX as usize) + 1) / 2 {
         return ptr::null_mut();
     }
     let handle = &mut *parser;
