@@ -199,6 +199,8 @@ pub enum Processor {
     CdataSection,
     /// External entity — accepts optional text declaration then processes content
     ExternalEntity,
+    /// External parameter entity — one-shot bootstrap for PE content
+    ExternalParamEntity,
     /// Internal entity processor — processes entity content from the stack
     InternalEntity,
     /// Processes after root element closes
@@ -816,7 +818,10 @@ impl Parser {
                     self.do_cdata_section(&enc, &data, start, end, have_more)
                 }
                 Processor::ExternalEntity => {
-                    self.external_entity_init_processor_v2(&data, start, end)
+                    self.external_entity_init_processor3(&data, start, end)
+                }
+                Processor::ExternalParamEntity => {
+                    self.external_par_ent_processor(&data, start, end)
                 }
                 Processor::InternalEntity => {
                     self.internal_entity_processor(&data, start, end)
@@ -914,7 +919,7 @@ impl Parser {
     /// External entity init processor — new-style (data, start, end) version.
     /// Port of C externalEntityInitProcessor3: uses content tokenizer to detect
     /// text declaration, then transitions to content processing.
-    fn external_entity_init_processor_v2(&mut self, data: &[u8], start: usize, end: usize) -> (XmlError, usize) {
+    fn external_entity_init_processor3(&mut self, data: &[u8], start: usize, end: usize) -> (XmlError, usize) {
         let enc = xmltok::Utf8Encoding;
         let tok_result = xmltok_impl::content_tok(&enc, data, start, end);
         match tok_result {
@@ -936,7 +941,7 @@ impl Parser {
                 XmlTok::Bom => {
                     // Skip BOM, continue with init
                     if next_pos < end {
-                        self.external_entity_init_processor_v2(data, next_pos, end)
+                        self.external_entity_init_processor3(data, next_pos, end)
                     } else {
                         (XmlError::None, next_pos)
                     }
@@ -960,6 +965,93 @@ impl Parser {
                 }
             }
         }
+    }
+
+    /// External parameter entity processor — port of C externalParEntProcessor.
+    ///
+    /// This is a one-shot bootstrapping processor for external parameter entity content.
+    /// It handles the initial token (which may be a BOM), then delegates to the prolog processor.
+    ///
+    /// The C function:
+    /// 1. Gets the first prolog token
+    /// 2. If tok <= 0 and not final buffer, returns OK (wait for more data)
+    /// 3. If tok <= 0 (final), handles error cases
+    /// 4. If tok is BOM, skips it and gets next token
+    /// 5. Sets processor to prologProcessor and calls doProlog
+    fn external_par_ent_processor(&mut self, data: &[u8], start: usize, end: usize) -> (XmlError, usize) {
+        let enc = xmltok::Utf8Encoding;
+
+        // Get first token
+        let tok_result = xmltok_impl::prolog_tok(&enc, data, start, end);
+        let (mut tok, mut next) = match tok_result {
+            Ok(TokenResult { token, next_pos }) => (token, next_pos),
+            Err(_err_pos) => {
+                // Token parsing error
+                if !self.is_final {
+                    // Not final — buffer and wait for more data
+                    return (XmlError::None, start);
+                }
+                // Final buffer — return error
+                return (XmlError::InvalidToken, start);
+            }
+        };
+
+        // Handle negative token values (errors/incomplete)
+        if tok as i32 <= 0 {
+            if !self.is_final && tok != XmlTok::Invalid {
+                // Not final and not an invalid token — buffer and wait
+                return (XmlError::None, start);
+            }
+
+            // Final buffer or invalid token — handle error cases
+            match tok {
+                XmlTok::Invalid => return (XmlError::InvalidToken, start),
+                XmlTok::Partial => return (XmlError::UnclosedToken, start),
+                XmlTok::PartialChar => return (XmlError::PartialChar, start),
+                XmlTok::None => {
+                    // Start == end, no tokens — proceed to doProlog
+                    // tok = None, next will be used as-is
+                }
+                _ => {
+                    // Other negative values — just proceed
+                }
+            }
+        } else if tok == XmlTok::Bom {
+            // BOM found — skip it and get next token
+            // This prevents doProlog from seeing the BOM which it doesn't accept
+            // in an external subset context
+            if next < end {
+                let tok_result2 = xmltok_impl::prolog_tok(&enc, data, next, end);
+                match tok_result2 {
+                    Ok(TokenResult { token, next_pos }) => {
+                        tok = token;
+                        next = next_pos;
+                    }
+                    Err(_) => {
+                        if !self.is_final {
+                            return (XmlError::None, start);
+                        }
+                        return (XmlError::InvalidToken, next);
+                    }
+                }
+            } else {
+                // BOM at end of buffer
+                if !self.is_final {
+                    return (XmlError::None, start);
+                }
+                // BOM at end and final — no more tokens
+                tok = XmlTok::None;
+                next = end;
+            }
+        }
+
+        // Now call doProlog with the token we have
+        // Set processor to Prolog for the main loop
+        self.processor = Processor::Prolog;
+
+        // Call do_prolog starting from the position after the BOM (or from start if no BOM)
+        let have_more = !self.is_final;
+        self.do_prolog(&enc, data, start, end, have_more)
     }
 
     /// Initial prolog processor — detects encoding and transitions to prolog processor
