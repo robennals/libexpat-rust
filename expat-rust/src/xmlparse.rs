@@ -1101,7 +1101,12 @@ impl Parser {
                         self.buffer = data[pos..].to_vec();
                         return (XmlError::None, end);
                     }
-                    return (XmlError::UnclosedToken, pos);
+                    // Final buffer with trailing CR: convert to newline and continue
+                    // This handles DTD content that ends with \r followed by EOF
+                    // In C doProlog, -3 (TRAILING_CR) falls through to default case
+                    // which negates it and sets next=end. We handle it as whitespace.
+                    pos = next; // skip the CR
+                    continue;
                 }
                 XmlTok::Invalid => {
                     // Invalid token
