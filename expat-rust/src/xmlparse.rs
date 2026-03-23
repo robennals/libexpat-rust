@@ -4589,9 +4589,9 @@ impl Parser {
             // which needs tag_level == content_start_tag_level, set it at creation.
             child.tag_level = 1;
         } else {
-            // For foreign DTD (empty context), start parsing in internal subset mode
-            // to allow DTD declarations like <!ELEMENT> without DOCTYPE wrapper
-            child.prolog_state.state = crate::xmlrole::PrologState::InternalSubset;
+            // For foreign DTD (empty context), initialize as external entity
+            // to allow parsing text declaration then DTD declarations
+            child.prolog_state.init_external_entity();
             child.parsing_foreign_dtd = true;
         }
         Some(child)
