@@ -716,30 +716,67 @@ impl Parser {
         self.prolog_processor();
     }
 
-    /// External entity initial processor — accepts optional text declaration then content
-    /// Matches C externalEntityInitProcessor behavior
+    /// External entity init processor — port of C externalEntityInitProcessor3.
+    /// Uses content tokenizer to detect text declaration. On text decl, processes it
+    /// via prolog. On any other token, sets tag_level=1 and delegates to content.
+    /// On Partial/None, buffers and waits for more data.
     fn external_entity_init_processor(&mut self) {
         let data = std::mem::take(&mut self.buffer);
         if data.is_empty() {
             return;
         }
 
-        // Check if data starts with an XML text declaration (<?xml ...)
-        // If so, process it in prolog mode, then switch to content
-        // If not, go straight to content
         let enc = xmltok::Utf8Encoding;
-        if data.len() >= 5 && &data[0..5] == b"<?xml" {
-            // Has a text declaration — process via prolog to handle it
-            self.processor = Processor::Prolog;
-            self.buffer = data;
-            self.prolog_processor();
-        } else {
-            // No text declaration — go straight to content
-            self.tag_level = 1; // Match C externalEntityInitProcessor3
-            self.processor = Processor::Content;
-            self.buffer = data;
-            let _ = enc; // suppress unused warning
-            self.content_processor();
+        let tok_result = xmltok_impl::content_tok(&enc, &data, 0, data.len());
+
+        match tok_result {
+            Ok(TokenResult { token, next_pos }) => match token {
+                XmlTok::XmlDecl => {
+                    // Text declaration found — process via prolog then content
+                    // C: processXmlDecl(parser, 1, start, next)
+                    // Use prolog processor to handle the text declaration
+                    self.processor = Processor::Prolog;
+                    self.buffer = data;
+                    self.prolog_processor();
+                }
+                XmlTok::Partial | XmlTok::PartialChar => {
+                    if !self.is_final {
+                        // Need more data — stay in init processor
+                        self.buffer = data;
+                    } else {
+                        self.error_code = if token == XmlTok::Partial {
+                            XmlError::UnclosedToken
+                        } else {
+                            XmlError::PartialChar
+                        };
+                    }
+                }
+                XmlTok::Bom => {
+                    // Skip BOM, stay in init processor for next token
+                    if next_pos < data.len() {
+                        self.buffer = data[next_pos..].to_vec();
+                    }
+                    // Stay in ExternalEntity processor
+                }
+                _ => {
+                    // Not a text declaration — transition to content mode
+                    // C: parser->m_processor = externalEntityContentProcessor;
+                    //    parser->m_tagLevel = 1;
+                    //    return externalEntityContentProcessor(parser, start, end, endPtr);
+                    self.processor = Processor::Content;
+                    self.tag_level = self.content_start_tag_level;
+                    // Pass ALL data to content processor (it will re-tokenize from start)
+                    self.buffer = data;
+                    self.content_processor();
+                }
+            },
+            Err(_err_pos) => {
+                if !self.is_final {
+                    self.buffer = data;
+                } else {
+                    self.error_code = XmlError::InvalidToken;
+                }
+            }
         }
     }
 
