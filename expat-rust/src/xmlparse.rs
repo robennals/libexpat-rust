@@ -363,6 +363,8 @@ pub struct Parser {
     foreign_dtd: bool,
     /// Whether this parser is parsing a foreign DTD subset (external entity with empty context)
     parsing_foreign_dtd: bool,
+    /// Whether this parser is a subordinate (child) parser — cannot be reset
+    pub is_subordinate: bool,
     /// Billion laughs: maximum amplification factor (0.0 = use default)
     billion_laughs_max_amplification: f32,
     /// Billion laughs: activation threshold in bytes (0 = use default)
@@ -485,6 +487,7 @@ impl Parser {
             current_attlist_type: None,
             foreign_dtd: false,
             parsing_foreign_dtd: false,
+            is_subordinate: false,
             billion_laughs_max_amplification: 0.0,
             billion_laughs_activation_threshold: 0,
             prolog_state: XmlRoleState::new(),
@@ -594,6 +597,7 @@ impl Parser {
             current_attlist_type: None,
             foreign_dtd: false,
             parsing_foreign_dtd: false,
+            is_subordinate: false,
             billion_laughs_max_amplification: 0.0,
             billion_laughs_activation_threshold: 0,
             prolog_state: XmlRoleState::new(),
@@ -635,6 +639,10 @@ impl Parser {
     ///
     /// Equivalent to XML_ParserReset(parser, encoding) in C
     pub fn reset(&mut self, encoding: Option<&str>) -> bool {
+        // C: Cannot reset a subordinate (child) parser
+        if self.is_subordinate {
+            return false;
+        }
         self.buffer.clear();
         self.error_code = XmlError::None;
         self.parsing_state = ParsingState::Initialized;
@@ -3784,7 +3792,17 @@ impl Parser {
                 } else {
                     // Known encoding, detect BOM etc
                     match self.detect_and_transcode(data) {
-                        Ok(transcoded) => self.buffer = transcoded,
+                        Ok(transcoded) => {
+                            self.buffer = transcoded;
+                            // If buffer is empty, we're waiting for more data for encoding detection
+                            // Return early without processing
+                            if self.buffer.is_empty() && !self.is_final {
+                                // Update position tracking before returning
+                                if self.error_code == XmlError::None {
+                                    return XmlStatus::Ok;
+                                }
+                            }
+                        }
                         Err(err) => {
                             self.error_code = err;
                             self.parsing_state = ParsingState::Finished;
@@ -3795,7 +3813,17 @@ impl Parser {
             } else {
                 // No pre-set encoding — detect from BOM
                 match self.detect_and_transcode(data) {
-                    Ok(transcoded) => self.buffer = transcoded,
+                    Ok(transcoded) => {
+                        self.buffer = transcoded;
+                        // If buffer is empty, we're waiting for more data for encoding detection
+                        // Return early without processing
+                        if self.buffer.is_empty() && !self.is_final {
+                            // Update position tracking before returning
+                            if self.error_code == XmlError::None {
+                                return XmlStatus::Ok;
+                            }
+                        }
+                    }
                     Err(err) => {
                         self.error_code = err;
                         self.parsing_state = ParsingState::Finished;
@@ -3953,6 +3981,23 @@ impl Parser {
         if !self.encoding_detection_buf.is_empty() {
             let mut combined = std::mem::take(&mut self.encoding_detection_buf);
             combined.extend_from_slice(data);
+
+            // Check if combined data could still be a partial BOM
+            if !self.is_final && combined.len() < 4 {
+                // Check if first bytes could be a BOM prefix
+                let could_be_bom = (combined[0] == 0xFF && combined[1] == 0xFE)
+                    || (combined[0] == 0xFE && combined[1] == 0xFF)
+                    || (combined[0] == 0xEF && (combined.len() < 3 || (combined.len() >= 2 && combined[1] == 0xBB)))
+                    || combined[0] == 0x00
+                    || (combined.len() >= 2 && combined[1] == 0x00);
+                if could_be_bom {
+                    // Still looks like a partial BOM, wait for more bytes
+                    self.encoding_detection_buf = combined;
+                    return Ok(Vec::new());
+                }
+            }
+
+            // Either we have a complete BOM signature or enough bytes to know there's no BOM
             return self.detect_and_transcode_impl(&combined);
         }
 
@@ -4732,11 +4777,13 @@ impl Parser {
             // the first token. Since our init processor delegates to content_processor
             // which needs tag_level == content_start_tag_level, set it at creation.
             child.tag_level = 1;
+            child.is_subordinate = true;
         } else {
             // For foreign DTD (empty context), initialize as external entity
             // to allow parsing text declaration then DTD declarations
             child.prolog_state.init_external_entity();
             child.parsing_foreign_dtd = true;
+            child.is_subordinate = true;
         }
         Some(child)
     }
