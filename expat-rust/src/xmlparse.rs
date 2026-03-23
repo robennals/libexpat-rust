@@ -1126,20 +1126,21 @@ impl Parser {
                         return (error, pos);
                     }
 
-                    // Forward to default handler if suppress_default is false
-                    // In C libexpat, reportDefault() is called for prolog tokens
-                    // ONLY when no specific handler consumed them.
-                    if self.default_handler.is_some() && !suppress_default {
-                        self.report_default(&xmltok::Utf8Encoding, data, pos, next);
-                    }
-
                     // If processor changed to Content, break out — remaining data
-                    // will be processed by content_processor
+                    // will be processed by content_processor.
+                    // Don't call report_default for the start tag here — let Content processor handle it
                     if self.processor == Processor::Content {
                         // InstanceStart: the token was the start tag, but
                         // content_tok needs to re-tokenize it, so return pos
                         // (not next) so the start tag is included in content data
                         return (XmlError::None, pos);
+                    }
+
+                    // Forward to default handler if suppress_default is false
+                    // In C libexpat, reportDefault() is called for prolog tokens
+                    // ONLY when no specific handler consumed them.
+                    if self.default_handler.is_some() && !suppress_default {
+                        self.report_default(&xmltok::Utf8Encoding, data, pos, next);
                     }
 
                     // Update position for next iteration
@@ -1395,6 +1396,9 @@ impl Parser {
                             return (XmlError::ExternalEntityHandling, false);
                         }
                     }
+                    // After foreign DTD processing, undefined entities in the document
+                    // should be skipped (they might be defined in the external DTD)
+                    self.has_param_entity_refs = true;
                     // Check not-standalone after foreign DTD processing
                     if !self.dtd_standalone {
                         if let Some(handler) = &mut self.not_standalone_handler {
@@ -2225,37 +2229,83 @@ impl Parser {
                             if self.open_entities.contains(name) {
                                 return (XmlError::RecursiveEntityRef, pos);
                             }
-                            // Expand through do_content (matches C processEntity → internalEntityProcessor)
-                            // Save event_pos/data since entity expansion will modify it
-                            let saved_event_pos = self.event_pos;
-                            let saved_event_cur_byte_count = self.event_cur_byte_count;
-                            let saved_event_cur_data = self.event_cur_data.clone();
+                            // Check which handler takes precedence:
+                            // 1. If skipped entity handler is set, call it (suppresses expansion)
+                            // 2. Else if default_handler_expand is set, expand the entity (allows it through)
+                            // 3. Else if default_handler is set, suppress expansion and report entity ref to default
+                            // 4. Else expand the entity (default behavior)
+                            if let Some(handler) = &mut self.skipped_entity_handler {
+                                handler(name, false);
+                            } else if self.default_handler_expand.is_some() {
+                                // Expand through do_content (matches C processEntity → internalEntityProcessor)
+                                // Save event_pos/data since entity expansion will modify it
+                                let saved_event_pos = self.event_pos;
+                                let saved_event_cur_byte_count = self.event_cur_byte_count;
+                                let saved_event_cur_data = self.event_cur_data.clone();
 
-                            let entity_name = name.to_string();
-                            self.open_entities.insert(entity_name.clone());
-                            let entity_bytes = value.as_bytes().to_vec();
-                            let (entity_err, _) = self.do_content(
-                                self.tag_level,
-                                &xmltok::Utf8Encoding,
-                                &entity_bytes,
-                                0,
-                                entity_bytes.len(),
-                                false,
-                            );
-                            self.open_entities.remove(&entity_name);
+                                let entity_name = name.to_string();
+                                self.open_entities.insert(entity_name.clone());
+                                let entity_bytes = value.as_bytes().to_vec();
+                                let (entity_err, _) = self.do_content(
+                                    self.tag_level,
+                                    &xmltok::Utf8Encoding,
+                                    &entity_bytes,
+                                    0,
+                                    entity_bytes.len(),
+                                    false,
+                                );
+                                self.open_entities.remove(&entity_name);
 
-                            // Restore event context to point to the entity reference, not expanded content
-                            self.event_cur_byte_count = saved_event_cur_byte_count;
-                            self.event_cur_data = saved_event_cur_data;
+                                // Restore event context to point to the entity reference, not expanded content
+                                self.event_cur_byte_count = saved_event_cur_byte_count;
+                                self.event_cur_data = saved_event_cur_data;
 
-                            if entity_err != XmlError::None {
-                                // Set event_pos to the entity reference position so line/column are calculated correctly
-                                self.event_pos = pos;
-                                return (entity_err, pos);
+                                if entity_err != XmlError::None {
+                                    // Set event_pos to the entity reference position so line/column are calculated correctly
+                                    self.event_pos = pos;
+                                    return (entity_err, pos);
+                                }
+
+                                // On success, restore the saved event position
+                                self.event_pos = saved_event_pos;
+                            } else if self.default_handler.is_some() {
+                                // default_handler is set but not default_handler_expand
+                                // Report the entity reference as-is instead of expanding
+                                self.report_default(enc, data, pos, next);
+                            } else {
+                                // No handlers set, use default behavior: expand
+                                // Expand through do_content (matches C processEntity → internalEntityProcessor)
+                                // Save event_pos/data since entity expansion will modify it
+                                let saved_event_pos = self.event_pos;
+                                let saved_event_cur_byte_count = self.event_cur_byte_count;
+                                let saved_event_cur_data = self.event_cur_data.clone();
+
+                                let entity_name = name.to_string();
+                                self.open_entities.insert(entity_name.clone());
+                                let entity_bytes = value.as_bytes().to_vec();
+                                let (entity_err, _) = self.do_content(
+                                    self.tag_level,
+                                    &xmltok::Utf8Encoding,
+                                    &entity_bytes,
+                                    0,
+                                    entity_bytes.len(),
+                                    false,
+                                );
+                                self.open_entities.remove(&entity_name);
+
+                                // Restore event context to point to the entity reference, not expanded content
+                                self.event_cur_byte_count = saved_event_cur_byte_count;
+                                self.event_cur_data = saved_event_cur_data;
+
+                                if entity_err != XmlError::None {
+                                    // Set event_pos to the entity reference position so line/column are calculated correctly
+                                    self.event_pos = pos;
+                                    return (entity_err, pos);
+                                }
+
+                                // On success, restore the saved event position
+                                self.event_pos = saved_event_pos;
                             }
-
-                            // On success, restore the saved event position
-                            self.event_pos = saved_event_pos;
                         }
                         // 2. Check external entities (have system ID)
                         else if self.external_entities.contains_key(name) {
@@ -3365,8 +3415,11 @@ impl Parser {
     }
 
     fn report_default<E: Encoding>(&mut self, _enc: &E, data: &[u8], start: usize, end: usize) {
-        if let Some(handler) = &mut self.default_handler {
-            let chunk = &data[start..end];
+        // Call default_handler_expand if set, otherwise call default_handler
+        let chunk = &data[start..end];
+        if let Some(handler) = &mut self.default_handler_expand {
+            handler(chunk);
+        } else if let Some(handler) = &mut self.default_handler {
             handler(chunk);
         }
     }
