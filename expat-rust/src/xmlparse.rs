@@ -2498,9 +2498,12 @@ impl Parser {
                 }
 
                 XmlTok::EndTag => {
-                    // Check for async entity — tag level mismatch indicates an entity was opened but not closed
-                    // Only applies at top level (start_tag_level == 0)
-                    if start_tag_level == 0 && self.tag_level == start_tag_level {
+                    // Check for async entity — tag level matches start means entity boundary crossed
+                    // Matches C: if (parser->m_tagLevel == startTagLevel) return ASYNC_ENTITY
+                    // But NOT for ext entity content completion (where start == content_start_tag_level)
+                    if self.tag_level == start_tag_level
+                        && start_tag_level != self.content_start_tag_level
+                    {
                         return (XmlError::AsyncEntity, pos);
                     }
 
