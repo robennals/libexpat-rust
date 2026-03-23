@@ -902,16 +902,10 @@ impl Parser {
                 self.event_pos = next_pos;
             }
 
-            // For foreign DTD parsing in Prolog mode, check not_standalone when all data is consumed
-            if prev_processor == Processor::Prolog && self.is_final && next_pos >= end && error == XmlError::None {
-                if self.parsing_foreign_dtd && self.dtd.borrow().has_param_entity_refs && !self.dtd.borrow().standalone {
-                    if let Some(handler) = &mut self.not_standalone_handler {
-                        if !handler() {
-                            self.error_code = XmlError::NotStandalone;
-                        }
-                    }
-                }
-            }
+            // Note: not_standalone check for external DTD subsets is done by
+            // the PARENT's DoctypeClose after the handler returns, matching C.
+            // The child's prolog processing sets has_param_entity_refs in the
+            // shared DTD when it finds entity SYSTEM IDs, which the parent then checks.
 
             return;
         }
@@ -2184,6 +2178,14 @@ impl Parser {
                                         if !ok {
                                             return (XmlError::ExternalEntityHandling, false);
                                         }
+                                        // C: after PE ext entity handler returns, check not_standalone
+                                        if self.param_entity_read && !self.dtd.borrow().standalone {
+                                            if let Some(ns_handler) = &mut self.not_standalone_handler {
+                                                if !ns_handler() {
+                                                    return (XmlError::NotStandalone, false);
+                                                }
+                                            }
+                                        }
                                     } else if let Some(skipped_handler) = &mut self.skipped_entity_handler {
                                         skipped_handler(name, true);
                                         handler_called = true;
@@ -2226,6 +2228,14 @@ impl Parser {
                                         handler_called = true;
                                         if !ok {
                                             return (XmlError::ExternalEntityHandling, false);
+                                        }
+                                        // C: after PE ext entity handler returns, check not_standalone
+                                        if self.param_entity_read && !self.dtd.borrow().standalone {
+                                            if let Some(ns_handler) = &mut self.not_standalone_handler {
+                                                if !ns_handler() {
+                                                    return (XmlError::NotStandalone, false);
+                                                }
+                                            }
                                         }
                                     } else if let Some(skipped_handler) = &mut self.skipped_entity_handler {
                                         skipped_handler(name, true);
