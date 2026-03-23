@@ -697,14 +697,133 @@ impl Parser {
 
     /// Run the current processor on the buffered data
     fn run_processor(&mut self) {
-        let processor = self.processor;
-        match processor {
-            Processor::PrologInit => self.prolog_init_processor(),
-            Processor::Prolog => self.prolog_processor(),
-            Processor::Content => self.content_processor(),
-            Processor::CdataSection => self.cdata_section_processor(),
-            Processor::ExternalEntity => self.external_entity_init_processor(),
-            Processor::Epilog => self.epilog_processor(),
+        // Take buffer once — matches C where parse() passes data to the processor
+        let data = std::mem::take(&mut self.buffer);
+        if data.is_empty() {
+            // Handle empty buffer — delegate to old-style processors for now
+            // They handle empty-buffer edge cases (NoElements, etc.)
+            let processor = self.processor;
+            match processor {
+                Processor::Content => {
+                    if self.is_final && !self.seen_root && self.content_start_tag_level == 0 {
+                        self.error_code = XmlError::NoElements;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Dispatch to processor — may loop if processor transitions
+        let mut start = 0usize;
+        let end = data.len();
+        loop {
+            let prev_processor = self.processor;
+            let (error, next_pos) = match self.processor {
+                Processor::PrologInit => {
+                    self.processor = Processor::Prolog;
+                    continue; // Just transition, don't consume data
+                }
+                Processor::Prolog => {
+                    // Old-style: put data in buffer, call processor, check result
+                    self.buffer = data[start..end].to_vec();
+                    self.prolog_processor();
+                    return; // prolog_processor handles everything internally
+                }
+                Processor::Content => {
+                    let have_more = !self.is_final;
+                    let enc = xmltok::Utf8Encoding;
+                    let stl = self.content_start_tag_level;
+                    self.do_content(stl, &enc, &data, start, end, have_more)
+                }
+                Processor::CdataSection => {
+                    self.buffer = data[start..end].to_vec();
+                    self.cdata_section_processor();
+                    return;
+                }
+                Processor::ExternalEntity => {
+                    self.external_entity_init_processor_v2(&data, start, end)
+                }
+                Processor::Epilog => {
+                    self.buffer = data[start..end].to_vec();
+                    self.epilog_processor();
+                    return;
+                }
+            };
+
+            if error != XmlError::None {
+                self.error_code = error;
+                return;
+            }
+
+            // If processor changed, re-dispatch with remaining data
+            if self.processor != prev_processor && next_pos < end {
+                start = next_pos;
+                continue;
+            }
+
+            // Buffer remaining data
+            if next_pos < end {
+                self.buffer = data[next_pos..end].to_vec();
+            }
+
+            // Set event_pos for position tracking
+            if error == XmlError::None {
+                self.event_pos = next_pos;
+            }
+
+            return;
+        }
+    }
+
+    /// External entity init processor — new-style (data, start, end) version.
+    /// Port of C externalEntityInitProcessor3: uses content tokenizer to detect
+    /// text declaration, then transitions to content processing.
+    fn external_entity_init_processor_v2(&mut self, data: &[u8], start: usize, end: usize) -> (XmlError, usize) {
+        let enc = xmltok::Utf8Encoding;
+        let tok_result = xmltok_impl::content_tok(&enc, data, start, end);
+        match tok_result {
+            Ok(TokenResult { token, next_pos }) => match token {
+                XmlTok::XmlDecl => {
+                    // Text declaration — transition to prolog processor
+                    // prolog will handle it then transition to content
+                    self.processor = Processor::Prolog;
+                    (XmlError::None, start) // re-process from start in prolog mode
+                }
+                XmlTok::Partial | XmlTok::PartialChar => {
+                    if !self.is_final {
+                        (XmlError::None, start) // buffer from start, wait for more
+                    } else {
+                        let err = if token == XmlTok::Partial { XmlError::UnclosedToken } else { XmlError::PartialChar };
+                        (err, start)
+                    }
+                }
+                XmlTok::Bom => {
+                    // Skip BOM, continue with init
+                    if next_pos < end {
+                        self.external_entity_init_processor_v2(data, next_pos, end)
+                    } else {
+                        (XmlError::None, next_pos)
+                    }
+                }
+                _ => {
+                    // Not a text declaration — transition to content
+                    // C: parser->m_processor = externalEntityContentProcessor;
+                    //    parser->m_tagLevel = 1;
+                    //    return externalEntityContentProcessor(parser, start, end, endPtr);
+                    self.tag_level = self.content_start_tag_level;
+                    self.processor = Processor::Content;
+                    // Return start (not next_pos) — content processor re-tokenizes same data
+                    (XmlError::None, start)
+                }
+            },
+            Err(_) => {
+                if !self.is_final {
+                    (XmlError::None, start)
+                } else {
+                    (XmlError::InvalidToken, start)
+                }
+            }
         }
     }
 
