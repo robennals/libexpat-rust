@@ -730,6 +730,7 @@ impl Parser {
             self.prolog_processor();
         } else {
             // No text declaration — go straight to content
+            self.tag_level = 1; // Match C externalEntityInitProcessor3
             self.processor = Processor::Content;
             self.buffer = data;
             let _ = enc; // suppress unused warning
@@ -4186,8 +4187,7 @@ impl Parser {
         // For empty context (DTD external subset), stay in prolog mode
         if !context.is_empty() {
             child.processor = Processor::ExternalEntity;
-            child.content_start_tag_level = 1; // C uses startTagLevel=1 for ext entities
-            child.tag_level = 1; // C sets m_tagLevel=1 in externalEntityInitProcessor3
+            child.content_start_tag_level = 1;
         }
         Some(child)
     }
