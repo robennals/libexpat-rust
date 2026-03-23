@@ -986,7 +986,7 @@ impl Parser {
     fn prolog_processor(&mut self) {
         let data = std::mem::take(&mut self.buffer);
         if data.is_empty() {
-            if self.is_final && !self.seen_root {
+            if self.is_final && !self.seen_root && !self.parsing_foreign_dtd {
                 self.error_code = XmlError::NoElements;
             }
             return;
@@ -1022,7 +1022,7 @@ impl Parser {
             } else {
                 remaining.to_vec()
             };
-        } else if self.is_final && self.processor != Processor::Content && !self.seen_root {
+        } else if self.is_final && self.processor != Processor::Content && !self.seen_root && !self.parsing_foreign_dtd {
             // All prolog data consumed, is_final, but no root element seen
             self.error_code = XmlError::NoElements;
         }
