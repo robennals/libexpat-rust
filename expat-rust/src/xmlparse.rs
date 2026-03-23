@@ -4088,17 +4088,17 @@ impl Parser {
 
             // Check if combined data could still be a partial BOM
             if !self.is_final && combined.len() < 4 {
-                // Check if first bytes could be a BOM prefix
+                // Check if first bytes could be a BOM prefix that needs more bytes
                 let could_be_bom = (combined[0] == 0xFF && combined[1] == 0xFE)
                     || (combined[0] == 0xFE && combined[1] == 0xFF)
-                    || (combined[0] == 0xEF && (combined.len() < 3 || (combined.len() >= 2 && combined[1] == 0xBB)))
-                    || combined[0] == 0x00
-                    || (combined.len() >= 2 && combined[1] == 0x00);
+                    || (combined[0] == 0xEF && (combined.len() < 3 || (combined.len() >= 2 && combined[1] == 0xBB)));
                 if could_be_bom {
                     // Still looks like a partial BOM, wait for more bytes
                     self.encoding_detection_buf = combined;
                     return Ok(Vec::new());
                 }
+                // If we have 2+ bytes and they match UTF-16 pattern (one 0, one not),
+                // we have enough to detect—don't buffer
             }
 
             // Either we have a complete BOM signature or enough bytes to know there's no BOM
@@ -4115,16 +4115,16 @@ impl Parser {
 
         // If non-final and 2-3 bytes, check if we might need more data for detection
         if !self.is_final && data.len() < 4 {
-            // Check if first bytes could be a BOM prefix
+            // Check if first bytes could be a BOM prefix that needs more bytes
             let could_be_bom = (data[0] == 0xFF && data[1] == 0xFE)
                 || (data[0] == 0xFE && data[1] == 0xFF)
-                || (data[0] == 0xEF && (data.len() < 3 || data[1] == 0xBB))
-                || data[0] == 0x00
-                || data[1] == 0x00;
+                || (data[0] == 0xEF && (data.len() < 3 || data[1] == 0xBB));
             if could_be_bom {
                 self.encoding_detection_buf = data.to_vec();
                 return Ok(Vec::new());
             }
+            // If we have 2+ bytes and they match UTF-16 pattern (one 0, one not),
+            // we have enough to detect—don't buffer
         }
 
         self.detect_and_transcode_impl(data)
