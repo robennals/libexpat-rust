@@ -358,6 +358,8 @@ pub struct Parser {
     current_attlist_type: Option<String>,
     /// Whether to call external entity handler even without DOCTYPE
     foreign_dtd: bool,
+    /// Whether this parser is parsing a foreign DTD subset (external entity with empty context)
+    parsing_foreign_dtd: bool,
     /// Billion laughs: maximum amplification factor (0.0 = use default)
     billion_laughs_max_amplification: f32,
     /// Billion laughs: activation threshold in bytes (0 = use default)
@@ -476,6 +478,7 @@ impl Parser {
             attlist_types: HashMap::new(),
             current_attlist_type: None,
             foreign_dtd: false,
+            parsing_foreign_dtd: false,
             billion_laughs_max_amplification: 0.0,
             billion_laughs_activation_threshold: 0,
             prolog_state: XmlRoleState::new(),
@@ -582,6 +585,7 @@ impl Parser {
             attlist_types: HashMap::new(),
             current_attlist_type: None,
             foreign_dtd: false,
+            parsing_foreign_dtd: false,
             billion_laughs_max_amplification: 0.0,
             billion_laughs_activation_threshold: 0,
             prolog_state: XmlRoleState::new(),
@@ -655,6 +659,7 @@ impl Parser {
         self.get_buffer_data.clear();
         self.suspended_data.clear();
         self.suspended_is_final = false;
+        self.parsing_foreign_dtd = false;
         self.prolog_state = XmlRoleState::new();
         self.current_element_decl_name = None;
         self.content_model_stack.clear();
@@ -3619,7 +3624,8 @@ impl Parser {
         if is_final {
             // If we never saw a root element, that's an error
             // BUT: external entities (tag_level > 0) don't require a complete root element
-            if !self.seen_root && self.tag_level == 0 && self.error_code == XmlError::None {
+            // AND: foreign DTD subsets don't require a root element
+            if !self.seen_root && self.tag_level == 0 && !self.parsing_foreign_dtd && self.error_code == XmlError::None {
                 self.error_code = XmlError::NoElements;
                 self.parsing_state = ParsingState::Finished;
                 return XmlStatus::Error;
@@ -4418,9 +4424,13 @@ impl Parser {
         child.unparsed_entities = self.unparsed_entities.clone();
         child.dtd_standalone = self.dtd_standalone;
         child.param_entity_parsing = self.param_entity_parsing;
+        // Foreign DTD subset (empty context) is treated as document entity
+        // General entities (non-empty context) are not
+        child.prolog_state.document_entity = context.is_empty();
         // For non-empty context (general entity), use ExternalEntity processor
         // which accepts optional text declaration then content
-        // For empty context (DTD external subset), stay in prolog mode
+        // For empty context (DTD external subset), start in internal subset mode
+        // to allow parsing DTD declarations directly
         if !context.is_empty() {
             child.processor = Processor::ExternalEntity;
             child.content_start_tag_level = 1;
@@ -4428,6 +4438,11 @@ impl Parser {
             // the first token. Since our init processor delegates to content_processor
             // which needs tag_level == content_start_tag_level, set it at creation.
             child.tag_level = 1;
+        } else {
+            // For foreign DTD (empty context), start parsing in internal subset mode
+            // to allow DTD declarations like <!ELEMENT> without DOCTYPE wrapper
+            child.prolog_state.state = crate::xmlrole::PrologState::InternalSubset;
+            child.parsing_foreign_dtd = true;
         }
         Some(child)
     }
