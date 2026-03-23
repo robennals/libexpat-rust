@@ -114,6 +114,7 @@ See [docs/architecture.md](docs/architecture.md) for details.
 3. **Zero `unsafe`** — No unsafe blocks anywhere in expat-rust
 4. **Use Rust standard library types** — `String`/`Vec`/`HashMap`, not C-style pools or hash tables
 5. **Opus coordinates, Haiku implements** — Opus should set up tooling, generate prompts (via `ast-compare.py --prompt`), and review. Haiku agents do the actual code writing, one subsystem at a time.
+6. **Match C architecture unless there's a specific Rust reason to diverge** — Function signatures, processor patterns, data flow should mirror C. Diverge only for safety (no unsafe) or Rust types (HashMap vs hash table). Don't "Rustify" the architecture in ways that break behavioral equivalence. E.g., processors take `(data, start, end) -> (error, next_pos)` matching C's `processor(parser, start, end, &endPtr)`.
 
 ## expat-ffi Notes
 
