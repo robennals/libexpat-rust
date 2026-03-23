@@ -156,13 +156,34 @@ pub enum ParsingState {
     Suspended,
 }
 
+/// Internal entity record — represents an open internal entity being processed
+/// Corresponds to OPEN_INTERNAL_ENTITY in C (xmlparse.c)
+#[derive(Clone, Debug)]
+struct OpenInternalEntity {
+    /// Entity being processed
+    entity_name: String,
+    /// Entity text (replacement value)
+    entity_text: Vec<u8>,
+    /// Tag level when entity was opened (for async entity detection)
+    start_tag_level: u32,
+    /// Number of bytes already processed in entity text
+    processed: usize,
+    /// Whether this is a parameter entity (uses doProlog) vs general entity (uses doContent)
+    is_param: bool,
+    /// WFC: PE Between Declarations — entity occurred between declarations
+    between_decl: bool,
+    /// Previous processor to restore when entity is closed
+    saved_processor: Processor,
+}
+
 /// Processor type enumeration — idiomatic Rust alternative to C function pointers
 ///
 /// The parser uses a processor-based architecture similar to the C implementation:
 /// 1. PrologInit: Initial processor that detects encoding (maps to prologInitProcessor in C)
 /// 2. Prolog: Processes XML declaration, DOCTYPE, comments, PIs (maps to prologProcessor in C)
 /// 3. Content: Processes element content (maps to contentProcessor in C)
-/// 4. Epilog: Processes after root element closes (maps to epilogProcessor in C)
+/// 4. InternalEntity: Processes internal entity content (maps to internalEntityProcessor in C)
+/// 5. Epilog: Processes after root element closes (maps to epilogProcessor in C)
 ///
 /// This design allows clean separation of concerns and is called through run_processor()
 /// in the main parse loop, which dispatches to the appropriate processor method.
@@ -178,6 +199,8 @@ pub enum Processor {
     CdataSection,
     /// External entity — accepts optional text declaration then processes content
     ExternalEntity,
+    /// Internal entity processor — processes entity content from the stack
+    InternalEntity,
     /// Processes after root element closes
     Epilog,
 }
@@ -394,6 +417,8 @@ pub struct Parser {
     content_start_tag_level: u32,
     /// Whether external parameter entity was actually read (C: dtd->paramEntityRead)
     pub param_entity_read: bool,
+    /// Stack of open internal entities — corresponds to m_openInternalEntities in C
+    open_internal_entities: Vec<OpenInternalEntity>,
 
     // Handler fields
     start_element_handler: Option<StartElementHandler>,
@@ -506,6 +531,7 @@ impl Parser {
             ns_triplets: false,
             content_start_tag_level: 0,
             param_entity_read: false,
+            open_internal_entities: Vec::new(),
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -618,6 +644,7 @@ impl Parser {
             ns_triplets: false,
             content_start_tag_level: 0,
             param_entity_read: false,
+            open_internal_entities: Vec::new(),
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -775,6 +802,9 @@ impl Parser {
                 }
                 Processor::ExternalEntity => {
                     self.external_entity_init_processor_v2(&data, start, end)
+                }
+                Processor::InternalEntity => {
+                    self.internal_entity_processor(&data, start, end)
                 }
                 Processor::Epilog => {
                     // Epilog — process post-root content
@@ -2247,6 +2277,114 @@ impl Parser {
             }
         }
         true
+    }
+
+    /// Internal entity processor — new-style (data, start, end) version
+    /// Processes entity content from the open_internal_entities stack.
+    /// Corresponds to internalEntityProcessor in C (xmlparse.c).
+    fn internal_entity_processor(&mut self, _data: &[u8], start: usize, _end: usize) -> (XmlError, usize) {
+        // Check if there's an open entity
+        if self.open_internal_entities.is_empty() {
+            return (XmlError::UnexpectedState, start);
+        }
+
+        // Get the top entity from the stack (without removing it yet)
+        let open = self.open_internal_entities.last_mut().unwrap();
+
+        // Extract entity info
+        let entity_text = open.entity_text.clone();
+        let start_pos = open.processed;
+        let is_param = open.is_param;
+        let start_tag_level = open.start_tag_level;
+
+        // Determine the end position — we want to process as much as we can
+        // The entity_text is the full content; we need to process from start_pos to end
+        let entity_end = entity_text.len();
+
+        if start_pos >= entity_end {
+            // Entity is already fully processed — this shouldn't happen unless hasMore is false
+            // but we're still in InternalEntity processor. This is the cleanup phase.
+
+            // Remove the entity from the open list
+            let _ = self.open_internal_entities.pop();
+
+            if self.open_internal_entities.is_empty() {
+                // No more entities — restore the saved processor
+                if let Some(open_popped) = self.open_internal_entities.last() {
+                    self.processor = open_popped.saved_processor;
+                } else {
+                    // This was the last entity; we need to have saved a processor
+                    // In this case, we should restore from the entity we just popped
+                    // Since we can't, we'll assume it should go back to Content
+                    self.processor = Processor::Content;
+                }
+            }
+
+            return (XmlError::None, start);
+        }
+
+        // Process entity content
+        let enc = xmltok::Utf8Encoding;
+        let (error, next_pos) = if is_param {
+            // Parameter entity — use doProlog
+            self.do_prolog(&enc, &entity_text, start_pos, entity_end, false)
+        } else {
+            // General entity — use doContent
+            self.do_content(start_tag_level, &enc, &entity_text, start_pos, entity_end, false)
+        };
+
+        if error != XmlError::None {
+            return (error, start);
+        }
+
+        // Check if entity is fully processed
+        if next_pos < entity_end {
+            // Entity not fully consumed yet — save progress and wait for more data
+            if let Some(open) = self.open_internal_entities.last_mut() {
+                open.processed = next_pos;
+            }
+            return (XmlError::None, start);
+        }
+
+        // Entity is fully processed — close it
+        // Check for async entity (tag level mismatch for general entities)
+        {
+            let open = self.open_internal_entities.last().unwrap();
+            if !is_param && open.start_tag_level != self.tag_level {
+                return (XmlError::AsyncEntity, start);
+            }
+        }
+
+        // Remove the entity from the open list
+        let closed_entity = self.open_internal_entities.pop().unwrap();
+
+        // Restore the previous processor
+        if self.open_internal_entities.is_empty() {
+            // No more entities — restore from the closed entity's saved processor
+            self.processor = closed_entity.saved_processor;
+        }
+
+        // Return start (not consumed) to continue processing from the original data
+        (XmlError::None, start)
+    }
+
+    /// Process entity — opens an internal entity for processing
+    /// Corresponds to processEntity in C (xmlparse.c).
+    /// Called from EntityRef case to set up entity expansion through the processor loop.
+    fn process_entity(&mut self, entity_name: &str, entity_text: &[u8], is_param: bool) -> XmlError {
+        let open = OpenInternalEntity {
+            entity_name: entity_name.to_string(),
+            entity_text: entity_text.to_vec(),
+            start_tag_level: self.tag_level,
+            processed: 0,
+            is_param,
+            between_decl: false,
+            saved_processor: self.processor,
+        };
+
+        self.open_internal_entities.push(open);
+        self.processor = Processor::InternalEntity;
+        XmlError::None
     }
 
     /// Epilog processor — corresponds to C epilogProcessor()
