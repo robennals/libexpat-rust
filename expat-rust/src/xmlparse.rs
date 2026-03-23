@@ -834,6 +834,17 @@ impl Parser {
                 self.event_pos = next_pos;
             }
 
+            // For foreign DTD parsing in Prolog mode, check not_standalone when all data is consumed
+            if prev_processor == Processor::Prolog && self.is_final && next_pos >= end && error == XmlError::None {
+                if self.parsing_foreign_dtd && self.has_param_entity_refs && !self.dtd_standalone {
+                    if let Some(handler) = &mut self.not_standalone_handler {
+                        if !handler() {
+                            self.error_code = XmlError::NotStandalone;
+                        }
+                    }
+                }
+            }
+
             return;
         }
     }
@@ -1006,6 +1017,15 @@ impl Parser {
             if self.is_final && !self.seen_root && !self.parsing_foreign_dtd {
                 self.error_code = XmlError::NoElements;
             }
+            // For foreign DTD parsing, check not_standalone when DTD parsing is complete
+            // even if buffer is empty (already consumed) but is_final is true
+            if self.is_final && self.parsing_foreign_dtd && self.has_param_entity_refs && !self.dtd_standalone {
+                if let Some(handler) = &mut self.not_standalone_handler {
+                    if !handler() {
+                        self.error_code = XmlError::NotStandalone;
+                    }
+                }
+            }
             return;
         }
         let have_more = !self.is_final;
@@ -1039,9 +1059,19 @@ impl Parser {
             } else {
                 remaining.to_vec()
             };
-        } else if self.is_final && self.processor != Processor::Content && !self.seen_root && !self.parsing_foreign_dtd {
-            // All prolog data consumed, is_final, but no root element seen
-            self.error_code = XmlError::NoElements;
+        } else if self.is_final {
+            if self.processor != Processor::Content && !self.seen_root && !self.parsing_foreign_dtd {
+                // All prolog data consumed, is_final, but no root element seen
+                self.error_code = XmlError::NoElements;
+            }
+            // For foreign DTD parsing, check not_standalone when DTD parsing is complete
+            if self.parsing_foreign_dtd && self.has_param_entity_refs && !self.dtd_standalone {
+                if let Some(handler) = &mut self.not_standalone_handler {
+                    if !handler() {
+                        self.error_code = XmlError::NotStandalone;
+                    }
+                }
+            }
         }
     }
 
@@ -1403,6 +1433,9 @@ impl Parser {
                 // Entity SYSTEM ID — store for current entity
                 let sys_id = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.current_entity_system_id = Some(sys_id);
+                // Mark that we have external entity references (for not_standalone check)
+                // This applies to both parameter entities and general entities with external references
+                self.has_param_entity_refs = true;
                 (XmlError::None, self.entity_decl_handler.is_some())
             }
             Role::DoctypeInternalSubset => {
