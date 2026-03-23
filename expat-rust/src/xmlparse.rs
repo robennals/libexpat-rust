@@ -377,6 +377,9 @@ pub struct Parser {
     current_element_decl_name: Option<String>,
     /// Stack of content model groups being built (each is a ContentNode with children)
     content_model_stack: Vec<ContentNode>,
+    /// Last serialized content model — a flat array representation for C FFI
+    /// Format: Vec<(type_u32, quant_u32, name_opt, numchildren_u32)>
+    last_content_model: Option<Vec<(u32, u32, Option<Vec<u8>>, u32)>>,
     /// Group connectors: 0=none, 1=comma/seq, 2=pipe/choice
     group_connectors: Vec<u8>,
     /// Namespace bindings stack: each entry is (element_level, prefix, uri, previous_uri)
@@ -496,6 +499,7 @@ impl Parser {
             prolog_state: XmlRoleState::new(),
             current_element_decl_name: None,
             content_model_stack: Vec::new(),
+            last_content_model: None,
             group_connectors: Vec::new(),
             ns_bindings: Vec::new(),
             ns_map: HashMap::new(),
@@ -607,6 +611,7 @@ impl Parser {
             prolog_state: XmlRoleState::new(),
             current_element_decl_name: None,
             content_model_stack: Vec::new(),
+            last_content_model: None,
             group_connectors: Vec::new(),
             ns_bindings: Vec::new(),
             ns_map,
@@ -1790,6 +1795,8 @@ impl Parser {
                 // ELEMENT name EMPTY or ANY — call handler immediately
                 let handler_called = self.element_decl_handler.is_some();
                 if let Some(ref name) = self.current_element_decl_name.clone() {
+                    // For EMPTY/ANY, serialize an empty model
+                    self.serialize_content_model();
                     if let Some(handler) = &mut self.element_decl_handler {
                         handler(name, "");
                     }
@@ -3154,6 +3161,8 @@ impl Parser {
                 group.quant = quant;
             }
             if let Some(ref name) = self.current_element_decl_name.clone() {
+                // Serialize the model before calling handler
+                self.serialize_content_model();
                 if let Some(handler) = &mut self.element_decl_handler {
                     handler(name, "");
                 }
@@ -3161,6 +3170,66 @@ impl Parser {
             self.current_element_decl_name = None;
             self.content_model_stack.clear();
         }
+    }
+
+    /// Serialize the content model tree into a flat array format
+    /// Returns: Vec<(type_u32, quant_u32, name_bytes, numchildren_u32)>
+    fn serialize_content_model(&mut self) {
+        if self.content_model_stack.is_empty() {
+            self.last_content_model = Some(Vec::new());
+            return;
+        }
+        let root = &self.content_model_stack[0];
+        let mut result = Vec::new();
+        // Simple pre-order depth-first traversal
+        Self::flatten_content_node(root, &mut result);
+        self.last_content_model = Some(result);
+    }
+
+    /// Helper to recursively flatten a ContentNode tree into a flat array
+    /// Order: node, all its immediate children, then descendants of those children (breadth-first ordering)
+    fn flatten_content_node(node: &ContentNode, result: &mut Vec<(u32, u32, Option<Vec<u8>>, u32)>) {
+        let name_bytes = node.name.as_ref().map(|s| {
+            let mut bytes = s.as_bytes().to_vec();
+            bytes.push(0); // null-terminate
+            bytes
+        });
+        result.push((
+            node.content_type as u32,
+            node.quant as u32,
+            name_bytes,
+            node.children.len() as u32,
+        ));
+
+        // Add all immediate children first (breadth-first level 1)
+        for child in &node.children {
+            let name_bytes = child.name.as_ref().map(|s| {
+                let mut bytes = s.as_bytes().to_vec();
+                bytes.push(0);
+                bytes
+            });
+            result.push((
+                child.content_type as u32,
+                child.quant as u32,
+                name_bytes,
+                child.children.len() as u32,
+            ));
+        }
+
+        // Then process deeper levels - for each child, process its children but not the child itself
+        for child in &node.children {
+            // Recursively process the children of this child (grandchildren of original node)
+            // but we've already added the child itself, so skip it in the recursion
+            for grandchild in &child.children {
+                // Process grandchild and its descendants
+                Self::flatten_content_node(grandchild, result);
+            }
+        }
+    }
+
+    /// Get the last serialized content model for C FFI access
+    pub fn last_content_model(&self) -> Option<&Vec<(u32, u32, Option<Vec<u8>>, u32)>> {
+        self.last_content_model.as_ref()
     }
 
     /// - Expand predefined entity references (&amp; &lt; &gt; &apos; &quot;)

@@ -66,6 +66,10 @@ struct ParserHandle {
     c_xml_decl_handler: XML_XmlDeclHandler,
     c_start_doctype_handler: XML_StartDoctypeDeclHandler,
     c_end_doctype_handler: XML_EndDoctypeDeclHandler,
+    /// Last built content model as a C-allocated array (for XML_FreeContentModel)
+    last_content_model_array: Option<Box<[XML_Content]>>,
+    /// Name buffers for the content model (kept alive with the array)
+    last_content_model_names: Vec<Vec<u8>>,
 }
 
 type XML_Parser = *mut ParserHandle;
@@ -281,6 +285,8 @@ fn new_handle(parser: Parser) -> XML_Parser {
         c_xml_decl_handler: None,
         c_start_doctype_handler: None,
         c_end_doctype_handler: None,
+        last_content_model_array: None,
+        last_content_model_names: Vec::new(),
     });
     Box::into_raw(handle)
 }
@@ -1639,14 +1645,78 @@ pub unsafe extern "C" fn XML_SetElementDeclHandler(
         handle
             .parser
             .set_element_decl_handler(Some(Box::new(move |name: &str, _model: &str| {
-                let h = &*parser_ptr;
+                let h = unsafe { &mut *(parser_ptr as *mut ParserHandle) };
                 let mut nb: Vec<u8> = name.as_bytes().to_vec();
                 nb.push(0);
-                // Pass NULL model — we don't build proper XML_Content trees yet
-                // C handlers that only check flags (dummy_element_decl_handler) will
-                // see NULL and skip model access. Handlers that inspect the model
-                // (element_decl_check_model) will fail gracefully via the NULL check.
-                handler_fn(h.user_data, nb.as_ptr() as *const XML_Char, ptr::null_mut());
+
+                // Build the flat content model array from the Rust tree
+                let model_ptr = if let Some(rust_model) = h.parser.last_content_model() {
+                    if rust_model.is_empty() {
+                        // EMPTY or ANY element - pass NULL
+                        ptr::null_mut()
+                    } else {
+                        // First, pre-collect all name buffers to avoid reallocation issues
+                        h.last_content_model_names.clear();
+                        h.last_content_model_names.reserve(rust_model.len());
+
+                        for (_, _, name_bytes, _) in rust_model.iter() {
+                            if let Some(nb) = name_bytes {
+                                h.last_content_model_names.push(nb.clone());
+                            } else {
+                                h.last_content_model_names.push(Vec::new());
+                            }
+                        }
+
+                        // Now build the array with stable name pointers
+                        let mut array: Vec<XML_Content> = Vec::with_capacity(rust_model.len());
+                        for (idx, (type_u, quant_u, _, _numchildren)) in rust_model.iter().enumerate() {
+                            let name_ptr = if !h.last_content_model_names[idx].is_empty() {
+                                h.last_content_model_names[idx].as_ptr() as *mut c_char
+                            } else {
+                                ptr::null_mut()
+                            };
+
+                            array.push(XML_Content {
+                                type_: *type_u as c_int,
+                                quant: *quant_u as c_int,
+                                name: name_ptr,
+                                numchildren: 0,
+                                children: ptr::null_mut(),
+                            });
+                        }
+
+                        // Now set numchildren and children pointers
+                        // The children are laid out in the order produced by flatten_content_node
+                        let array_ptr = array.as_mut_ptr();
+                        let mut next_idx = 1; // next available index for children
+
+                        for (idx, (_, _, _, numchildren)) in rust_model.iter().enumerate() {
+                            (*array_ptr.add(idx)).numchildren = *numchildren as c_int;
+                            if *numchildren > 0 && next_idx < rust_model.len() {
+                                (*array_ptr.add(idx)).children = array_ptr.add(next_idx);
+                                // Skip to next sibling group
+                                // Children are laid out sequentially, then we recursively process their children
+                                next_idx += *numchildren as usize;
+                            }
+                        }
+
+                        // Store the array on the handle
+                        h.last_content_model_array = Some(array.into_boxed_slice() as Box<[XML_Content]>);
+
+                        // Return pointer to the stored array
+                        if let Some(ref boxed) = h.last_content_model_array {
+                            boxed.as_ptr() as *mut XML_Content
+                        } else {
+                            ptr::null_mut()
+                        }
+                    }
+                } else {
+                    ptr::null_mut()
+                };
+
+                unsafe {
+                    handler_fn(h.user_data, nb.as_ptr() as *const XML_Char, model_ptr);
+                }
             })));
     } else {
         handle.parser.set_element_decl_handler(None);
