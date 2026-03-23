@@ -725,10 +725,9 @@ impl Parser {
                     continue; // Just transition, don't consume data
                 }
                 Processor::Prolog => {
-                    // Old-style: put data in buffer, call processor, check result
-                    self.buffer = data[start..end].to_vec();
-                    self.prolog_processor();
-                    return; // prolog_processor handles everything internally
+                    let have_more = !self.is_final;
+                    let enc = xmltok::Utf8Encoding;
+                    self.do_prolog(&enc, &data, start, end, have_more)
                 }
                 Processor::Content => {
                     let have_more = !self.is_final;
@@ -737,17 +736,20 @@ impl Parser {
                     self.do_content(stl, &enc, &data, start, end, have_more)
                 }
                 Processor::CdataSection => {
-                    self.buffer = data[start..end].to_vec();
-                    self.cdata_section_processor();
-                    return;
+                    // CDATA section resumed — delegate to do_cdata_section
+                    let have_more = !self.is_final;
+                    let enc = xmltok::Utf8Encoding;
+                    self.do_cdata_section(&enc, &data, start, end, have_more)
                 }
                 Processor::ExternalEntity => {
                     self.external_entity_init_processor_v2(&data, start, end)
                 }
                 Processor::Epilog => {
+                    // Epilog — process post-root content
+                    // epilog_processor is still old-style, convert inline
                     self.buffer = data[start..end].to_vec();
                     self.epilog_processor();
-                    return;
+                    return; // epilog handles buffer internally for now
                 }
             };
 
@@ -758,6 +760,34 @@ impl Parser {
 
             // If processor changed, re-dispatch with remaining data
             if self.processor != prev_processor && next_pos < end {
+                // If transitioning from Prolog and Latin-1 encoding was detected,
+                // we need to transcode remaining data before content processing
+                if prev_processor == Processor::Prolog
+                    && is_latin1_encoding(self.detected_encoding.as_deref())
+                {
+                    let remaining = &data[next_pos..end];
+                    let transcoded = transcode_latin1_to_utf8(remaining);
+                    // Put transcoded data in buffer for next iteration
+                    self.buffer = transcoded;
+                    // Re-take buffer with transcoded data
+                    let new_data = std::mem::take(&mut self.buffer);
+                    let (error2, next2) = match self.processor {
+                        Processor::Content => {
+                            let have_more = !self.is_final;
+                            let enc = xmltok::Utf8Encoding;
+                            let stl = self.content_start_tag_level;
+                            self.do_content(stl, &enc, &new_data, 0, new_data.len(), have_more)
+                        }
+                        _ => (XmlError::None, 0),
+                    };
+                    if error2 != XmlError::None {
+                        self.error_code = error2;
+                    }
+                    if next2 < new_data.len() && error2 == XmlError::None {
+                        self.buffer = new_data[next2..].to_vec();
+                    }
+                    return;
+                }
                 start = next_pos;
                 continue;
             }
