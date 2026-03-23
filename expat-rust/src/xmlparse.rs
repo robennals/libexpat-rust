@@ -375,6 +375,9 @@ pub struct Parser {
     ns_map: HashMap<String, String>,
     /// Whether to return namespace triplets (uri + sep + localname + sep + prefix)
     ns_triplets: bool,
+    /// For external entity parsers: content start_tag_level (1 for ext entities, 0 for main)
+    /// This prevents do_content from returning NoElements for external entities
+    content_start_tag_level: u32,
 
     // Handler fields
     start_element_handler: Option<StartElementHandler>,
@@ -479,6 +482,7 @@ impl Parser {
             ns_bindings: Vec::new(),
             ns_map: HashMap::new(),
             ns_triplets: false,
+            content_start_tag_level: 0,
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -583,6 +587,7 @@ impl Parser {
             ns_bindings: Vec::new(),
             ns_map,
             ns_triplets: false,
+            content_start_tag_level: 0,
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -657,6 +662,7 @@ impl Parser {
             self.ns_map.insert("xml".to_string(), "http://www.w3.org/XML/1998/namespace".to_string());
         }
         self.ns_triplets = false;
+        self.content_start_tag_level = 0;
         // Clear all handlers (matches C parserInit behavior)
         self.start_element_handler = None;
         self.end_element_handler = None;
@@ -1699,15 +1705,16 @@ impl Parser {
     fn content_processor(&mut self) {
         let data = std::mem::take(&mut self.buffer);
         if data.is_empty() {
-            if self.is_final && !self.seen_root {
+            if self.is_final && !self.seen_root && self.content_start_tag_level == 0 {
                 self.error_code = XmlError::NoElements;
             }
             return;
         }
         let have_more = !self.is_final;
         let enc = xmltok::Utf8Encoding;
+        let stl = self.content_start_tag_level;
 
-        let (error, next_pos) = self.do_content(0, &enc, &data, 0, data.len(), have_more);
+        let (error, next_pos) = self.do_content(stl, &enc, &data, 0, data.len(), have_more);
 
         // Set event_pos for successful completion too (for position query after parse)
         if error == XmlError::None {
@@ -2252,10 +2259,9 @@ impl Parser {
                     }
 
                     // Check if root element closed (empty root element)
-                    if self.tag_level == 0 {
+                    if self.tag_level == 0 && start_tag_level == 0 {
                         self.root_closed = true;
                         self.processor = Processor::Epilog;
-                        // Process epilog inline
                         if next < end {
                             let epilog_data = data[next..end].to_vec();
                             self.buffer = epilog_data;
@@ -2342,7 +2348,7 @@ impl Parser {
                     }
 
                     // Check if root element closed
-                    if self.tag_level == 0 {
+                    if self.tag_level == 0 && start_tag_level == 0 {
                         self.root_closed = true;
                         self.processor = Processor::Epilog;
                         if next < end {
@@ -4175,6 +4181,8 @@ impl Parser {
         // For empty context (DTD external subset), stay in prolog mode
         if !context.is_empty() {
             child.processor = Processor::ExternalEntity;
+            child.content_start_tag_level = 1; // C uses startTagLevel=1 for ext entities
+            child.tag_level = 1; // C sets m_tagLevel=1 in externalEntityInitProcessor3
         }
         Some(child)
     }
