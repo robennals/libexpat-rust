@@ -1914,12 +1914,26 @@ impl Parser {
                 (result, true)
             }
             Role::ParamEntityRef => {
-                // PE reference outside internal subset
+                // PE reference outside internal subset (between declarations)
                 self.has_param_entity_refs = true;
+                let mut handler_called = false;
                 if self.param_entity_parsing == ParamEntityParsing::Never {
                     self.dtd_keep_processing = self.dtd_standalone;
+                } else {
+                    // PE parsing enabled — call skipped entity handler if entity not found
+                    if let Some(handler) = &mut self.skipped_entity_handler {
+                        if data.len() > pos && data[pos] == b'%' {
+                            if let Some(semi) = data[pos + 1..].iter().position(|&b| b == b';') {
+                                let name_bytes = &data[pos + 1..pos + 1 + semi];
+                                if let Ok(name) = std::str::from_utf8(name_bytes) {
+                                    handler(name, true);
+                                    handler_called = true;
+                                }
+                            }
+                        }
+                    }
                 }
-                (XmlError::None, false)
+                (XmlError::None, handler_called)
             }
             Role::InnerParamEntityRef => {
                 // PE reference inside a declaration
