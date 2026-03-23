@@ -1920,13 +1920,37 @@ impl Parser {
                 if self.param_entity_parsing == ParamEntityParsing::Never {
                     self.dtd_keep_processing = self.dtd_standalone;
                 } else {
-                    // PE parsing enabled — call skipped entity handler if entity not found
-                    if let Some(handler) = &mut self.skipped_entity_handler {
-                        if data.len() > pos && data[pos] == b'%' {
-                            if let Some(semi) = data[pos + 1..].iter().position(|&b| b == b';') {
-                                let name_bytes = &data[pos + 1..pos + 1 + semi];
-                                if let Ok(name) = std::str::from_utf8(name_bytes) {
-                                    handler(name, true);
+                    // PE parsing enabled — try to call external entity handler
+                    // Extract entity name from %name; token
+                    if data.len() > pos && data[pos] == b'%' {
+                        if let Some(semi) = data[pos + 1..].iter().position(|&b| b == b';') {
+                            let name_bytes = &data[pos + 1..pos + 1 + semi];
+                            if let Ok(name) = std::str::from_utf8(name_bytes) {
+                                // Check if entity is defined as external
+                                if self.external_entities.contains_key(name) {
+                                    let (sys_id, pub_id) = self
+                                        .external_entities
+                                        .get(name)
+                                        .cloned()
+                                        .unwrap_or((None, None));
+                                    if let Some(handler) = &mut self.external_entity_ref_handler {
+                                        let base = self.base_uri.clone();
+                                        let ok = handler(
+                                            name,
+                                            base.as_deref(),
+                                            sys_id.as_deref(),
+                                            pub_id.as_deref(),
+                                        );
+                                        handler_called = true;
+                                        if !ok {
+                                            return (XmlError::ExternalEntityHandling, false);
+                                        }
+                                    } else if let Some(skipped_handler) = &mut self.skipped_entity_handler {
+                                        skipped_handler(name, true);
+                                        handler_called = true;
+                                    }
+                                } else if let Some(skipped_handler) = &mut self.skipped_entity_handler {
+                                    skipped_handler(name, true);
                                     handler_called = true;
                                 }
                             }
@@ -1942,13 +1966,37 @@ impl Parser {
                 if self.param_entity_parsing == ParamEntityParsing::Never {
                     self.dtd_keep_processing = self.dtd_standalone;
                 } else {
-                    // PE parsing enabled — call skipped entity handler
-                    if let Some(handler) = &mut self.skipped_entity_handler {
-                        if data.len() > pos && data[pos] == b'%' {
-                            if let Some(semi) = data[pos + 1..].iter().position(|&b| b == b';') {
-                                let name_bytes = &data[pos + 1..pos + 1 + semi];
-                                if let Ok(name) = std::str::from_utf8(name_bytes) {
-                                    handler(name, true);
+                    // PE parsing enabled — try to call external entity handler
+                    // Extract entity name from %name; token
+                    if data.len() > pos && data[pos] == b'%' {
+                        if let Some(semi) = data[pos + 1..].iter().position(|&b| b == b';') {
+                            let name_bytes = &data[pos + 1..pos + 1 + semi];
+                            if let Ok(name) = std::str::from_utf8(name_bytes) {
+                                // Check if entity is defined as external
+                                if self.external_entities.contains_key(name) {
+                                    let (sys_id, pub_id) = self
+                                        .external_entities
+                                        .get(name)
+                                        .cloned()
+                                        .unwrap_or((None, None));
+                                    if let Some(handler) = &mut self.external_entity_ref_handler {
+                                        let base = self.base_uri.clone();
+                                        let ok = handler(
+                                            name,
+                                            base.as_deref(),
+                                            sys_id.as_deref(),
+                                            pub_id.as_deref(),
+                                        );
+                                        handler_called = true;
+                                        if !ok {
+                                            return (XmlError::ExternalEntityHandling, false);
+                                        }
+                                    } else if let Some(skipped_handler) = &mut self.skipped_entity_handler {
+                                        skipped_handler(name, true);
+                                        handler_called = true;
+                                    }
+                                } else if let Some(skipped_handler) = &mut self.skipped_entity_handler {
+                                    skipped_handler(name, true);
                                     handler_called = true;
                                 }
                             }
@@ -2972,23 +3020,68 @@ impl Parser {
     /// - Expand character references (&#NN; &#xNN;)
     /// Process an ignore section: <![IGNORE[ ... ]]>
     /// Scans from start position for ]]> while tracking nested <![
+    /// Also validates characters inside the section (no invalid XML chars, no partial UTF-8)
     fn do_ignore_section(&self, data: &[u8], start: usize, end: usize) -> (XmlError, usize) {
         let mut level = 1; // Already inside one IGNORE section
         let mut i = start;
+
         while i < end {
+            // Check for closing ]]>
             if i + 3 <= end && &data[i..i + 3] == b"]]>" {
                 level -= 1;
                 if level == 0 {
                     return (XmlError::None, i + 3);
                 }
                 i += 3;
+            // Check for nested <![
             } else if i + 3 <= end && &data[i..i + 3] == b"<![" {
                 level += 1;
                 i += 3;
+            // Check for invalid XML characters and partial UTF-8
             } else {
-                i += 1;
+                let byte = data[i];
+
+                // Check for invalid XML character (control chars except tab, LF, CR)
+                if byte < 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D {
+                    // Invalid control character
+                    return (XmlError::InvalidToken, start);
+                }
+
+                // Check for UTF-8 sequence validity
+                if byte >= 0x80 {
+                    // Multi-byte UTF-8 sequence
+                    let bytes_needed = if byte & 0xE0 == 0xC0 {
+                        2
+                    } else if byte & 0xF0 == 0xE0 {
+                        3
+                    } else if byte & 0xF8 == 0xF0 {
+                        4
+                    } else {
+                        // Invalid lead byte or continuation byte
+                        return (XmlError::InvalidToken, start);
+                    };
+
+                    if i + bytes_needed > end {
+                        // Incomplete UTF-8 sequence
+                        return (XmlError::PartialChar, start);
+                    }
+
+                    // Validate continuation bytes
+                    for j in 1..bytes_needed {
+                        if data[i + j] & 0xC0 != 0x80 {
+                            // Invalid continuation byte
+                            return (XmlError::InvalidToken, start);
+                        }
+                    }
+
+                    i += bytes_needed;
+                } else {
+                    i += 1;
+                }
             }
         }
+
+        // Incomplete IGNORE section (no closing ]]> found)
         (XmlError::Syntax, start)
     }
 
