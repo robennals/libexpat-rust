@@ -10,6 +10,40 @@ use crate::xmlrole::{self, Role, XmlRoleState};
 use crate::xmltok;
 use crate::xmltok_impl::{self, Encoding, TokenResult, XmlTok};
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::rc::Rc;
+use std::cell::RefCell;
+
+/// DTD state — shared between parent and child DTD parsers via Rc<RefCell<>>.
+/// Matches C's `DTD` struct which is shared via `m_dtd` pointer.
+/// For DTD child parsers (empty context), parent and child share the same DtdState.
+/// For content child parsers (non-empty context), DtdState is cloned for isolation.
+#[derive(Debug, Clone)]
+pub struct DtdState {
+    pub internal_entities: HashMap<String, String>,
+    pub external_entities: HashMap<String, (Option<String>, Option<String>)>,
+    pub attlist_defaults: HashMap<String, Vec<(String, String)>>,
+    pub attlist_types: HashMap<String, HashMap<String, String>>,
+    pub unparsed_entities: HashSet<String>,
+    pub has_param_entity_refs: bool,
+    pub standalone: bool,
+    pub keep_processing: bool,
+}
+
+impl Default for DtdState {
+    fn default() -> Self {
+        DtdState {
+            internal_entities: HashMap::new(),
+            external_entities: HashMap::new(),
+            attlist_defaults: HashMap::new(),
+            attlist_types: HashMap::new(),
+            unparsed_entities: HashSet::new(),
+            has_param_entity_refs: false,
+            standalone: false,
+            keep_processing: true,
+        }
+    }
+}
 
 // Type aliases for handler function types
 type StartElementHandler = Box<dyn FnMut(&str, &[(&str, &str)]) + 'static>;
@@ -320,13 +354,9 @@ pub struct Parser {
     seen_xml_decl: bool,
     /// Detected encoding from BOM/auto-detection
     detected_encoding: Option<String>,
-    /// Whether the DTD references an external subset (SYSTEM or PUBLIC)
-    /// When true, undefined entities are not fatal per XML spec WFC
-    has_param_entity_refs: bool,
-    /// DTD standalone flag (from <?xml standalone='yes'?>)
-    dtd_standalone: bool,
-    /// Whether to continue processing DTD declarations (false after undefined PE)
-    dtd_keep_processing: bool,
+    /// DTD state — shared between parent and child DTD parsers.
+    /// Matches C's shared `m_dtd` pointer.
+    pub dtd: Rc<RefCell<DtdState>>,
     /// Total original-encoding bytes consumed before the current parse() chunk.
     /// Incremented by data.len() at the start of each parse() call.
     original_bytes_before_chunk: u64,
@@ -344,18 +374,10 @@ pub struct Parser {
     utf16_pending_byte: Option<u8>,
     /// Buffer for partial encoding detection (BOM bytes received across calls)
     encoding_detection_buf: Vec<u8>,
-    /// Internal entity definitions — maps entity name to replacement text
-    internal_entities: HashMap<String, String>,
-    /// ATTLIST default attributes: element_name → [(attr_name, default_value)]
-    attlist_defaults: HashMap<String, Vec<(String, String)>>,
     /// Current ATTLIST element name being processed
     current_attlist_element: Option<String>,
     /// Current ATTLIST attribute name being processed
     current_attlist_attr: Option<String>,
-    /// External entity definitions — maps entity name to (system_id, public_id)
-    external_entities: HashMap<String, (Option<String>, Option<String>)>,
-    /// Entities that have NDATA notation (unparsed entities — can't be referenced with &entity;)
-    unparsed_entities: std::collections::HashSet<String>,
     /// Set of currently open (being expanded) entities for recursion detection
     open_entities: std::collections::HashSet<String>,
     /// During entity expansion, the entity reference text (e.g., "&entity;") for XML_GetInputContext
@@ -382,8 +404,6 @@ pub struct Parser {
     n_specified_atts: i32,
     /// Index of the ID-type attribute in the most recent start element (-1 if none)
     id_att_index: i32,
-    /// ATTLIST type info: element → attr_name → type string (e.g. "ID", "IDREF", "CDATA")
-    attlist_types: HashMap<String, HashMap<String, String>>,
     /// Current ATTLIST attribute type being processed
     current_attlist_type: Option<String>,
     /// Whether to call external entity handler even without DOCTYPE
@@ -490,9 +510,7 @@ impl Parser {
             root_closed: false,
             seen_xml_decl: false,
             detected_encoding: None,
-            has_param_entity_refs: false,
-            dtd_standalone: false,
-            dtd_keep_processing: true,
+            dtd: Rc::new(RefCell::new(DtdState::default())),
             original_bytes_before_chunk: 0,
             original_chunk: Vec::new(),
             original_chunk_bom_len: 0,
@@ -501,12 +519,8 @@ impl Parser {
             event_cur_data: Vec::new(),
             utf16_pending_byte: None,
             encoding_detection_buf: Vec::new(),
-            internal_entities: HashMap::new(),
-            attlist_defaults: HashMap::new(),
             current_attlist_element: None,
             current_attlist_attr: None,
-            external_entities: HashMap::new(),
-            unparsed_entities: std::collections::HashSet::new(),
             open_entities: std::collections::HashSet::new(),
             entity_reference_context: None,
             current_entity_name: None,
@@ -522,7 +536,6 @@ impl Parser {
             current_notation_public_id: None,
             n_specified_atts: 0,
             id_att_index: -1,
-            attlist_types: HashMap::new(),
             current_attlist_type: None,
             foreign_dtd: false,
             parsing_foreign_dtd: false,
@@ -606,9 +619,7 @@ impl Parser {
             root_closed: false,
             seen_xml_decl: false,
             detected_encoding: None,
-            has_param_entity_refs: false,
-            dtd_standalone: false,
-            dtd_keep_processing: true,
+            dtd: Rc::new(RefCell::new(DtdState::default())),
             original_bytes_before_chunk: 0,
             original_chunk: Vec::new(),
             original_chunk_bom_len: 0,
@@ -617,12 +628,8 @@ impl Parser {
             event_cur_data: Vec::new(),
             utf16_pending_byte: None,
             encoding_detection_buf: Vec::new(),
-            internal_entities: HashMap::new(),
-            attlist_defaults: HashMap::new(),
             current_attlist_element: None,
             current_attlist_attr: None,
-            external_entities: HashMap::new(),
-            unparsed_entities: std::collections::HashSet::new(),
             open_entities: std::collections::HashSet::new(),
             entity_reference_context: None,
             current_entity_name: None,
@@ -638,7 +645,6 @@ impl Parser {
             current_notation_public_id: None,
             n_specified_atts: 0,
             id_att_index: -1,
-            attlist_types: HashMap::new(),
             current_attlist_type: None,
             foreign_dtd: false,
             parsing_foreign_dtd: false,
@@ -717,12 +723,7 @@ impl Parser {
         self.encoding_detection_buf.clear();
         self.byte_offset = 0;
         self.event_cur_byte_count = 0;
-        self.has_param_entity_refs = false;
-        self.dtd_standalone = false;
-        self.dtd_keep_processing = true;
-        self.internal_entities.clear();
-        self.external_entities.clear();
-        self.unparsed_entities.clear();
+        self.dtd = Rc::new(RefCell::new(DtdState::default()));
         self.open_entities.clear();
         self.get_buffer_data.clear();
         self.suspended_data.clear();
@@ -903,7 +904,7 @@ impl Parser {
 
             // For foreign DTD parsing in Prolog mode, check not_standalone when all data is consumed
             if prev_processor == Processor::Prolog && self.is_final && next_pos >= end && error == XmlError::None {
-                if self.parsing_foreign_dtd && self.has_param_entity_refs && !self.dtd_standalone {
+                if self.parsing_foreign_dtd && self.dtd.borrow().has_param_entity_refs && !self.dtd.borrow().standalone {
                     if let Some(handler) = &mut self.not_standalone_handler {
                         if !handler() {
                             self.error_code = XmlError::NotStandalone;
@@ -1173,7 +1174,7 @@ impl Parser {
             }
             // For foreign DTD parsing, check not_standalone when DTD parsing is complete
             // even if buffer is empty (already consumed) but is_final is true
-            if self.is_final && self.parsing_foreign_dtd && self.has_param_entity_refs && !self.dtd_standalone {
+            if self.is_final && self.parsing_foreign_dtd && self.dtd.borrow().has_param_entity_refs && !self.dtd.borrow().standalone {
                 if let Some(handler) = &mut self.not_standalone_handler {
                     if !handler() {
                         self.error_code = XmlError::NotStandalone;
@@ -1219,7 +1220,7 @@ impl Parser {
                 self.error_code = XmlError::NoElements;
             }
             // For foreign DTD parsing, check not_standalone when DTD parsing is complete
-            if self.parsing_foreign_dtd && self.has_param_entity_refs && !self.dtd_standalone {
+            if self.parsing_foreign_dtd && self.dtd.borrow().has_param_entity_refs && !self.dtd.borrow().standalone {
                 if let Some(handler) = &mut self.not_standalone_handler {
                     if !handler() {
                         self.error_code = XmlError::NotStandalone;
@@ -1490,7 +1491,7 @@ impl Parser {
 
                         // Handle standalone (C sets parser->m_dtd->standalone)
                         if info.standalone == Some(true) {
-                            self.dtd_standalone = true;
+                            self.dtd.borrow_mut().standalone = true;
                         }
 
                         // Call xml_decl_handler if set — suppress default only if handler IS called
@@ -1561,7 +1562,7 @@ impl Parser {
                     return (XmlError::Publicid, false);
                 }
                 let suppress = if matches!(role, Role::DoctypePublicId) {
-                    self.has_param_entity_refs = true;
+                    self.dtd.borrow_mut().has_param_entity_refs = true;
                     let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                     self.doctype_public_id = Some(pubid);
                     self.start_doctype_decl_handler.is_some()
@@ -1578,7 +1579,7 @@ impl Parser {
             }
             Role::DoctypeSystemId => {
                 // DOCTYPE SYSTEM — implies external subset
-                self.has_param_entity_refs = true;
+                self.dtd.borrow_mut().has_param_entity_refs = true;
                 let sysid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.doctype_system_id = Some(sysid);
                 (XmlError::None, self.start_doctype_decl_handler.is_some())
@@ -1589,7 +1590,7 @@ impl Parser {
                 self.current_entity_system_id = Some(sys_id);
                 // Mark that we have external entity references (for not_standalone check)
                 // This applies to both parameter entities and general entities with external references
-                self.has_param_entity_refs = true;
+                self.dtd.borrow_mut().has_param_entity_refs = true;
                 (XmlError::None, self.entity_decl_handler.is_some())
             }
             Role::DoctypeInternalSubset => {
@@ -1623,8 +1624,8 @@ impl Parser {
                 // Load external DTD subset if system ID is present
                 // Matches C: if (parser->m_doctypeSysid || parser->m_useForeignDTD)
                 if self.doctype_system_id.is_some() || self.foreign_dtd {
-                    let had_param_entity_refs = self.has_param_entity_refs;
-                    self.has_param_entity_refs = true;
+                    let had_param_entity_refs = self.dtd.borrow().has_param_entity_refs;
+                    self.dtd.borrow_mut().has_param_entity_refs = true;
                     if self.param_entity_parsing != ParamEntityParsing::Never {
                         if let Some(handler) = &mut self.external_entity_ref_handler {
                             let base = self.base_uri.clone();
@@ -1636,7 +1637,7 @@ impl Parser {
                                 return (XmlError::ExternalEntityHandling, false);
                             }
                             if self.param_entity_read {
-                                if !self.dtd_standalone {
+                                if !self.dtd.borrow().standalone {
                                     if let Some(handler) = &mut self.not_standalone_handler {
                                         if !handler() {
                                             return (XmlError::NotStandalone, false);
@@ -1645,7 +1646,7 @@ impl Parser {
                                 }
                             } else if self.doctype_system_id.is_none() {
                                 // Foreign DTD but nothing was read — restore
-                                self.has_param_entity_refs = had_param_entity_refs;
+                                self.dtd.borrow_mut().has_param_entity_refs = had_param_entity_refs;
                             }
                         }
                     }
@@ -1655,7 +1656,7 @@ impl Parser {
                     if self.param_entity_parsing == ParamEntityParsing::Never
                         || self.external_entity_ref_handler.is_none()
                     {
-                        if !self.dtd_standalone {
+                        if !self.dtd.borrow().standalone {
                             if let Some(handler) = &mut self.not_standalone_handler {
                                 if !handler() {
                                     return (XmlError::NotStandalone, false);
@@ -1665,7 +1666,7 @@ impl Parser {
                     }
                 } else {
                     // No external subset — check not-standalone
-                    if self.has_param_entity_refs && !self.dtd_standalone {
+                    if self.dtd.borrow().has_param_entity_refs && !self.dtd.borrow().standalone {
                         if let Some(handler) = &mut self.not_standalone_handler {
                             if !handler() {
                                 return (XmlError::NotStandalone, false);
@@ -1704,19 +1705,19 @@ impl Parser {
                     // After handler, if paramEntityRead is true → keep hasParamEntityRefs.
                     // If paramEntityRead is false → restore original value.
                     // We track this via param_entity_read flag set by child parsers.
-                    let had_param_entity_refs = self.has_param_entity_refs;
-                    self.has_param_entity_refs = true;
+                    let had_param_entity_refs = self.dtd.borrow().has_param_entity_refs;
+                    self.dtd.borrow_mut().has_param_entity_refs = true;
                     // Handler was already called above (line 1505) and may have set param_entity_read
                     // Check BEFORE clearing it
                     if self.param_entity_read {
                         // DTD was actually read — keep has_param_entity_refs = true
                     } else {
                         // DTD was not read — restore has_param_entity_refs
-                        self.has_param_entity_refs = had_param_entity_refs;
+                        self.dtd.borrow_mut().has_param_entity_refs = had_param_entity_refs;
                     }
                     self.param_entity_read = false;
                     // Check not-standalone after foreign DTD processing
-                    if !self.dtd_standalone {
+                    if !self.dtd.borrow().standalone {
                         if let Some(handler) = &mut self.not_standalone_handler {
                             if !handler() {
                                 return (XmlError::NotStandalone, false);
@@ -1750,10 +1751,10 @@ impl Parser {
                     // tok_text has quotes already stripped by extract_token_text
                     match self.store_entity_value(tok_text) {
                         Ok(value) => {
-                            self.internal_entities.insert(name.clone(), value.clone());
+                            self.dtd.borrow_mut().internal_entities.insert(name.clone(), value.clone());
                             // Call entity declaration handler (matches C)
                             // Only if DTD processing hasn't been stopped by undefined PEs
-                            if self.dtd_keep_processing {
+                            if self.dtd.borrow().keep_processing {
                                 if let Some(handler) = &mut self.entity_decl_handler {
                                     let base = self.base_uri.clone();
                                     handler(name, false, Some(&value), base.as_deref(), None);
@@ -1778,7 +1779,7 @@ impl Parser {
                 {
                     // Call entity declaration handler for external entity
                     // Only if DTD processing hasn't been stopped by undefined PEs
-                    if self.dtd_keep_processing {
+                    if self.dtd.borrow().keep_processing {
                         if let Some(handler) = &mut self.entity_decl_handler {
                             let base = self.base_uri.clone();
                             let sys_id = self.current_entity_system_id.clone();
@@ -1786,7 +1787,7 @@ impl Parser {
                             handler_called = true;
                         }
                     }
-                    self.external_entities.insert(
+                    self.dtd.borrow_mut().external_entities.insert(
                         name.clone(),
                         (
                             self.current_entity_system_id.take(),
@@ -1841,13 +1842,13 @@ impl Parser {
 
                 // Mark this entity as unparsed (has NDATA notation)
                 if let Some(ref name) = self.current_entity_name {
-                    self.unparsed_entities.insert(name.clone());
+                    self.dtd.borrow_mut().unparsed_entities.insert(name.clone());
                 }
 
                 // Call unparsed entity handler if set (matches C XML_ROLE_ENTITY_NOTATION_NAME)
                 let mut handler_called = false;
                 if let Some(ref name) = self.current_entity_name {
-                    if self.dtd_keep_processing {
+                    if self.dtd.borrow().keep_processing {
                         if let Some(handler) = &mut self.unparsed_entity_decl_handler {
                             let base = self.base_uri.clone();
                             let sys_id = self.current_entity_system_id.clone();
@@ -1903,7 +1904,7 @@ impl Parser {
                 if let (Some(ref elem), Some(ref attr)) =
                     (&self.current_attlist_element, &self.current_attlist_attr)
                 {
-                    self.attlist_types
+                    self.dtd.borrow_mut().attlist_types
                         .entry(elem.clone())
                         .or_default()
                         .insert(attr.clone(), type_name.to_string());
@@ -2081,10 +2082,14 @@ impl Parser {
                 if let (Some(ref elem), Some(ref attr)) =
                     (&self.current_attlist_element, &self.current_attlist_attr)
                 {
-                    let value = Self::normalize_attribute_value(tok_text, &self.internal_entities);
-                    let defaults = self.attlist_defaults.entry(elem.clone()).or_default();
-                    if !defaults.iter().any(|(n, _)| n == attr) {
-                        defaults.push((attr.clone(), value.clone()));
+                    let entities = self.dtd.borrow().internal_entities.clone();
+                    let value = Self::normalize_attribute_value(tok_text, &entities);
+                    {
+                        let mut dtd = self.dtd.borrow_mut();
+                        let defaults = dtd.attlist_defaults.entry(elem.clone()).or_default();
+                        if !defaults.iter().any(|(n, _)| n == attr) {
+                            defaults.push((attr.clone(), value.clone()));
+                        }
                     }
                     if let Some(handler) = &mut self.attlist_decl_handler {
                         let mut type_str = self.current_attlist_type.clone().unwrap_or_else(|| "CDATA".to_string());
@@ -2106,10 +2111,14 @@ impl Parser {
                 if let (Some(ref elem), Some(ref attr)) =
                     (&self.current_attlist_element, &self.current_attlist_attr)
                 {
-                    let value = Self::normalize_attribute_value(tok_text, &self.internal_entities);
-                    let defaults = self.attlist_defaults.entry(elem.clone()).or_default();
-                    if !defaults.iter().any(|(n, _)| n == attr) {
-                        defaults.push((attr.clone(), value.clone()));
+                    let entities = self.dtd.borrow().internal_entities.clone();
+                    let value = Self::normalize_attribute_value(tok_text, &entities);
+                    {
+                        let mut dtd = self.dtd.borrow_mut();
+                        let defaults = dtd.attlist_defaults.entry(elem.clone()).or_default();
+                        if !defaults.iter().any(|(n, _)| n == attr) {
+                            defaults.push((attr.clone(), value.clone()));
+                        }
                     }
                     if let Some(handler) = &mut self.attlist_decl_handler {
                         let mut type_str = self.current_attlist_type.clone().unwrap_or_else(|| "CDATA".to_string());
@@ -2141,10 +2150,11 @@ impl Parser {
             }
             Role::ParamEntityRef => {
                 // PE reference outside internal subset (between declarations)
-                self.has_param_entity_refs = true;
+                self.dtd.borrow_mut().has_param_entity_refs = true;
                 let mut handler_called = false;
                 if self.param_entity_parsing == ParamEntityParsing::Never {
-                    self.dtd_keep_processing = self.dtd_standalone;
+                    let standalone = self.dtd.borrow().standalone;
+                    self.dtd.borrow_mut().keep_processing = standalone;
                 } else {
                     // PE parsing enabled — try to call external entity handler
                     // Extract entity name from %name; token
@@ -2153,12 +2163,8 @@ impl Parser {
                             let name_bytes = &data[pos + 1..pos + 1 + semi];
                             if let Ok(name) = std::str::from_utf8(name_bytes) {
                                 // Check if entity is defined as external
-                                if self.external_entities.contains_key(name) {
-                                    let (sys_id, pub_id) = self
-                                        .external_entities
-                                        .get(name)
-                                        .cloned()
-                                        .unwrap_or((None, None));
+                                let ext_entity = self.dtd.borrow().external_entities.get(name).cloned();
+                                if let Some((sys_id, pub_id)) = ext_entity {
                                     if let Some(handler) = &mut self.external_entity_ref_handler {
                                         let base = self.base_uri.clone();
                                         let ok = handler(
@@ -2187,10 +2193,11 @@ impl Parser {
             }
             Role::InnerParamEntityRef => {
                 // PE reference inside a declaration
-                self.has_param_entity_refs = true;
+                self.dtd.borrow_mut().has_param_entity_refs = true;
                 let mut handler_called = false;
                 if self.param_entity_parsing == ParamEntityParsing::Never {
-                    self.dtd_keep_processing = self.dtd_standalone;
+                    let standalone = self.dtd.borrow().standalone;
+                    self.dtd.borrow_mut().keep_processing = standalone;
                 } else {
                     // PE parsing enabled — try to call external entity handler
                     // Extract entity name from %name; token
@@ -2199,12 +2206,8 @@ impl Parser {
                             let name_bytes = &data[pos + 1..pos + 1 + semi];
                             if let Ok(name) = std::str::from_utf8(name_bytes) {
                                 // Check if entity is defined as external
-                                if self.external_entities.contains_key(name) {
-                                    let (sys_id, pub_id) = self
-                                        .external_entities
-                                        .get(name)
-                                        .cloned()
-                                        .unwrap_or((None, None));
+                                let ext_entity = self.dtd.borrow().external_entities.get(name).cloned();
+                                if let Some((sys_id, pub_id)) = ext_entity {
                                     if let Some(handler) = &mut self.external_entity_ref_handler {
                                         let base = self.base_uri.clone();
                                         let ok = handler(
@@ -2228,7 +2231,8 @@ impl Parser {
                             }
                         }
                     }
-                    self.dtd_keep_processing = self.dtd_standalone;
+                    let standalone = self.dtd.borrow().standalone;
+                    self.dtd.borrow_mut().keep_processing = standalone;
                 }
                 (XmlError::None, handler_called)
             }
@@ -2237,13 +2241,13 @@ impl Parser {
                 (XmlError::None, self.start_doctype_decl_handler.is_some())
             }
             Role::EntityNone => {
-                (XmlError::None, self.dtd_keep_processing && self.entity_decl_handler.is_some())
+                (XmlError::None, self.dtd.borrow().keep_processing && self.entity_decl_handler.is_some())
             }
             Role::NotationNone => {
                 (XmlError::None, self.notation_decl_handler.is_some())
             }
             Role::AttlistNone => {
-                (XmlError::None, self.dtd_keep_processing && self.attlist_decl_handler.is_some())
+                (XmlError::None, self.dtd.borrow().keep_processing && self.attlist_decl_handler.is_some())
             }
             Role::ElementNone => {
                 (XmlError::None, self.element_decl_handler.is_some())
@@ -2712,12 +2716,13 @@ impl Parser {
                         let name = std::str::from_utf8(&data[name_start..name_end]).unwrap_or("");
 
                         // Check for unparsed entity (NDATA notation) — can't be referenced with &
-                        if self.unparsed_entities.contains(name) {
+                        if self.dtd.borrow().unparsed_entities.contains(name) {
                             return (XmlError::BinaryEntityRef, pos);
                         }
 
                         // 1. Check internal entities
-                        if let Some(value) = self.internal_entities.get(name).cloned() {
+                        let entity_value = self.dtd.borrow().internal_entities.get(name).cloned();
+                        if let Some(value) = entity_value {
                             if self.open_entities.contains(name) {
                                 return (XmlError::RecursiveEntityRef, pos);
                             }
@@ -2810,10 +2815,9 @@ impl Parser {
                             }
                         }
                         // 2. Check external entities (have system ID)
-                        else if self.external_entities.contains_key(name) {
+                        else if self.dtd.borrow().external_entities.contains_key(name) {
                             let entity_name = name.to_string();
-                            let (sys_id, pub_id) = self
-                                .external_entities
+                            let (sys_id, pub_id) = self.dtd.borrow().external_entities
                                 .get(&entity_name)
                                 .cloned()
                                 .unwrap_or((None, None));
@@ -2837,7 +2841,7 @@ impl Parser {
                         // 3. Entity not found at all
                         else {
                             // WFC: Entity Declared
-                            if !self.has_param_entity_refs || self.dtd_standalone {
+                            if !self.dtd.borrow().has_param_entity_refs || self.dtd.borrow().standalone {
                                 return (XmlError::UndefinedEntity, pos);
                             }
                             // External subset might define it — skip
@@ -2878,7 +2882,7 @@ impl Parser {
                     // Apply ATTLIST defaults BEFORE namespace processing
                     // (so xmlns:prefix defaults are picked up)
                     let specified_count = attrs.len() as i32;
-                    if let Some(defaults) = self.attlist_defaults.get(tag_name) {
+                    if let Some(defaults) = self.dtd.borrow().attlist_defaults.get(tag_name) {
                         for (dname, dval) in defaults {
                             if !attrs.iter().any(|(n, _)| n == dname) {
                                 attrs.push((dname.clone(), dval.clone()));
@@ -2898,7 +2902,7 @@ impl Parser {
 
                     // Normalize tokenized attribute values per XML spec §3.3.3
                     // NMTOKENS, IDREFS, ENTITIES types get whitespace collapsed
-                    if let Some(type_map) = self.attlist_types.get(tag_name) {
+                    if let Some(type_map) = self.dtd.borrow().attlist_types.get(tag_name) {
                         for (attr_name, attr_val) in attrs.iter_mut() {
                             if let Some(att_type) = type_map.get(attr_name.as_str()) {
                                 if matches!(
@@ -2925,7 +2929,7 @@ impl Parser {
                     self.n_specified_atts = specified_count * 2; // C counts name+value pairs
                                                                  // Find ID attribute index
                     self.id_att_index = -1;
-                    if let Some(types) = self.attlist_types.get(tag_name) {
+                    if let Some(types) = self.dtd.borrow().attlist_types.get(tag_name) {
                         for (i, (name, _)) in attrs.iter().enumerate() {
                             if types.get(name.as_str()).map(|t| t == "ID").unwrap_or(false) {
                                 self.id_att_index = (i * 2) as i32;
@@ -2974,7 +2978,7 @@ impl Parser {
 
                     // Apply ATTLIST defaults BEFORE namespace processing
                     let specified_count = attrs.len() as i32;
-                    if let Some(defaults) = self.attlist_defaults.get(&tag_name) {
+                    if let Some(defaults) = self.dtd.borrow().attlist_defaults.get(&tag_name) {
                         for (dname, dval) in defaults {
                             if !attrs.iter().any(|(n, _)| n == dname) {
                                 attrs.push((dname.clone(), dval.clone()));
@@ -2998,7 +3002,7 @@ impl Parser {
                     };
                     self.n_specified_atts = specified_count * 2;
                     self.id_att_index = -1;
-                    if let Some(types) = self.attlist_types.get(&tag_name) {
+                    if let Some(types) = self.dtd.borrow().attlist_types.get(&tag_name) {
                         for (i, (name, _)) in attrs.iter().enumerate() {
                             if types.get(name.as_str()).map(|t| t == "ID").unwrap_or(false) {
                                 self.id_att_index = (i * 2) as i32;
@@ -3561,7 +3565,7 @@ impl Parser {
                 .to_string();
             let raw_value = &data[attr.value_ptr..attr.value_end];
             // Always normalize: expand refs, normalize \t \n \r → space
-            let value = Self::normalize_attribute_value(raw_value, &self.internal_entities);
+            let value = Self::normalize_attribute_value(raw_value, &self.dtd.borrow().internal_entities);
             if value.contains('\x00') {
                 return Err(XmlError::RecursiveEntityRef);
             }
@@ -5279,12 +5283,14 @@ impl Parser {
             child.protocol_encoding_set = true;
         }
         // Inherit DTD state from parent
-        child.internal_entities = self.internal_entities.clone();
-        child.external_entities = self.external_entities.clone();
-        child.attlist_defaults = self.attlist_defaults.clone();
-        child.attlist_types = self.attlist_types.clone();
-        child.unparsed_entities = self.unparsed_entities.clone();
-        child.dtd_standalone = self.dtd_standalone;
+        // Matches C: parent and child share m_dtd for DTD subsets, clone for content entities
+        if context.is_empty() {
+            // DTD child — share DTD state (modifications visible to parent)
+            child.dtd = Rc::clone(&self.dtd);
+        } else {
+            // Content child — clone DTD state (isolated snapshot)
+            child.dtd = Rc::new(RefCell::new(self.dtd.borrow().clone()));
+        }
         child.param_entity_parsing = self.param_entity_parsing;
         // Foreign DTD subset (empty context) is treated as document entity
         // General entities (non-empty context) are not
