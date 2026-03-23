@@ -2137,11 +2137,7 @@ impl Parser {
 
             match tok {
                 XmlTok::TrailingCr => {
-                    // Check for async entity — mismatched tag levels
-                    if start_tag_level > 0 && self.tag_level != start_tag_level {
-                        return (XmlError::AsyncEntity, pos);
-                    }
-
+                    // C code: first call the handler, THEN check for async entity / no elements
                     if have_more {
                         return (XmlError::None, pos);
                     }
@@ -2150,8 +2146,12 @@ impl Parser {
                     } else {
                         self.report_default(enc, data, pos, end);
                     }
+                    // Now check for error conditions AFTER calling handler
                     if start_tag_level == 0 {
                         return (XmlError::NoElements, next);
+                    }
+                    if start_tag_level > 0 && self.tag_level != start_tag_level {
+                        return (XmlError::AsyncEntity, pos);
                     }
                     return (XmlError::None, end);
                 }
@@ -3618,7 +3618,8 @@ impl Parser {
         // If final, check for incomplete document and mark as finished
         if is_final {
             // If we never saw a root element, that's an error
-            if !self.seen_root && self.error_code == XmlError::None {
+            // BUT: external entities (tag_level > 0) don't require a complete root element
+            if !self.seen_root && self.tag_level == 0 && self.error_code == XmlError::None {
                 self.error_code = XmlError::NoElements;
                 self.parsing_state = ParsingState::Finished;
                 return XmlStatus::Error;
@@ -3722,6 +3723,22 @@ impl Parser {
                 return self.transcode_utf16_with_pending(&data[2..], false);
             }
             // Check for UTF-16 without BOM (NUL byte pattern)
+            if data.len() >= 2 {
+                if data[0] == 0 && data[1] != 0 {
+                    // UTF-16BE: high byte is 0, low byte is not
+                    self.detected_encoding = Some("UTF-16BE".to_string());
+                    return self.transcode_utf16_with_pending(data, true);
+                }
+                if data[0] != 0 && data[1] == 0 {
+                    // UTF-16LE: high byte is not 0, low byte is 0
+                    // This requires at least 2 bytes to be confident
+                    if data.len() >= 2 {
+                        self.detected_encoding = Some("UTF-16LE".to_string());
+                        return self.transcode_utf16_with_pending(data, false);
+                    }
+                }
+            }
+            // More specific check if we have 4+ bytes
             if data.len() >= 4 {
                 if data[0] == 0 && data[1] == b'<' {
                     self.detected_encoding = Some("UTF-16BE".to_string());
