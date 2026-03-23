@@ -530,6 +530,42 @@ def compare(c_func_name, r_func_name, extra_rust_funcs=None):
     if missing_all_calls:
         divergences.append(("MEDIUM", "missing_function_calls", missing_all_calls))
 
+    # 5. Function call WITH ARGUMENTS comparison (detects different parameter values)
+    # Extract "func(arg1, arg2)" patterns from both C and Rust
+    c_full_calls = re.findall(r'\b(\w+)\s*\(([^)]*)\)', c_text)
+    r_full_calls = re.findall(r'\b(\w+)\s*\(([^)]*)\)', r_text)
+    # Look for key functions called with different arguments
+    c_call_args = {}
+    for name, args in c_full_calls:
+        if name in SUPPRESSED_CALLS or name.isupper():
+            continue
+        rust_name = c_to_rust_call_name(name)
+        key = rust_name
+        if key not in c_call_args:
+            c_call_args[key] = set()
+        # Normalize args (strip whitespace, keep first 2 args)
+        arg_parts = [a.strip() for a in args.split(',')][:3]
+        c_call_args[key].add(tuple(arg_parts))
+
+    r_call_args = {}
+    for name, args in r_full_calls:
+        key = name
+        if key not in r_call_args:
+            r_call_args[key] = set()
+        arg_parts = [a.strip() for a in args.split(',')][:3]
+        r_call_args[key].add(tuple(arg_parts))
+
+    # Report functions called with different argument patterns
+    for func_name in sorted(set(c_call_args) & set(r_call_args)):
+        c_args = c_call_args[func_name]
+        r_args = r_call_args[func_name]
+        if c_args != r_args:
+            # Check for significant numeric argument differences
+            c_nums = {a for arg_tuple in c_args for a in arg_tuple if a.isdigit()}
+            r_nums = {a for arg_tuple in r_args for a in arg_tuple if a.isdigit()}
+            if c_nums != r_nums and c_nums:
+                divergences.append(("LOW", f"call {func_name}: C args include {c_nums}, Rust args include {r_nums}", []))
+
     rust_total_lines = r_text.count('\n') + 1 + extra_lines
     return {
         "c_function": c_func_name,
