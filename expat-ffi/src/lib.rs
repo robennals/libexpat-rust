@@ -1461,7 +1461,7 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
             // If creating a DTD subset parser (empty context), mark param entity as read
             // This matches C's behavior where creating a child parser implies DTD content will be processed
             if ctx_str.is_empty() {
-                handle.parser.param_entity_read = true;
+                handle.parser.dtd.borrow_mut().param_entity_read = true;
             }
             let new_ptr = new_handle(ext_parser);
             // Copy user_data and handler settings from parent (matches C behavior)

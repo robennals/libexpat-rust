@@ -160,6 +160,21 @@ python3 meta/scripts/port-function.py analyze
 python3 meta/scripts/port-function.py extract storeAtts
 ```
 
+## Skills (in .claude/skills/)
+
+- **port-c-function.md** — Step-by-step process for porting a C function to Rust
+- **fix-failing-test.md** — How to diagnose and fix a failing C test
+- **verify-port-quality.md** — Checklist for verifying port quality after changes
+- **c-to-rust-idioms.md** — All approved design decisions for C→Rust translation
+
+## Function Mapping (in meta/plans/function-mapping.md)
+
+Complete mapping of all 168 C functions to their Rust equivalents, documenting:
+- Which functions exist in Rust (48 matched)
+- Which are in the FFI layer (69)
+- Which are C-specific and not needed (27)
+- Which are truly missing and need porting (24)
+
 ## Agent Workflow
 
 The proven workflow for implementing missing features:

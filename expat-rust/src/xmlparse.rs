@@ -39,6 +39,7 @@ pub struct DtdState {
     pub has_param_entity_refs: bool,
     pub standalone: bool,
     pub keep_processing: bool,
+    pub param_entity_read: bool,
 }
 
 impl Default for DtdState {
@@ -53,6 +54,7 @@ impl Default for DtdState {
             has_param_entity_refs: false,
             standalone: false,
             keep_processing: true,
+            param_entity_read: false,
         }
     }
 }
@@ -220,6 +222,9 @@ struct OpenInternalEntity {
     between_decl: bool,
     /// Previous processor to restore when entity is closed
     saved_processor: Processor,
+    /// Whether entity still has content to process (C: entity->hasMore)
+    /// First pass (true): process entity text. Second pass (false): cleanup.
+    has_more: bool,
 }
 
 /// Processor type enumeration — idiomatic Rust alternative to C function pointers
@@ -450,10 +455,11 @@ pub struct Parser {
     /// For external entity parsers: content start_tag_level (1 for ext entities, 0 for main)
     /// This prevents do_content from returning NoElements for external entities
     content_start_tag_level: u32,
-    /// Whether external parameter entity was actually read (C: dtd->paramEntityRead)
-    pub param_entity_read: bool,
     /// Stack of open internal entities — corresponds to m_openInternalEntities in C
     open_internal_entities: Vec<OpenInternalEntity>,
+    /// Reenter flag — signals run_processor to call processor again immediately.
+    /// Matches C's m_reenter / triggerReenter mechanism.
+    reenter: bool,
 
     // Handler fields
     start_element_handler: Option<StartElementHandler>,
@@ -565,8 +571,8 @@ impl Parser {
             ns_map: HashMap::new(),
             ns_triplets: false,
             content_start_tag_level: 0,
-            param_entity_read: false,
             open_internal_entities: Vec::new(),
+            reenter: false,
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -675,8 +681,8 @@ impl Parser {
             ns_map,
             ns_triplets: false,
             content_start_tag_level: 0,
-            param_entity_read: false,
             open_internal_entities: Vec::new(),
+            reenter: false,
             start_element_handler: None,
             end_element_handler: None,
             character_data_handler: None,
@@ -854,6 +860,14 @@ impl Parser {
             if error != XmlError::None {
                 self.error_code = error;
                 return;
+            }
+
+            // C: callProcessor reenter loop (xmlparse.c:1303-1309)
+            // If reenter flag is set, clear it and loop to re-dispatch.
+            if self.reenter {
+                self.reenter = false;
+                start = next_pos;
+                continue;
             }
 
             // If processor changed, re-dispatch with remaining data
@@ -1245,11 +1259,11 @@ impl Parser {
         &mut self,
         enc: &xmltok::Utf8Encoding,
         data: &[u8],
-        _start: usize,
+        start: usize,
         end: usize,
         have_more: bool,
     ) -> (XmlError, usize) {
-        let mut pos = 0;
+        let mut pos = start;
 
         loop {
             // Get the next token from the tokenizer
@@ -1387,12 +1401,21 @@ impl Parser {
                     // Forward to default handler if suppress_default is false
                     // In C libexpat, reportDefault() is called for prolog tokens
                     // ONLY when no specific handler consumed them.
+                    // Must happen BEFORE InternalEntity check (C does this before reenter return).
                     if (self.default_handler.is_some() || self.default_handler_expand.is_some()) && !suppress_default {
                         self.report_default(&xmltok::Utf8Encoding, data, pos, next);
                     }
 
-                    // Update position for next iteration
+                    // Update position tracking for this token
                     self.advance_pos_slice(&data[pos..next]);
+
+                    // C: if reenter flag is set (from processEntity → triggerReenter),
+                    // return to let callProcessor/run_processor re-dispatch.
+                    // Matches C xmlparse.c line 6268-6270.
+                    if self.reenter {
+                        return (XmlError::None, next);
+                    }
+
                     pos = next;
                 }
             }
@@ -1647,12 +1670,12 @@ impl Parser {
                             let base = self.base_uri.clone();
                             let sys_id = self.doctype_system_id.clone();
                             let pub_id = self.doctype_public_id.clone();
-                            self.param_entity_read = false;
+                            self.dtd.borrow_mut().param_entity_read = false;
                             let ok = handler("", base.as_deref(), sys_id.as_deref(), pub_id.as_deref());
                             if !ok {
                                 return (XmlError::ExternalEntityHandling, false);
                             }
-                            if self.param_entity_read {
+                            if self.dtd.borrow().param_entity_read {
                                 if !self.dtd.borrow().standalone {
                                     if let Some(handler) = &mut self.not_standalone_handler {
                                         if !handler() {
@@ -1725,13 +1748,13 @@ impl Parser {
                     self.dtd.borrow_mut().has_param_entity_refs = true;
                     // Handler was already called above (line 1505) and may have set param_entity_read
                     // Check BEFORE clearing it
-                    if self.param_entity_read {
+                    if self.dtd.borrow().param_entity_read {
                         // DTD was actually read — keep has_param_entity_refs = true
                     } else {
                         // DTD was not read — restore has_param_entity_refs
                         self.dtd.borrow_mut().has_param_entity_refs = had_param_entity_refs;
                     }
-                    self.param_entity_read = false;
+                    self.dtd.borrow_mut().param_entity_read = false;
                     // Check not-standalone after foreign DTD processing
                     if !self.dtd.borrow().standalone {
                         if let Some(handler) = &mut self.not_standalone_handler {
@@ -1757,6 +1780,14 @@ impl Parser {
             Role::ParamEntityName => {
                 // PE declaration — store name and mark as param entity
                 let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                // Create entry in param_entities (will be updated with value/system_id later)
+                self.dtd.borrow_mut().param_entities.entry(name.clone()).or_insert_with(|| ParamEntity {
+                    system_id: None,
+                    public_id: None,
+                    value: None,
+                    is_internal: false,
+                    open: false,
+                });
                 self.current_entity_name = Some(name);
                 self.current_is_param_entity = true;
                 (XmlError::None, self.entity_decl_handler.is_some())
@@ -1813,7 +1844,13 @@ impl Parser {
                             handler_called = true;
                         }
                     }
-                    if !self.current_is_param_entity {
+                    if self.current_is_param_entity {
+                        // Store system_id/public_id on the PE entry
+                        if let Some(pe) = self.dtd.borrow_mut().param_entities.get_mut(name) {
+                            pe.system_id = self.current_entity_system_id.take();
+                            pe.public_id = self.current_entity_public_id.take();
+                        }
+                    } else {
                         self.dtd.borrow_mut().external_entities.insert(
                             name.clone(),
                             (
@@ -2176,108 +2213,108 @@ impl Parser {
                 let (result, _) = self.do_ignore_section(data, next, data.len());
                 (result, true)
             }
-            Role::ParamEntityRef => {
-                // PE reference outside internal subset (between declarations)
+            Role::ParamEntityRef | Role::InnerParamEntityRef => {
+                // PE reference — shared logic matching C's fall-through at lines 5996-6092
+                let is_between_decl = matches!(role, Role::ParamEntityRef);
                 self.dtd.borrow_mut().has_param_entity_refs = true;
                 let mut handler_called = false;
+                // C uses break statements to skip the not_standalone check.
+                // We use this flag to track whether to run it (only when falling through).
+                let mut check_not_standalone = true;
+
                 if self.param_entity_parsing == ParamEntityParsing::Never {
                     let standalone = self.dtd.borrow().standalone;
                     self.dtd.borrow_mut().keep_processing = standalone;
+                    // C: falls through to not_standalone check
                 } else {
-                    // PE parsing enabled — try to call external entity handler
                     // Extract entity name from %name; token
-                    if data.len() > pos && data[pos] == b'%' {
-                        if let Some(semi) = data[pos + 1..].iter().position(|&b| b == b';') {
-                            let name_bytes = &data[pos + 1..pos + 1 + semi];
-                            if let Ok(name) = std::str::from_utf8(name_bytes) {
-                                // Check if entity is defined as external
-                                let ext_entity = self.dtd.borrow().external_entities.get(name).cloned();
-                                if let Some((sys_id, pub_id)) = ext_entity {
-                                    if let Some(handler) = &mut self.external_entity_ref_handler {
-                                        let base = self.base_uri.clone();
-                                        let ok = handler(
-                                            name,
-                                            base.as_deref(),
-                                            sys_id.as_deref(),
-                                            pub_id.as_deref(),
-                                        );
-                                        handler_called = true;
-                                        if !ok {
-                                            return (XmlError::ExternalEntityHandling, false);
-                                        }
-                                        // C: after PE ext entity handler returns, check not_standalone
-                                        if self.param_entity_read && !self.dtd.borrow().standalone {
-                                            if let Some(ns_handler) = &mut self.not_standalone_handler {
-                                                if !ns_handler() {
-                                                    return (XmlError::NotStandalone, false);
-                                                }
-                                            }
-                                        }
-                                    } else if let Some(skipped_handler) = &mut self.skipped_entity_handler {
-                                        skipped_handler(name, true);
-                                        handler_called = true;
+                    let pe_name = if data.len() > pos && data[pos] == b'%' {
+                        data[pos + 1..].iter().position(|&b| b == b';').and_then(|semi| {
+                            std::str::from_utf8(&data[pos + 1..pos + 1 + semi]).ok().map(|s| s.to_string())
+                        })
+                    } else {
+                        None
+                    };
+
+                    if let Some(name) = pe_name {
+                        let pe = self.dtd.borrow().param_entities.get(&name).cloned();
+
+                        if let Some(pe) = pe {
+                            // C: entity->open check for recursion
+                            if pe.open {
+                                return (XmlError::RecursiveEntityRef, false);
+                            }
+                            if let Some(ref value) = pe.value {
+                                // Internal PE — call processEntity (C line 6059)
+                                let entity_bytes = value.as_bytes().to_vec();
+                                if let Some(e) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                                    e.open = true;
+                                }
+                                let result = self.process_entity(&name, &entity_bytes, true);
+                                if result != XmlError::None {
+                                    return (result, false);
+                                }
+                                handler_called = true;
+                                check_not_standalone = false; // C: break at line 6063
+                            } else if pe.system_id.is_some() {
+                                // External PE — call handler
+                                if self.external_entity_ref_handler.is_some() {
+                                    self.dtd.borrow_mut().param_entity_read = false;
+                                    if let Some(e) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                                        e.open = true;
                                     }
-                                } else if let Some(skipped_handler) = &mut self.skipped_entity_handler {
-                                    skipped_handler(name, true);
+                                    let handler = self.external_entity_ref_handler.as_mut().unwrap();
+                                    let base = self.base_uri.clone();
+                                    // C passes 0 (NULL) as context for PE refs
+                                    let ok = handler(
+                                        "",
+                                        base.as_deref(),
+                                        pe.system_id.as_deref(),
+                                        pe.public_id.as_deref(),
+                                    );
+                                    if let Some(e) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                                        e.open = false;
+                                    }
+                                    handler_called = true;
+                                    if !ok {
+                                        return (XmlError::ExternalEntityHandling, false);
+                                    }
+                                    if !self.dtd.borrow().param_entity_read {
+                                        let standalone = self.dtd.borrow().standalone;
+                                        self.dtd.borrow_mut().keep_processing = standalone;
+                                        check_not_standalone = false; // C: break at line 6081
+                                    }
+                                    // paramEntityRead=true → falls through to not_standalone check
+                                } else {
+                                    let standalone = self.dtd.borrow().standalone;
+                                    self.dtd.borrow_mut().keep_processing = standalone;
+                                    check_not_standalone = false; // C: break at line 6085
+                                }
+                            }
+                        } else {
+                            // Entity not found
+                            let standalone = self.dtd.borrow().standalone;
+                            self.dtd.borrow_mut().keep_processing = standalone;
+                            if is_between_decl {
+                                if let Some(skipped_handler) = &mut self.skipped_entity_handler {
+                                    skipped_handler(&name, true);
                                     handler_called = true;
                                 }
                             }
+                            check_not_standalone = false; // C: break at line 6051
                         }
                     }
                 }
-                (XmlError::None, handler_called)
-            }
-            Role::InnerParamEntityRef => {
-                // PE reference inside a declaration
-                self.dtd.borrow_mut().has_param_entity_refs = true;
-                let mut handler_called = false;
-                if self.param_entity_parsing == ParamEntityParsing::Never {
-                    let standalone = self.dtd.borrow().standalone;
-                    self.dtd.borrow_mut().keep_processing = standalone;
-                } else {
-                    // PE parsing enabled — try to call external entity handler
-                    // Extract entity name from %name; token
-                    if data.len() > pos && data[pos] == b'%' {
-                        if let Some(semi) = data[pos + 1..].iter().position(|&b| b == b';') {
-                            let name_bytes = &data[pos + 1..pos + 1 + semi];
-                            if let Ok(name) = std::str::from_utf8(name_bytes) {
-                                // Check if entity is defined as external
-                                let ext_entity = self.dtd.borrow().external_entities.get(name).cloned();
-                                if let Some((sys_id, pub_id)) = ext_entity {
-                                    if let Some(handler) = &mut self.external_entity_ref_handler {
-                                        let base = self.base_uri.clone();
-                                        let ok = handler(
-                                            name,
-                                            base.as_deref(),
-                                            sys_id.as_deref(),
-                                            pub_id.as_deref(),
-                                        );
-                                        handler_called = true;
-                                        if !ok {
-                                            return (XmlError::ExternalEntityHandling, false);
-                                        }
-                                        // C: after PE ext entity handler returns, check not_standalone
-                                        if self.param_entity_read && !self.dtd.borrow().standalone {
-                                            if let Some(ns_handler) = &mut self.not_standalone_handler {
-                                                if !ns_handler() {
-                                                    return (XmlError::NotStandalone, false);
-                                                }
-                                            }
-                                        }
-                                    } else if let Some(skipped_handler) = &mut self.skipped_entity_handler {
-                                        skipped_handler(name, true);
-                                        handler_called = true;
-                                    }
-                                } else if let Some(skipped_handler) = &mut self.skipped_entity_handler {
-                                    skipped_handler(name, true);
-                                    handler_called = true;
-                                }
-                            }
+
+                // C line 6089-6091: not_standalone check only when falling through
+                if check_not_standalone && !self.dtd.borrow().standalone {
+                    if let Some(ns_handler) = &mut self.not_standalone_handler {
+                        if !ns_handler() {
+                            return (XmlError::NotStandalone, false);
                         }
                     }
-                    let standalone = self.dtd.borrow().standalone;
-                    self.dtd.borrow_mut().keep_processing = standalone;
                 }
+
                 (XmlError::None, handler_called)
             }
             Role::DoctypeNone => {
@@ -2453,90 +2490,77 @@ impl Parser {
 
     /// Internal entity processor — new-style (data, start, end) version
     /// Processes entity content from the open_internal_entities stack.
-    /// Corresponds to internalEntityProcessor in C (xmlparse.c).
+    /// Corresponds to internalEntityProcessor in C (xmlparse.c:6420).
+    /// Uses C's two-pass approach:
+    ///   Pass 1 (has_more=true): process entity text via doProlog/doContent
+    ///   Pass 2 (has_more=false): cleanup — close entity, restore processor
     fn internal_entity_processor(&mut self, _data: &[u8], start: usize, _end: usize) -> (XmlError, usize) {
-        // Check if there's an open entity
         if self.open_internal_entities.is_empty() {
             return (XmlError::UnexpectedState, start);
         }
 
-        // Get the top entity from the stack (without removing it yet)
-        let open = self.open_internal_entities.last_mut().unwrap();
+        // Extract entity info (avoid borrowing self during do_prolog/do_content)
+        let has_more = self.open_internal_entities.last().unwrap().has_more;
 
-        // Extract entity info
-        let entity_text = open.entity_text.clone();
-        let start_pos = open.processed;
-        let is_param = open.is_param;
-        let start_tag_level = open.start_tag_level;
+        if has_more {
+            // Pass 1: process entity text
+            let entity_text = self.open_internal_entities.last().unwrap().entity_text.clone();
+            let start_pos = self.open_internal_entities.last().unwrap().processed;
+            let is_param = self.open_internal_entities.last().unwrap().is_param;
+            let start_tag_level = self.open_internal_entities.last().unwrap().start_tag_level;
+            let entity_end = entity_text.len();
 
-        // Determine the end position — we want to process as much as we can
-        // The entity_text is the full content; we need to process from start_pos to end
-        let entity_end = entity_text.len();
+            let enc = xmltok::Utf8Encoding;
+            let (error, next_pos) = if is_param {
+                self.do_prolog(&enc, &entity_text, start_pos, entity_end, false)
+            } else {
+                self.do_content(start_tag_level, &enc, &entity_text, start_pos, entity_end, false)
+            };
 
-        if start_pos >= entity_end {
-            // Entity is already fully processed — this shouldn't happen unless hasMore is false
-            // but we're still in InternalEntity processor. This is the cleanup phase.
+            if error != XmlError::None {
+                return (error, start);
+            }
 
-            // Remove the entity from the open list
-            let _ = self.open_internal_entities.pop();
-
-            if self.open_internal_entities.is_empty() {
-                // No more entities — restore the saved processor
-                if let Some(open_popped) = self.open_internal_entities.last() {
-                    self.processor = open_popped.saved_processor;
-                } else {
-                    // This was the last entity; we need to have saved a processor
-                    // In this case, we should restore from the entity we just popped
-                    // Since we can't, we'll assume it should go back to Content
-                    self.processor = Processor::Content;
+            // Check if entity is fully consumed
+            if next_pos < entity_end {
+                // Not done yet — save progress (suspended or needs reenter for inner entity)
+                if let Some(open) = self.open_internal_entities.last_mut() {
+                    open.processed = next_pos;
                 }
+                return (XmlError::None, start);
             }
 
-            return (XmlError::None, start);
-        }
-
-        // Process entity content
-        let enc = xmltok::Utf8Encoding;
-        let (error, next_pos) = if is_param {
-            // Parameter entity — use doProlog
-            self.do_prolog(&enc, &entity_text, start_pos, entity_end, false)
-        } else {
-            // General entity — use doContent
-            self.do_content(start_tag_level, &enc, &entity_text, start_pos, entity_end, false)
-        };
-
-        if error != XmlError::None {
-            return (error, start);
-        }
-
-        // Check if entity is fully processed
-        if next_pos < entity_end {
-            // Entity not fully consumed yet — save progress and wait for more data
-            if let Some(open) = self.open_internal_entities.last_mut() {
-                open.processed = next_pos;
-            }
-            return (XmlError::None, start);
-        }
-
-        // Entity is fully processed — close it
-        // Check for async entity (tag level mismatch for general entities)
-        {
-            let open = self.open_internal_entities.last().unwrap();
-            if !is_param && open.start_tag_level != self.tag_level {
+            // Entity fully processed — mark has_more=false for cleanup on next call
+            // Check for async entity first (tag level mismatch for general entities)
+            if !is_param && start_tag_level != self.tag_level {
                 return (XmlError::AsyncEntity, start);
             }
+
+            if let Some(open) = self.open_internal_entities.last_mut() {
+                open.has_more = false;
+            }
+            // Signal run_processor to call us again for cleanup (C: triggerReenter)
+            self.reenter = true;
+            return (XmlError::None, start);
         }
 
-        // Remove the entity from the open list
-        let closed_entity = self.open_internal_entities.pop().unwrap();
+        // Pass 2: cleanup — entity is fully processed
+        let closed = self.open_internal_entities.pop().unwrap();
 
-        // Restore the previous processor
+        // Mark entity as closed
+        if closed.is_param {
+            if let Some(pe) = self.dtd.borrow_mut().param_entities.get_mut(&closed.entity_name) {
+                pe.open = false;
+            }
+        }
+
+        // Restore processor
         if self.open_internal_entities.is_empty() {
-            // No more entities — restore from the closed entity's saved processor
-            self.processor = closed_entity.saved_processor;
+            self.processor = closed.saved_processor;
         }
+        // Signal run_processor to re-dispatch with restored processor (C: triggerReenter)
+        self.reenter = true;
 
-        // Return start (not consumed) to continue processing from the original data
         (XmlError::None, start)
     }
 
@@ -2552,10 +2576,12 @@ impl Parser {
             is_param,
             between_decl: false,
             saved_processor: self.processor,
+            has_more: true,
         };
 
         self.open_internal_entities.push(open);
         self.processor = Processor::InternalEntity;
+        self.reenter = true;
         XmlError::None
     }
 
