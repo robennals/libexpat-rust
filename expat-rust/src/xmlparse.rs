@@ -389,6 +389,8 @@ pub struct Parser {
     event_cur_data: Vec<u8>,
     /// Pending byte from incomplete UTF-16 code unit across chunk boundaries
     utf16_pending_byte: Option<u8>,
+    /// Pending bytes for custom encoding multi-byte sequences split across parse() calls
+    custom_encoding_pending: Vec<u8>,
     /// Buffer for partial encoding detection (BOM bytes received across calls)
     encoding_detection_buf: Vec<u8>,
     /// Current ATTLIST element name being processed
@@ -537,6 +539,7 @@ impl Parser {
             event_cur_byte_count: 0,
             event_cur_data: Vec::new(),
             utf16_pending_byte: None,
+            custom_encoding_pending: Vec::new(),
             encoding_detection_buf: Vec::new(),
             current_attlist_element: None,
             current_attlist_attr: None,
@@ -647,6 +650,7 @@ impl Parser {
             event_cur_byte_count: 0,
             event_cur_data: Vec::new(),
             utf16_pending_byte: None,
+            custom_encoding_pending: Vec::new(),
             encoding_detection_buf: Vec::new(),
             current_attlist_element: None,
             current_attlist_attr: None,
@@ -1415,6 +1419,7 @@ impl Parser {
                     if self.reenter {
                         return (XmlError::None, next);
                     }
+
 
                     pos = next;
                 }
@@ -4334,6 +4339,24 @@ impl Parser {
                 // Latin-1 or similar single-byte encoding — transcode to UTF-8
                 self.buffer.extend(transcode_latin1_to_utf8(data));
             }
+        } else if self.custom_encoding_map.is_some() {
+            // Custom encoding — transcode through the encoding map
+            // Prepend any pending bytes from incomplete multi-byte sequences
+            let input = if self.custom_encoding_pending.is_empty() {
+                data.to_vec()
+            } else {
+                let mut combined = std::mem::take(&mut self.custom_encoding_pending);
+                combined.extend_from_slice(data);
+                combined
+            };
+            match self.transcode_custom_encoding(&input) {
+                Ok(transcoded) => self.buffer.extend_from_slice(&transcoded),
+                Err(err) => {
+                    self.error_code = err;
+                    self.parsing_state = ParsingState::Finished;
+                    return XmlStatus::Error;
+                }
+            }
         } else {
             self.buffer.extend_from_slice(data);
         }
@@ -4638,7 +4661,7 @@ impl Parser {
     }
 
     /// Transcode data from custom encoding to UTF-8
-    fn transcode_custom_encoding(&self, data: &[u8]) -> Result<Vec<u8>, XmlError> {
+    fn transcode_custom_encoding(&mut self, data: &[u8]) -> Result<Vec<u8>, XmlError> {
         if let Some(ref map) = self.custom_encoding_map {
             let mut result = Vec::new();
             let mut i = 0;
@@ -4686,8 +4709,8 @@ impl Parser {
                     // Multi-byte sequence: map_val in [-4, -2]
                     let n_bytes = (-map_val) as usize;
                     if i + n_bytes > data.len() {
-                        // Not enough bytes — return what we have so far
-                        // The remaining bytes will be transcoded in the next call
+                        // Not enough bytes — save remaining as pending
+                        self.custom_encoding_pending = data[i..].to_vec();
                         return Ok(result);
                     }
 
