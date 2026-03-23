@@ -1252,7 +1252,17 @@ pub unsafe extern "C" fn XML_SetExternalEntityRefHandler(
                     .as_ref()
                     .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
 
-                let result = handler_fn(parser_ptr, ctx_ptr, base_ptr, sysid_ptr, pubid_ptr);
+                // Get the handler arg at call time - if NULL, use parser itself
+                let handler_arg = unsafe {
+                    let handle = &*parser_ptr;
+                    if handle.ext_entity_ref_handler_arg.is_null() {
+                        parser_ptr as *mut c_void
+                    } else {
+                        handle.ext_entity_ref_handler_arg
+                    }
+                };
+
+                let result = handler_fn(handler_arg as XML_Parser, ctx_ptr, base_ptr, sysid_ptr, pubid_ptr);
                 result != 0
             },
         )));
