@@ -1388,15 +1388,48 @@ impl Parser {
                     }
                     self.doctype_handler_called = true;
                 }
-                // If the document references an external subset and is not standalone,
-                // invoke the not-standalone handler (matches C doProlog behavior)
-                if self.has_param_entity_refs && !self.dtd_standalone {
-                    if let Some(handler) = &mut self.not_standalone_handler {
-                        if !handler() {
-                            return (XmlError::NotStandalone, false);
+
+                // Load external DTD subset if system ID is present
+                // Matches C: if (parser->m_doctypeSysid || parser->m_useForeignDTD)
+                if self.doctype_system_id.is_some() || self.foreign_dtd {
+                    let had_param_entity_refs = self.has_param_entity_refs;
+                    self.has_param_entity_refs = true;
+                    if self.param_entity_parsing != ParamEntityParsing::Never {
+                        if let Some(handler) = &mut self.external_entity_ref_handler {
+                            let base = self.base_uri.clone();
+                            let sys_id = self.doctype_system_id.clone();
+                            let pub_id = self.doctype_public_id.clone();
+                            self.param_entity_read = false;
+                            let ok = handler("", base.as_deref(), sys_id.as_deref(), pub_id.as_deref());
+                            if !ok {
+                                return (XmlError::ExternalEntityHandling, false);
+                            }
+                            if self.param_entity_read {
+                                if !self.dtd_standalone {
+                                    if let Some(handler) = &mut self.not_standalone_handler {
+                                        if !handler() {
+                                            return (XmlError::NotStandalone, false);
+                                        }
+                                    }
+                                }
+                            } else if self.doctype_system_id.is_none() {
+                                // Foreign DTD but nothing was read — restore
+                                self.has_param_entity_refs = had_param_entity_refs;
+                            }
+                        }
+                    }
+                    self.foreign_dtd = false;
+                } else {
+                    // No external subset — check not-standalone
+                    if self.has_param_entity_refs && !self.dtd_standalone {
+                        if let Some(handler) = &mut self.not_standalone_handler {
+                            if !handler() {
+                                return (XmlError::NotStandalone, false);
+                            }
                         }
                     }
                 }
+
                 // End of DOCTYPE
                 if let Some(handler) = &mut self.end_doctype_decl_handler {
                     handler();
