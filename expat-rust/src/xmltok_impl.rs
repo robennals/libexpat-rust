@@ -7,11 +7,139 @@
 //! by [`xmlrole`](crate::xmlrole) and [`xmlparse`](crate::xmlparse)).
 
 use crate::char_tables::ByteType;
+use crate::nametab::{NAMING_BITMAP, NAME_PAGES, NMSTRT_PAGES};
 
 /// Check if a byte is a valid UTF-8 continuation byte (0x80-0xBF)
 #[inline]
 fn is_utf8_follow(b: u8) -> bool {
     (b & 0xC0) == 0x80
+}
+
+/// Check if a 2-byte UTF-8 sequence is a name-start character.
+/// Matches C's utf8_isNmstrt2 / UTF8_GET_NAMING2(nmstrtPages, byte).
+#[inline]
+fn utf8_is_nmstrt2(data: &[u8], pos: usize) -> bool {
+    let b0 = data[pos] as usize;
+    let b1 = data[pos + 1] as usize;
+    let page_idx = (b0 >> 2) & 7;
+    let page = NMSTRT_PAGES[page_idx] as usize;
+    let bitmap_idx = (page << 3) + ((b0 & 3) << 1) + ((b1 >> 5) & 1);
+    if bitmap_idx >= NAMING_BITMAP.len() {
+        return false;
+    }
+    (NAMING_BITMAP[bitmap_idx] & (1u32 << (b1 & 0x1F))) != 0
+}
+
+/// Check if a 3-byte UTF-8 sequence is a name-start character.
+/// Matches C's utf8_isNmstrt3 / UTF8_GET_NAMING3(nmstrtPages, byte).
+#[inline]
+fn utf8_is_nmstrt3(data: &[u8], pos: usize) -> bool {
+    let b0 = data[pos] as usize;
+    let b1 = data[pos + 1] as usize;
+    let b2 = data[pos + 2] as usize;
+    let page_idx = ((b0 & 0xF) << 4) + ((b1 >> 2) & 0xF);
+    if page_idx >= NMSTRT_PAGES.len() {
+        return false;
+    }
+    let page = NMSTRT_PAGES[page_idx] as usize;
+    let bitmap_idx = (page << 3) + ((b1 & 3) << 1) + ((b2 >> 5) & 1);
+    if bitmap_idx >= NAMING_BITMAP.len() {
+        return false;
+    }
+    (NAMING_BITMAP[bitmap_idx] & (1u32 << (b2 & 0x1F))) != 0
+}
+
+/// Check if a 2-byte UTF-8 sequence is a name character (not necessarily name-start).
+/// Matches C's utf8_isName2 / UTF8_GET_NAMING2(namePages, byte).
+#[inline]
+fn utf8_is_name2(data: &[u8], pos: usize) -> bool {
+    let b0 = data[pos] as usize;
+    let b1 = data[pos + 1] as usize;
+    let page_idx = (b0 >> 2) & 7;
+    let page = NAME_PAGES[page_idx] as usize;
+    let bitmap_idx = (page << 3) + ((b0 & 3) << 1) + ((b1 >> 5) & 1);
+    if bitmap_idx >= NAMING_BITMAP.len() {
+        return false;
+    }
+    (NAMING_BITMAP[bitmap_idx] & (1u32 << (b1 & 0x1F))) != 0
+}
+
+/// Check if a 3-byte UTF-8 sequence is a name character (not necessarily name-start).
+/// Matches C's utf8_isName3 / UTF8_GET_NAMING3(namePages, byte).
+#[inline]
+fn utf8_is_name3(data: &[u8], pos: usize) -> bool {
+    let b0 = data[pos] as usize;
+    let b1 = data[pos + 1] as usize;
+    let b2 = data[pos + 2] as usize;
+    let page_idx = ((b0 & 0xF) << 4) + ((b1 >> 2) & 0xF);
+    if page_idx >= NAME_PAGES.len() {
+        return false;
+    }
+    let page = NAME_PAGES[page_idx] as usize;
+    let bitmap_idx = (page << 3) + ((b1 & 3) << 1) + ((b2 >> 5) & 1);
+    if bitmap_idx >= NAMING_BITMAP.len() {
+        return false;
+    }
+    (NAMING_BITMAP[bitmap_idx] & (1u32 << (b2 & 0x1F))) != 0
+}
+
+/// Check if a multi-byte UTF-8 sequence has valid continuation bytes.
+/// Matches C's IS_INVALID_CHAR check.
+fn is_valid_utf8_multibyte(data: &[u8], pos: usize, byte_len: usize) -> bool {
+    for i in 1..byte_len {
+        if !is_utf8_follow(data[pos + i]) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Check if a multi-byte UTF-8 sequence at `pos` is a valid name-start character.
+/// Returns `Ok(true)` if valid name-start, `Ok(false)` if invalid or not name-start.
+/// Returns `Err(())` if not enough bytes (partial character).
+fn check_lead_nmstrt(data: &[u8], pos: usize, end: usize, byte_len: usize) -> Result<bool, ()> {
+    if end - pos < byte_len {
+        return Err(()); // partial character
+    }
+    // Check for valid UTF-8 continuation bytes (C's IS_INVALID_CHAR)
+    if !is_valid_utf8_multibyte(data, pos, byte_len) {
+        return Ok(false); // invalid UTF-8 → not a valid character
+    }
+    let valid = match byte_len {
+        2 => utf8_is_nmstrt2(data, pos),
+        3 => utf8_is_nmstrt3(data, pos),
+        4 => false, // 4-byte UTF-8 = U+10000+, never valid XML name-start
+        _ => false,
+    };
+    Ok(valid)
+}
+
+/// Check if a multi-byte UTF-8 sequence at `pos` is a valid name character (continuation).
+fn check_lead_name(data: &[u8], pos: usize, end: usize, byte_len: usize) -> Result<bool, ()> {
+    if end - pos < byte_len {
+        return Err(()); // partial character
+    }
+    // Check for valid UTF-8 continuation bytes (C's IS_INVALID_CHAR)
+    if !is_valid_utf8_multibyte(data, pos, byte_len) {
+        return Ok(false); // invalid UTF-8 → not a valid character
+    }
+    let valid = match byte_len {
+        2 => utf8_is_name2(data, pos),
+        3 => utf8_is_name3(data, pos),
+        4 => false, // 4-byte UTF-8 = U+10000+, never valid XML name char
+        _ => false,
+    };
+    Ok(valid)
+}
+
+/// Byte length for a LEAD byte type
+fn lead_byte_len(bt: ByteType) -> usize {
+    match bt {
+        ByteType::LEAD2 => 2,
+        ByteType::LEAD3 => 3,
+        ByteType::LEAD4 => 4,
+        _ => 1,
+    }
 }
 
 /// Token type enumeration matching XML_TOK_* constants
@@ -1014,35 +1142,16 @@ pub fn scan_atts<E: Encoding>(
     while enc.has_char(data, pos, end) {
         match enc.byte_type(data, pos) {
             // Multi-byte name characters (LEAD2/3/4)
-            ByteType::LEAD2 => {
-                if end - pos < 2 {
-                    return Ok(TokenResult {
-                        token: XmlTok::PartialChar,
-                        next_pos: pos,
-                    });
+            bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+                let n = lead_byte_len(bt);
+                match check_lead_name(data, pos, end, n) {
+                    Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                    Ok(false) => return Err(pos),
+                    Ok(true) => {
+                        in_name = true;
+                        pos += n;
+                    }
                 }
-                in_name = true;
-                pos += 2;
-            }
-            ByteType::LEAD3 => {
-                if end - pos < 3 {
-                    return Ok(TokenResult {
-                        token: XmlTok::PartialChar,
-                        next_pos: pos,
-                    });
-                }
-                in_name = true;
-                pos += 3;
-            }
-            ByteType::LEAD4 => {
-                if end - pos < 4 {
-                    return Ok(TokenResult {
-                        token: XmlTok::PartialChar,
-                        next_pos: pos,
-                    });
-                }
-                in_name = true;
-                pos += 4;
             }
             // Name characters — continue scanning attr name
             _ if is_name_char(enc.byte_type(data, pos))
@@ -1341,6 +1450,15 @@ pub fn scan_lt<E: Encoding>(
                                 next_pos: pos + enc.min_bytes_per_char(),
                             });
                         }
+                        bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+                            // Multi-byte UTF-8 attr name start — CHECK_NMSTRT_CASE
+                            let n = lead_byte_len(bt);
+                            match check_lead_nmstrt(data, pos, end, n) {
+                                Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                                Ok(false) => return Err(pos),
+                                Ok(true) => return scan_atts(enc, data, pos, end),
+                            }
+                        }
                         _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
                             return scan_atts(enc, data, pos, end);
                         }
@@ -1618,6 +1736,14 @@ pub fn scan_percent<E: Encoding>(
                 next_pos: pos,
             });
         }
+        bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+            let n = lead_byte_len(bt);
+            match check_lead_nmstrt(data, pos, end, n) {
+                Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                Ok(false) => return Err(pos),
+                Ok(true) => pos += n,
+            }
+        }
         _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
             pos += enc.min_bytes_per_char();
         }
@@ -1633,6 +1759,14 @@ pub fn scan_percent<E: Encoding>(
                     token: XmlTok::ParamEntityRef,
                     next_pos: pos + enc.min_bytes_per_char(),
                 });
+            }
+            bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+                let n = lead_byte_len(bt);
+                match check_lead_name(data, pos, end, n) {
+                    Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                    Ok(false) => return Err(pos),
+                    Ok(true) => pos += n,
+                }
             }
             _ if is_name_char(enc.byte_type(data, pos)) => {
                 pos += enc.min_bytes_per_char();
@@ -1663,11 +1797,21 @@ pub fn scan_pound_name<E: Encoding>(
         });
     }
 
-    if !is_nmstrt_char(enc.byte_type(data, pos)) {
-        return Err(pos);
+    let bt = enc.byte_type(data, pos);
+    match bt {
+        ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4 => {
+            let n = lead_byte_len(bt);
+            match check_lead_nmstrt(data, pos, end, n) {
+                Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                Ok(false) => return Err(pos),
+                Ok(true) => pos += n,
+            }
+        }
+        _ if is_nmstrt_char(bt) => {
+            pos += enc.min_bytes_per_char();
+        }
+        _ => return Err(pos),
     }
-
-    pos += enc.min_bytes_per_char();
 
     while enc.has_char(data, pos, end) {
         match enc.byte_type(data, pos) {
@@ -1682,6 +1826,14 @@ pub fn scan_pound_name<E: Encoding>(
                     token: XmlTok::PoundName,
                     next_pos: pos,
                 });
+            }
+            bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+                let n = lead_byte_len(bt);
+                match check_lead_name(data, pos, end, n) {
+                    Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                    Ok(false) => return Err(pos),
+                    Ok(true) => pos += n,
+                }
             }
             _ if is_name_char(enc.byte_type(data, pos)) => {
                 pos += enc.min_bytes_per_char();
@@ -2004,6 +2156,31 @@ pub fn prolog_tok<E: Encoding>(
         ByteType::NUM => {
             return scan_pound_name(enc, data, pos + minbpc, end);
         }
+        bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+            // Multi-byte UTF-8 character — C's LEAD_CASE macro
+            let n = lead_byte_len(bt);
+            if end - pos < n {
+                return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos });
+            }
+            // Check if it's nmstrt (→ Name) or just name (→ Nmtoken)
+            match check_lead_nmstrt(data, pos, end, n) {
+                Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                Ok(true) => {
+                    pos += n;
+                    // is_name will be set to true below
+                }
+                Ok(false) => {
+                    // Not name-start, check if it's a name char (→ Nmtoken)
+                    match check_lead_name(data, pos, end, n) {
+                        Ok(true) => {
+                            pos += n;
+                            // is_name will be set to false below
+                        }
+                        _ => return Err(pos),
+                    }
+                }
+            }
+        }
         _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
             pos += minbpc;
         }
@@ -2014,10 +2191,17 @@ pub fn prolog_tok<E: Encoding>(
 
     // Skip whitespace/parse name
     let start_pos = pos;
-    let is_name = matches!(
-        enc.byte_type(data, start_pos - minbpc),
-        ByteType::NMSTRT | ByteType::HEX
-    );
+    // Determine if the first character was a name-start character
+    let first_bt = enc.byte_type(data, start_pos - minbpc);
+    let is_name = if matches!(first_bt, ByteType::NMSTRT | ByteType::HEX) {
+        true
+    } else if matches!(first_bt, ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) {
+        // For multi-byte chars, re-check the first character position
+        let first_pos = start_pos - lead_byte_len(first_bt);
+        check_lead_nmstrt(data, first_pos, end, lead_byte_len(first_bt)).unwrap_or(false)
+    } else {
+        false
+    };
 
     while enc.has_char(data, pos, end) {
         match enc.byte_type(data, pos) {
@@ -2077,32 +2261,13 @@ pub fn prolog_tok<E: Encoding>(
             ByteType::COLON => {
                 pos += minbpc;
             }
-            ByteType::LEAD2 => {
-                if end - pos < 2 {
-                    return Ok(TokenResult {
-                        token: XmlTok::PartialChar,
-                        next_pos: pos,
-                    });
+            bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+                let n = lead_byte_len(bt);
+                match check_lead_name(data, pos, end, n) {
+                    Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                    Ok(false) => return Err(pos),
+                    Ok(true) => pos += n,
                 }
-                pos += 2;
-            }
-            ByteType::LEAD3 => {
-                if end - pos < 3 {
-                    return Ok(TokenResult {
-                        token: XmlTok::PartialChar,
-                        next_pos: pos,
-                    });
-                }
-                pos += 3;
-            }
-            ByteType::LEAD4 => {
-                if end - pos < 4 {
-                    return Ok(TokenResult {
-                        token: XmlTok::PartialChar,
-                        next_pos: pos,
-                    });
-                }
-                pos += 4;
             }
             _ => {
                 return Err(pos);
