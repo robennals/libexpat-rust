@@ -1553,6 +1553,15 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
             XML_SetStartNamespaceDeclHandler(new_ptr, handle.c_start_ns_handler);
             XML_SetEndNamespaceDeclHandler(new_ptr, handle.c_end_ns_handler);
 
+            // Copy unknown encoding handler to child parser (matches C behavior)
+            if handle.c_unknown_encoding_handler.is_some() {
+                XML_SetUnknownEncodingHandler(
+                    new_ptr,
+                    handle.c_unknown_encoding_handler,
+                    handle.c_unknown_encoding_data,
+                );
+            }
+
             new_ptr
         }
         None => ptr::null_mut(),
