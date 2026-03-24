@@ -1325,6 +1325,9 @@ pub unsafe extern "C" fn XML_SetExternalEntityRefHandler(
     }
     let handle = &mut *parser;
 
+    // Save the C handler pointer so it can be copied to child parsers
+    handle.c_ext_entity_ref_handler = handler;
+
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
         handle.parser.set_external_entity_ref_handler(Some(Box::new(
@@ -1461,11 +1464,8 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
 
     match handle.parser.create_external_entity_parser(ctx_str, enc) {
         Some(ext_parser) => {
-            // If creating a DTD subset parser (empty context), mark param entity as read
-            // This matches C's behavior where creating a child parser implies DTD content will be processed
-            if ctx_str.is_empty() {
-                handle.parser.dtd.borrow_mut().param_entity_read = true;
-            }
+            // param_entity_read is now set in external_par_ent_processor (matching C's
+            // externalParEntInitProcessor), not here at creation time.
             let new_ptr = new_handle(ext_parser);
             // Copy user_data and handler settings from parent (matches C behavior)
             (*new_ptr).user_data = handle.user_data;

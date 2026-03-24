@@ -17,32 +17,17 @@ test_misc_alloc_create_parser                      # [principled-skip] Custom ma
 test_misc_alloc_create_parser_with_encoding        # [principled-skip] Same with encoding
 
 # Encoding - need UTF-16 tokenizer or improved transcoding
-test_bad_attr_desc_keyword_utf16                   # [encoding] UTF-16 byte-at-a-time
-test_bad_doctype_utf16                             # [encoding] UTF-16 byte-at-a-time
-test_ext_entity_latin1_utf16be_bom                 # [encoding] BOM in ext entity child parser
-test_ext_entity_latin1_utf16be_bom2                # [encoding] BOM in ext entity child parser
-test_ext_entity_latin1_utf16le_bom                 # [encoding] BOM in ext entity child parser
-test_ext_entity_latin1_utf16le_bom2                # [encoding] BOM in ext entity child parser
-test_ext_entity_set_bom                            # [encoding] BOM handling in ext entity
-test_ext_entity_set_encoding                       # [encoding] Encoding switch in ext entity
-test_external_bom_consumed                         # [encoding] BOM consumption in ext entity
 test_invalid_character_entity_3                    # [encoding] UTF-16LE char entity
 test_unknown_encoding_bad_ignore                   # [encoding] Custom encoding in IGNORE section
 test_unknown_encoding_success                      # [encoding] Custom encoding transcoding
-test_unknown_encoding_user_data_secondary          # [encoding] Custom encoding with user data
-test_utf16_attribute                               # [encoding] UTF-16 attribute value
 test_utf16_pe                                      # [encoding] UTF-16 parameter entity
 
 # Parameter entity expansion
-test_empty_ext_param_entity_in_value               # [pe-expansion] PE in entity value
 test_no_indirectly_recursive_entity_refs           # [pe-expansion] Indirect PE recursion
 test_param_entity_with_trailing_cr                 # [pe-expansion] PE with trailing CR
 test_recursive_external_parameter_entity_2         # [pe-expansion] Recursive external PE
 
 # External entity processors
-test_ext_entity_invalid_suspended_parse            # [ext-entity] Suspend during ext entity
-test_ext_entity_not_standalone                     # [ext-entity] Not-standalone in ext entity
-test_invalid_tag_in_dtd                            # [ext-entity] Invalid tag in DTD subset
 test_pool_integrity_with_unfinished_attr           # [ext-entity] ATTLIST in ext entity
 
 # Other
