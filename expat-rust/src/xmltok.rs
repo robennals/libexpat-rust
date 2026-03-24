@@ -255,18 +255,9 @@ pub fn parse_xml_decl(data: &[u8], is_text_decl: bool) -> Result<XmlDeclInfo, us
 
     // Check first attribute
     if name_start == 0 {
-        // No attributes at all
-        if !is_text_decl {
-            return Err(next_pos);
-        }
-        // Text declaration with no attributes is OK
-        return Ok(XmlDeclInfo {
-            version_start: 0,
-            version_end: 0,
-            encoding_start: 0,
-            encoding_end: 0,
-            standalone: None,
-        });
+        // No attributes at all — always an error
+        // XML declarations require version, text declarations require encoding
+        return Err(next_pos);
     }
 
     // Determine what the first attribute is

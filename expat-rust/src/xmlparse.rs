@@ -2460,6 +2460,61 @@ impl Parser {
                 self.dtd.borrow().keep_processing && self.attlist_decl_handler.is_some(),
             ),
             Role::ElementNone => (XmlError::None, self.element_decl_handler.is_some()),
+            Role::TextDecl => {
+                // Text declaration in external entity — C: processXmlDecl(parser, 1, s, next)
+                // Parse and validate the text declaration (<?xml version='...' encoding='...'?>)
+                let decl_data = &data[pos..next];
+                match xmltok::parse_xml_decl(decl_data, true) {
+                    Ok(info) => {
+                        // Extract encoding
+                        let encoding_str = if info.encoding_end > info.encoding_start {
+                            Some(
+                                std::str::from_utf8(
+                                    &decl_data[info.encoding_start..info.encoding_end],
+                                )
+                                .unwrap_or("")
+                                .to_string(),
+                            )
+                        } else {
+                            None
+                        };
+                        // Call xml_decl_handler if set (C calls it for text declarations too)
+                        let handler_called = self.xml_decl_handler.is_some();
+                        if let Some(handler) = &mut self.xml_decl_handler {
+                            let version_str = if info.version_end > info.version_start {
+                                Some(
+                                    std::str::from_utf8(
+                                        &decl_data[info.version_start..info.version_end],
+                                    )
+                                    .unwrap_or("")
+                                    .to_string(),
+                                )
+                            } else {
+                                None
+                            };
+                            handler(version_str.as_deref(), encoding_str.as_deref(), None);
+                        }
+                        // Handle encoding switch if declared
+                        if !self.protocol_encoding_set {
+                            if let Some(ref enc_name) = encoding_str {
+                                let upper = enc_name.to_uppercase();
+                                if upper == "ISO-8859-1"
+                                    || upper == "LATIN1"
+                                    || upper.starts_with("ISO-8859-")
+                                    || upper == "WINDOWS-1252"
+                                {
+                                    self.detected_encoding = Some(upper.clone());
+                                }
+                            }
+                        }
+                        (XmlError::None, handler_called)
+                    }
+                    Err(_) => {
+                        self.event_pos = pos;
+                        (XmlError::XmlDecl, false)
+                    }
+                }
+            }
             _ => {
                 // Other roles — ignore for now
                 (XmlError::None, false)
