@@ -7,7 +7,7 @@
 //! by [`xmlrole`](crate::xmlrole) and [`xmlparse`](crate::xmlparse)).
 
 use crate::char_tables::ByteType;
-use crate::nametab::{NAMING_BITMAP, NAME_PAGES, NMSTRT_PAGES};
+use crate::nametab::{NAME_PAGES, NAMING_BITMAP, NMSTRT_PAGES};
 
 /// Check if a byte is a valid UTF-8 continuation byte (0x80-0xBF)
 #[inline]
@@ -1145,7 +1145,12 @@ pub fn scan_atts<E: Encoding>(
             bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
                 let n = lead_byte_len(bt);
                 match check_lead_name(data, pos, end, n) {
-                    Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                    Err(()) => {
+                        return Ok(TokenResult {
+                            token: XmlTok::PartialChar,
+                            next_pos: pos,
+                        })
+                    }
                     Ok(false) => return Err(pos),
                     Ok(true) => {
                         in_name = true;
@@ -1454,7 +1459,12 @@ pub fn scan_lt<E: Encoding>(
                             // Multi-byte UTF-8 attr name start — CHECK_NMSTRT_CASE
                             let n = lead_byte_len(bt);
                             match check_lead_nmstrt(data, pos, end, n) {
-                                Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                                Err(()) => {
+                                    return Ok(TokenResult {
+                                        token: XmlTok::PartialChar,
+                                        next_pos: pos,
+                                    })
+                                }
                                 Ok(false) => return Err(pos),
                                 Ok(true) => return scan_atts(enc, data, pos, end),
                             }
@@ -1739,7 +1749,12 @@ pub fn scan_percent<E: Encoding>(
         bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
             let n = lead_byte_len(bt);
             match check_lead_nmstrt(data, pos, end, n) {
-                Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                Err(()) => {
+                    return Ok(TokenResult {
+                        token: XmlTok::PartialChar,
+                        next_pos: pos,
+                    })
+                }
                 Ok(false) => return Err(pos),
                 Ok(true) => pos += n,
             }
@@ -1763,7 +1778,12 @@ pub fn scan_percent<E: Encoding>(
             bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
                 let n = lead_byte_len(bt);
                 match check_lead_name(data, pos, end, n) {
-                    Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                    Err(()) => {
+                        return Ok(TokenResult {
+                            token: XmlTok::PartialChar,
+                            next_pos: pos,
+                        })
+                    }
                     Ok(false) => return Err(pos),
                     Ok(true) => pos += n,
                 }
@@ -1802,7 +1822,12 @@ pub fn scan_pound_name<E: Encoding>(
         ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4 => {
             let n = lead_byte_len(bt);
             match check_lead_nmstrt(data, pos, end, n) {
-                Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                Err(()) => {
+                    return Ok(TokenResult {
+                        token: XmlTok::PartialChar,
+                        next_pos: pos,
+                    })
+                }
                 Ok(false) => return Err(pos),
                 Ok(true) => pos += n,
             }
@@ -1830,7 +1855,12 @@ pub fn scan_pound_name<E: Encoding>(
             bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
                 let n = lead_byte_len(bt);
                 match check_lead_name(data, pos, end, n) {
-                    Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                    Err(()) => {
+                        return Ok(TokenResult {
+                            token: XmlTok::PartialChar,
+                            next_pos: pos,
+                        })
+                    }
                     Ok(false) => return Err(pos),
                     Ok(true) => pos += n,
                 }
@@ -2160,11 +2190,19 @@ pub fn prolog_tok<E: Encoding>(
             // Multi-byte UTF-8 character — C's LEAD_CASE macro
             let n = lead_byte_len(bt);
             if end - pos < n {
-                return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos });
+                return Ok(TokenResult {
+                    token: XmlTok::PartialChar,
+                    next_pos: pos,
+                });
             }
             // Check if it's nmstrt (→ Name) or just name (→ Nmtoken)
             match check_lead_nmstrt(data, pos, end, n) {
-                Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                Err(()) => {
+                    return Ok(TokenResult {
+                        token: XmlTok::PartialChar,
+                        next_pos: pos,
+                    })
+                }
                 Ok(true) => {
                     pos += n;
                     // is_name will be set to true below
@@ -2195,7 +2233,10 @@ pub fn prolog_tok<E: Encoding>(
     let first_bt = enc.byte_type(data, start_pos - minbpc);
     let is_name = if matches!(first_bt, ByteType::NMSTRT | ByteType::HEX) {
         true
-    } else if matches!(first_bt, ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) {
+    } else if matches!(
+        first_bt,
+        ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4
+    ) {
         // For multi-byte chars, re-check the first character position
         let first_pos = start_pos - lead_byte_len(first_bt);
         check_lead_nmstrt(data, first_pos, end, lead_byte_len(first_bt)).unwrap_or(false)
@@ -2264,7 +2305,12 @@ pub fn prolog_tok<E: Encoding>(
             bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
                 let n = lead_byte_len(bt);
                 match check_lead_name(data, pos, end, n) {
-                    Err(()) => return Ok(TokenResult { token: XmlTok::PartialChar, next_pos: pos }),
+                    Err(()) => {
+                        return Ok(TokenResult {
+                            token: XmlTok::PartialChar,
+                            next_pos: pos,
+                        })
+                    }
                     Ok(false) => return Err(pos),
                     Ok(true) => pos += n,
                 }

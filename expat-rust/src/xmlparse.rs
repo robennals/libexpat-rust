@@ -992,24 +992,22 @@ impl Parser {
                     match parse_result {
                         Ok(info) => {
                             // Handle encoding from text declaration
-                            if !self.protocol_encoding_set {
-                                if info.encoding_end > info.encoding_start {
-                                    if let Ok(enc_name) = std::str::from_utf8(
-                                        &decl_data[info.encoding_start..info.encoding_end],
-                                    ) {
-                                        let upper = enc_name.to_uppercase();
-                                        if is_latin1_encoding(Some(&upper)) {
-                                            self.detected_encoding = Some(upper);
-                                        } else if !is_known_encoding(&upper) {
-                                            let mut handled = false;
-                                            if let Some(handler) =
-                                                &mut self.unknown_encoding_handler
-                                            {
-                                                handled = handler(enc_name);
-                                            }
-                                            if !handled {
-                                                return (XmlError::UnknownEncoding, start);
-                                            }
+                            if !self.protocol_encoding_set
+                                && info.encoding_end > info.encoding_start
+                            {
+                                if let Ok(enc_name) = std::str::from_utf8(
+                                    &decl_data[info.encoding_start..info.encoding_end],
+                                ) {
+                                    let upper = enc_name.to_uppercase();
+                                    if is_latin1_encoding(Some(&upper)) {
+                                        self.detected_encoding = Some(upper);
+                                    } else if !is_known_encoding(&upper) {
+                                        let mut handled = false;
+                                        if let Some(handler) = &mut self.unknown_encoding_handler {
+                                            handled = handler(enc_name);
+                                        }
+                                        if !handled {
+                                            return (XmlError::UnknownEncoding, start);
                                         }
                                     }
                                 }
@@ -4502,9 +4500,7 @@ impl Parser {
                     self.error_code = XmlError::UnknownEncoding;
                     self.parsing_state = ParsingState::Finished;
                     return XmlStatus::Error;
-                } else if self.protocol_encoding_set
-                    && is_latin1_encoding(Some(&enc_upper))
-                {
+                } else if self.protocol_encoding_set && is_latin1_encoding(Some(&enc_upper)) {
                     // Explicit Latin-1/ISO-8859-x encoding set via XML_SetEncoding —
                     // bypass BOM detection entirely. Bytes like 0xFF 0xFE are Latin-1
                     // characters (ÿþ), not a UTF-16 BOM.
@@ -4516,11 +4512,7 @@ impl Parser {
                     // Explicit UTF-8/ASCII encoding — consume UTF-8 BOM if present,
                     // then treat as UTF-8
                     self.detected_encoding = Some(enc_upper);
-                    if data.len() >= 3
-                        && data[0] == 0xEF
-                        && data[1] == 0xBB
-                        && data[2] == 0xBF
-                    {
+                    if data.len() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
                         self.original_chunk_bom_len = 3;
                         self.buffer = data[3..].to_vec();
                     } else {
