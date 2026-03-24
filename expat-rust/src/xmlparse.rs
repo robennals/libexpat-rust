@@ -812,15 +812,27 @@ impl Parser {
         // Take buffer once — matches C where parse() passes data to the processor
         let data = std::mem::take(&mut self.buffer);
         if data.is_empty() {
-            // Handle empty buffer — delegate to old-style processors for now
-            // They handle empty-buffer edge cases (NoElements, etc.)
-            let processor = self.processor;
-            if processor == Processor::Content
-                && self.is_final
-                && !self.seen_root
-                && self.content_start_tag_level == 0
-            {
-                self.error_code = XmlError::NoElements;
+            if !self.is_final {
+                return; // Non-final empty buffer — nothing to process
+            }
+            // Final empty buffer — processors need to detect unclosed constructs.
+            // Only dispatch to processors that handle empty final buffers correctly.
+            match self.processor {
+                Processor::CdataSection => {
+                    // CDATA needs to report UnclosedCdataSection
+                    let have_more = false;
+                    let enc = xmltok::Utf8Encoding;
+                    let (error, _) = self.do_cdata_section(&enc, &data, 0, 0, have_more);
+                    if error != XmlError::None {
+                        self.error_code = error;
+                    }
+                }
+                Processor::Content => {
+                    if !self.seen_root && self.content_start_tag_level == 0 {
+                        self.error_code = XmlError::NoElements;
+                    }
+                }
+                _ => {}
             }
             return;
         }
