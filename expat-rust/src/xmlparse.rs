@@ -1032,13 +1032,7 @@ impl Parser {
     /// This is a one-shot bootstrapping processor for external parameter entity content.
     /// It handles the initial token (which may be a BOM), then delegates to the prolog processor.
     ///
-    /// The C function:
-    /// 1. Gets the first prolog token
-    /// 2. If tok <= 0 and not final buffer, returns OK (wait for more data)
-    /// 3. If tok <= 0 (final), handles error cases
-    /// 4. If tok is BOM, skips it and gets next token
-    /// 5. Sets processor to prologProcessor and calls doProlog
-    /// C: externalParEntInitProcessor + externalParEntProcessor (xmlparse.c:4999-5146)
+    /// C: externalParEntInitProcessor + externalParEntProcessor (xmlparse.c:4999-5146).
     /// Sets paramEntityRead, skips BOM if present, then delegates to do_prolog.
     fn external_par_ent_processor(
         &mut self,
@@ -1055,8 +1049,7 @@ impl Parser {
         let mut s = start;
 
         // Check for BOM — skip it if present (C: externalParEntProcessor lines 5124-5138)
-        if let Ok(TokenResult { token, next_pos }) =
-            xmltok_impl::prolog_tok(&enc, data, start, end)
+        if let Ok(TokenResult { token, next_pos }) = xmltok_impl::prolog_tok(&enc, data, start, end)
         {
             if token == XmlTok::Bom {
                 s = next_pos;
@@ -1275,10 +1268,14 @@ impl Parser {
                 Ok(TokenResult { token, next_pos }) => (token, next_pos),
                 Err(err_pos) => {
                     // Check if this is a partial UTF-8 character at the end
-                    if have_more && Self::is_partial_utf8_sequence(data, err_pos) {
-                        // Save the remaining data for next parse call
-                        self.buffer = data[err_pos..].to_vec();
-                        return (XmlError::None, end);
+                    if Self::is_partial_utf8_sequence(data, err_pos) {
+                        if have_more {
+                            // Save the remaining data for next parse call
+                            self.buffer = data[err_pos..].to_vec();
+                            return (XmlError::None, end);
+                        }
+                        // Final buffer with partial char → PartialChar error (C: XML_ERROR_PARTIAL_CHAR)
+                        return (XmlError::PartialChar, pos);
                     }
                     return (XmlError::InvalidToken, pos);
                 }
@@ -4034,10 +4031,8 @@ impl Parser {
 
                             if let Some(pe) = pe {
                                 // C: entity->open || (entity == parser->m_declEntity)
-                                let is_decl_entity = self
-                                    .current_entity_name
-                                    .as_ref()
-                                    .map_or(false, |n| n == &name);
+                                let is_decl_entity =
+                                    self.current_entity_name.as_ref() == Some(&name);
                                 if pe.open || is_decl_entity {
                                     return Err(XmlError::RecursiveEntityRef);
                                 }
@@ -4045,8 +4040,7 @@ impl Parser {
                                 if let Some(ref system_id) = pe.system_id {
                                     // External PE — call handler
                                     // C: xmlparse.c:6854-6872
-                                    if let Some(handler) =
-                                        self.external_entity_ref_handler.as_mut()
+                                    if let Some(handler) = self.external_entity_ref_handler.as_mut()
                                     {
                                         self.dtd.borrow_mut().param_entity_read = false;
                                         if let Some(e) =
