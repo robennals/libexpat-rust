@@ -981,10 +981,76 @@ impl Parser {
         match tok_result {
             Ok(TokenResult { token, next_pos }) => match token {
                 XmlTok::XmlDecl => {
-                    // Text declaration — transition to prolog processor
-                    // prolog will handle it then transition to content
-                    self.processor = Processor::Prolog;
-                    (XmlError::None, start) // re-process from start in prolog mode
+                    // Text declaration — process inline then transition to content
+                    // Matches C: processXmlDecl(parser, 1, start, next) then
+                    //            parser->m_processor = externalEntityContentProcessor
+                    let decl_data = &data[start..next_pos];
+                    let is_text_decl = true; // external entity text declaration
+                    let parse_result = xmltok::parse_xml_decl(decl_data, is_text_decl);
+                    let parse_result = if parse_result.is_err() && is_text_decl {
+                        xmltok::parse_xml_decl(decl_data, false)
+                    } else {
+                        parse_result
+                    };
+
+                    match parse_result {
+                        Ok(info) => {
+                            // Handle encoding from text declaration
+                            if !self.protocol_encoding_set
+                                && info.encoding_end > info.encoding_start
+                            {
+                                if let Ok(enc_name) = std::str::from_utf8(
+                                    &decl_data[info.encoding_start..info.encoding_end],
+                                ) {
+                                    let upper = enc_name.to_uppercase();
+                                    if is_latin1_encoding(Some(&upper)) {
+                                        self.detected_encoding = Some(upper);
+                                    } else if !is_known_encoding(&upper) {
+                                        let mut handled = false;
+                                        if let Some(handler) = &mut self.unknown_encoding_handler {
+                                            handled = handler(enc_name);
+                                        }
+                                        if !handled {
+                                            return (XmlError::UnknownEncoding, start);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Call xml_decl_handler if set
+                            if let Some(handler) = &mut self.xml_decl_handler {
+                                let version_str = if info.version_end > info.version_start {
+                                    std::str::from_utf8(
+                                        &decl_data[info.version_start..info.version_end],
+                                    )
+                                    .ok()
+                                } else {
+                                    None
+                                };
+                                let encoding_str = if info.encoding_end > info.encoding_start {
+                                    std::str::from_utf8(
+                                        &decl_data[info.encoding_start..info.encoding_end],
+                                    )
+                                    .ok()
+                                } else {
+                                    None
+                                };
+                                handler(
+                                    version_str,
+                                    encoding_str,
+                                    info.standalone.map(|s| if s { 1 } else { 0 }),
+                                );
+                            }
+                        }
+                        Err(_err_pos) => {
+                            return (XmlError::TextDecl, start);
+                        }
+                    }
+
+                    // Transition to content processor — matches C
+                    self.tag_level = self.content_start_tag_level;
+                    self.processor = Processor::Content;
+                    (XmlError::None, next_pos)
                 }
                 XmlTok::Partial | XmlTok::PartialChar => {
                     if !self.is_final {
@@ -4486,8 +4552,26 @@ impl Parser {
                     self.error_code = XmlError::UnknownEncoding;
                     self.parsing_state = ParsingState::Finished;
                     return XmlStatus::Error;
+                } else if self.protocol_encoding_set && is_latin1_encoding(Some(&enc_upper)) {
+                    // Explicit Latin-1/ISO-8859-x encoding set via XML_SetEncoding —
+                    // bypass BOM detection entirely. Bytes like 0xFF 0xFE are Latin-1
+                    // characters (ÿþ), not a UTF-16 BOM.
+                    self.detected_encoding = Some(enc_upper);
+                    self.buffer = transcode_latin1_to_utf8(data);
+                } else if self.protocol_encoding_set
+                    && (enc_upper == "UTF-8" || enc_upper == "US-ASCII" || enc_upper == "ASCII")
+                {
+                    // Explicit UTF-8/ASCII encoding — consume UTF-8 BOM if present,
+                    // then treat as UTF-8
+                    self.detected_encoding = Some(enc_upper);
+                    if data.len() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+                        self.original_chunk_bom_len = 3;
+                        self.buffer = data[3..].to_vec();
+                    } else {
+                        self.buffer = data.to_vec();
+                    }
                 } else {
-                    // Known encoding, detect BOM etc
+                    // Known encoding without protocol override — detect BOM etc
                     match self.detect_and_transcode(data) {
                         Ok(transcoded) => {
                             self.buffer = transcoded;
@@ -4554,9 +4638,12 @@ impl Parser {
                         return XmlStatus::Error;
                     }
                 }
-            } else {
+            } else if is_latin1_encoding(Some(enc_name)) {
                 // Latin-1 or similar single-byte encoding — transcode to UTF-8
                 self.buffer.extend(transcode_latin1_to_utf8(data));
+            } else {
+                // UTF-8 or ASCII — append as-is (already UTF-8)
+                self.buffer.extend_from_slice(data);
             }
         } else if self.custom_encoding_map.is_some() {
             // Custom encoding — transcode through the encoding map
