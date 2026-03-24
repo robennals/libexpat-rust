@@ -15,6 +15,8 @@ Usage:
     python3 scripts/ast-compare.py doContent do_content
     python3 scripts/ast-compare.py --all              # Compare all known pairs
     python3 scripts/ast-compare.py --list-cases <func> c|rust  # List cases in a function
+    python3 scripts/ast-compare.py --prompt <c_func> <rust_func> [extra...]  # Generate Haiku porting prompt
+    python3 scripts/ast-compare.py --prompt-all       # Generate prompts for all divergent pairs
 """
 
 import sys
@@ -137,7 +139,15 @@ def extract_switch_cases_ast(func_node, lang):
                 body_text = node.text.decode()
                 errors = set(re.findall(r'XML_ERROR_(\w+)', body_text))
                 handlers = set(re.findall(r'parser->m_(\w+Handler)', body_text))
-                func_calls = set(re.findall(r'\b(\w+)\s*\(', body_text)) - {'if', 'while', 'for', 'switch', 'return', 'sizeof'}
+                raw_calls = set(re.findall(r'\b(\w+)\s*\(', body_text))
+                # Filter out: keywords, handler field accesses, C macros, type casts
+                func_calls = raw_calls - {
+                    'if', 'while', 'for', 'switch', 'return', 'sizeof', 'assert',
+                    'XML_T', 'XML_L', 'XML_TRUE', 'XML_FALSE', 'CHAR_HASH',
+                    'XCS', 'INT_MAX', 'UINT_MAX', 'SIZE_MAX',
+                }
+                # Remove handler field accesses (m_*Handler)
+                func_calls = {c for c in func_calls if not re.match(r'm_\w+Handler$', c)}
                 has_return = 'return' in body_text
                 cases.append({
                     "label": value,
@@ -267,6 +277,72 @@ HANDLER_MAP = {
     "unparsedEntityDeclHandler": "unparsed_entity_decl_handler",
 }
 
+CALL_MAP = {
+    # Only exceptions to the standard camelCase→snake_case rule
+    # Standard rule: "doContent" → "do_content" is derived automatically
+    "storeAtts": "process_namespaces",  # Rust replaces C's storeAtts with namespace processing
+    "XmlNameLength": "name_length",     # Xml prefix stripped
+    "XmlGetAttributes": "get_atts",     # different abbreviation
+    "XmlContentTok": "content_tok",     # Xml prefix stripped
+    "XmlPrologTok": "prolog_tok",       # Xml prefix stripped
+    "XmlCdataSectionTok": "cdata_section_tok",  # Xml prefix stripped
+    "XmlCharRefNumber": "char_ref_number",      # Xml prefix stripped
+    "XmlIgnoreSectionTok": "ignore_section_tok", # Xml prefix stripped
+}
+
+
+def c_to_rust_call_name(c_name):
+    """Convert a C function name to its expected Rust equivalent.
+    Uses CALL_MAP for exceptions, otherwise converts camelCase to snake_case."""
+    if c_name in CALL_MAP:
+        return CALL_MAP[c_name]
+    # Convert camelCase/PascalCase to snake_case
+    import re
+    # Insert _ before uppercase letters that follow lowercase
+    s = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', c_name)
+    # Insert _ before uppercase letters that are followed by lowercase (for sequences like "XMLDecl")
+    s = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', s)
+    return s.lower()
+
+# C calls that are intentionally not in Rust (memory management, pools, etc.)
+SUPPRESSED_CALLS = {
+    # Memory management
+    "poolStoreString", "poolAppend", "poolAppendString", "poolCopyString",
+    "poolCopyStringN", "poolFinish", "poolDiscard", "poolStart", "poolGrow",
+    "poolClear", "poolDestroy", "poolInit", "poolLastString", "poolLength",
+    "poolBytesToAllocateFor", "poolChop", "poolCopyStringNoFinish",
+    "REALLOC", "MALLOC", "FREE",
+    # Hash tables
+    "lookup", "hash", "hashTableInit", "hashTableClear", "hashTableDestroy",
+    # Entropy/randomization
+    "generate_hash_secret_salt", "gather_time_entropy",
+    # C string/conversion ops that are handled inline in Rust
+    "memcpy", "memcmp", "strcmp", "strlen", "XML_T", "XmlConvert",
+    "mustConvert", "XmlEncode", "getContext",
+    "CHAR_HASH", "dtdCopy", "dtdReset",
+    # Type system / casting
+    "ENTITY", "ELEMENT_TYPE", "ATTRIBUTE_ID", "PREFIX", "TAG",
+    # Macro-like patterns
+    "charDataHandler", "XML_Char",
+    # C-only internal functions/macros with no Rust equivalent
+    "mustConvert", "MUST_CONVERT", "lines",
+    "poolAppendChar", "POOL_APPEND_CHAR",
+    "malloc_fcn", "free_fcn", "free",
+    "XmlConvert", "XmlEncode",
+    "XmlPredefinedEntityName", "XmlIsPublicId",
+    # Accounting (Rust doesn't do C-style accounting)
+    "accountingOnAbort", "accountingDiffTolerated",
+    # Content model building helpers (Rust uses different approach)
+    "buildModel", "nextScaffoldPart",
+    # Accounting
+    "accountingDiffTolerated", "entityTrackingOnOpen", "entityTrackingOnClose",
+    "entityTrackingReportStats",
+    # String ops that have Rust equivalents inline
+    "memcpy", "memcmp", "strcmp", "strlen",
+    # C-specific
+    "parserBusy", "parserInit",
+}
+
 TOKEN_MAP = {
     "XML_TOK_NONE": "XmlTok::None", "XML_TOK_INVALID": "XmlTok::Invalid",
     "XML_TOK_PARTIAL": "XmlTok::Partial", "XML_TOK_PARTIAL_CHAR": "XmlTok::PartialChar",
@@ -308,14 +384,15 @@ ROLE_MAP = {
 }
 
 
-def compare(c_func_name, r_func_name, extra_rust_funcs=None):
+def compare(c_func_name, r_func_name, extra_rust_funcs=None, c_file=None, r_file=None):
     """Main comparison function.
 
     extra_rust_funcs: list of additional Rust function names whose errors/handlers/cases
     should be merged into the Rust side (for split functions like handle_prolog_role).
+    c_file/r_file: override default C/Rust source files (for comparing tokenizer, etc.)
     """
-    c_src = open(C_FILE, 'rb').read()
-    r_src = open(RUST_FILE, 'rb').read()
+    c_src = open(c_file or C_FILE, 'rb').read()
+    r_src = open(r_file or RUST_FILE, 'rb').read()
 
     c_tree = parse_c(c_src)
     r_tree = parse_rust(r_src)
@@ -415,6 +492,81 @@ def compare(c_func_name, r_func_name, extra_rust_funcs=None):
         if case_missing_h:
             divergences.append(("LOW", f"case {rust_label}: missing handlers", sorted(case_missing_h)))
 
+        # Compare function calls in this case
+        c_calls = set(c_case.get("calls", []))
+        r_calls = set(r_case.get("calls", []))
+        # Map C calls to Rust equivalents using auto snake_case + exceptions
+        c_mapped_calls = set()
+        for c in c_calls:
+            if c in SUPPRESSED_CALLS:
+                continue
+            # Skip ALL_CAPS names (C macros)
+            if c.isupper() or (c.replace('_', '').isupper() and '_' in c):
+                continue
+            # Skip single-letter names and very short names (loop vars, etc.)
+            if len(c) <= 2:
+                continue
+            c_mapped_calls.add(c_to_rust_call_name(c))
+        missing_calls = sorted(c_mapped_calls - r_calls)
+        if missing_calls:
+            divergences.append(("LOW", f"case {rust_label}: missing calls", missing_calls))
+
+    # 4. Overall function call comparison
+    c_all_calls = set()
+    for case in c_cases:
+        c_all_calls |= set(case.get("calls", []))
+    r_all_calls = set()
+    for case in r_cases:
+        r_all_calls |= set(case.get("calls", []))
+    c_mapped_all = set()
+    for c in c_all_calls:
+        if c in SUPPRESSED_CALLS:
+            continue
+        if c.isupper() or (c.replace('_', '').isupper() and '_' in c):
+            continue
+        if len(c) <= 2:
+            continue
+        c_mapped_all.add(c_to_rust_call_name(c))
+    missing_all_calls = sorted(c_mapped_all - r_all_calls)
+    if missing_all_calls:
+        divergences.append(("MEDIUM", "missing_function_calls", missing_all_calls))
+
+    # 5. Function call WITH ARGUMENTS comparison (detects different parameter values)
+    # Extract "func(arg1, arg2)" patterns from both C and Rust
+    c_full_calls = re.findall(r'\b(\w+)\s*\(([^)]*)\)', c_text)
+    r_full_calls = re.findall(r'\b(\w+)\s*\(([^)]*)\)', r_text)
+    # Look for key functions called with different arguments
+    c_call_args = {}
+    for name, args in c_full_calls:
+        if name in SUPPRESSED_CALLS or name.isupper():
+            continue
+        rust_name = c_to_rust_call_name(name)
+        key = rust_name
+        if key not in c_call_args:
+            c_call_args[key] = set()
+        # Normalize args (strip whitespace, keep first 2 args)
+        arg_parts = [a.strip() for a in args.split(',')][:3]
+        c_call_args[key].add(tuple(arg_parts))
+
+    r_call_args = {}
+    for name, args in r_full_calls:
+        key = name
+        if key not in r_call_args:
+            r_call_args[key] = set()
+        arg_parts = [a.strip() for a in args.split(',')][:3]
+        r_call_args[key].add(tuple(arg_parts))
+
+    # Report functions called with different argument patterns
+    for func_name in sorted(set(c_call_args) & set(r_call_args)):
+        c_args = c_call_args[func_name]
+        r_args = r_call_args[func_name]
+        if c_args != r_args:
+            # Check for significant numeric argument differences
+            c_nums = {a for arg_tuple in c_args for a in arg_tuple if a.isdigit()}
+            r_nums = {a for arg_tuple in r_args for a in arg_tuple if a.isdigit()}
+            if c_nums != r_nums and c_nums:
+                divergences.append(("LOW", f"call {func_name}: C args include {c_nums}, Rust args include {r_nums}", []))
+
     rust_total_lines = r_text.count('\n') + 1 + extra_lines
     return {
         "c_function": c_func_name,
@@ -476,10 +628,222 @@ def get_pairs():
     return pairs
 
 
+def extract_c_case_source(c_func_name, case_label):
+    """Extract the C source code for a specific switch case."""
+    c_src = open(C_FILE, 'rb').read()
+    c_tree = parse_c(c_src)
+    c_node = find_function_node(c_tree, c_func_name, "c")
+    if not c_node:
+        return None
+    for node in walk_all(c_node):
+        if node.type == "case_statement":
+            value_node = node.child_by_field_name("value") or (node.children[1] if len(node.children) > 1 else None)
+            if value_node and value_node.text.decode().strip() == case_label.strip():
+                return node.text.decode()
+    # Fallback: search by substring in case AST label differs
+    c_text = c_node.text.decode()
+    marker = f"case {case_label}:"
+    idx = c_text.find(marker)
+    if idx >= 0:
+        # Extract until next "case " or "break;" or "}" at same indent
+        end = c_text.find("\n    case ", idx + 1)
+        if end < 0:
+            end = min(idx + 500, len(c_text))
+        return c_text[idx:end].strip()
+    return None
+
+
+def extract_rust_function_source(func_name):
+    """Extract the full Rust function source."""
+    r_src = open(RUST_FILE, 'rb').read()
+    r_tree = parse_rust(r_src)
+    r_node = find_function_node(r_tree, func_name, "rust")
+    if not r_node:
+        return None
+    return r_node.text.decode()
+
+
+def generate_prompt(c_func_name, r_func_name, extra_rust_funcs=None):
+    """Generate a Haiku-ready prompt for fixing divergences between C and Rust functions."""
+    results = compare(c_func_name, r_func_name, extra_rust_funcs)
+    if not results or not results["divergences"]:
+        return "No divergences found — nothing to fix."
+
+    c_src = open(C_FILE, 'rb').read()
+    r_src = open(RUST_FILE, 'rb').read()
+    c_tree = parse_c(c_src)
+    r_tree = parse_rust(r_src)
+    c_node = find_function_node(c_tree, c_func_name, "c")
+
+    # Collect C cases for missing match arms
+    c_cases = extract_switch_cases_ast(c_node, "c")
+    c_case_by_label = {c["label"]: c for c in c_cases}
+
+    # Find missing match arms and per-case divergences
+    missing_arms = []
+    case_fixes = []
+    missing_errors_overall = []
+    missing_handlers_overall = []
+
+    for sev, desc, details in results["divergences"]:
+        if "missing_match_arms" in desc:
+            missing_arms = details
+        elif desc.startswith("case ") and ("missing errors" in desc or "missing handlers" in desc or "missing calls" in desc):
+            case_fixes.append((desc.split(": ")[1].split()[1] if ": " in desc else "fix", desc, details))
+        elif desc == "missing_errors":
+            missing_errors_overall = details
+        elif desc == "missing_handlers":
+            missing_handlers_overall = details
+        elif desc == "missing_function_calls":
+            pass  # Will include in overall section
+
+    lines = []
+    lines.append(f"# Task: Fix divergences in {r_func_name} (Rust) to match {c_func_name} (C)")
+    lines.append("")
+    lines.append("You are porting C libexpat to Rust. Fix the Rust implementation to match C behavior.")
+    lines.append("")
+    lines.append("## File to modify")
+    lines.append(f"- `expat-rust/src/xmlparse.rs` — function `{r_func_name}`")
+    if extra_rust_funcs:
+        for ef in extra_rust_funcs:
+            lines.append(f"- `expat-rust/src/xmlparse.rs` — function `{ef}`")
+    lines.append("")
+
+    # Missing match arms — extract C source for each
+    if missing_arms:
+        lines.append("## Missing match arms (cases C handles but Rust doesn't)")
+        lines.append("")
+        for arm in missing_arms:
+            # Find the original C label
+            c_label = None
+            for cl in c_case_by_label:
+                mapped = TOKEN_MAP.get(cl) or ROLE_MAP.get(cl)
+                if mapped == arm:
+                    c_label = cl
+                    break
+            if c_label:
+                c_source = extract_c_case_source(c_func_name, c_label)
+                if c_source:
+                    lines.append(f"### {arm} (C: {c_label})")
+                    lines.append("```c")
+                    lines.append(c_source.strip())
+                    lines.append("```")
+                    lines.append("")
+                    # Show case metadata
+                    c_case = c_case_by_label.get(c_label, {})
+                    if c_case.get("errors"):
+                        lines.append(f"Errors used: {c_case['errors']}")
+                    if c_case.get("handlers"):
+                        lines.append(f"Handlers called: {c_case['handlers']}")
+                    if c_case.get("calls"):
+                        lines.append(f"Functions called: {c_case['calls']}")
+                    lines.append("")
+            else:
+                lines.append(f"### {arm}")
+                lines.append("(Could not find C source for this case)")
+                lines.append("")
+
+    # Per-case divergences
+    if case_fixes:
+        lines.append("## Existing cases that need fixes")
+        lines.append("")
+        for fix_type, desc, details in case_fixes:
+            # Extract Rust label from "case XmlTok::Foo: missing ..." or "case Role::Bar: missing ..."
+            # Can't split on ":" because labels contain "::"
+            m = re.match(r'case ([\w:]+): missing', desc)
+            rust_label = m.group(1) if m else desc.split(":")[0].replace("case ", "")
+            # Find C label via reverse mapping
+            c_label = None
+            for cl in c_case_by_label:
+                mapped = TOKEN_MAP.get(cl) or ROLE_MAP.get(cl)
+                if mapped == rust_label:
+                    c_label = cl
+                    break
+            lines.append(f"### {desc}")
+            if c_label:
+                c_source = extract_c_case_source(c_func_name, c_label)
+                if c_source:
+                    lines.append(f"C source ({c_label}):")
+                    lines.append("```c")
+                    lines.append(c_source.strip())
+                    lines.append("```")
+            lines.append(f"Missing: {details}")
+            lines.append("")
+
+    # Overall missing errors/handlers/calls
+    if missing_errors_overall:
+        lines.append(f"## Overall missing error codes: {missing_errors_overall}")
+        lines.append("These errors appear in C but not in Rust. Add them to the appropriate cases.")
+        lines.append("")
+    if missing_handlers_overall:
+        lines.append(f"## Overall missing handlers: {missing_handlers_overall}")
+        lines.append("These handler calls appear in C but not in Rust.")
+        lines.append("")
+
+    # Missing function calls
+    missing_calls = [d for s, d, det in results["divergences"] if d == "missing_function_calls"]
+    if missing_calls:
+        for det_list in [d for s, d, det in results["divergences"] if d == "missing_function_calls"]:
+            pass
+        all_missing_calls = []
+        for s, d, det in results["divergences"]:
+            if d == "missing_function_calls":
+                all_missing_calls = det
+        if all_missing_calls:
+            lines.append(f"## Overall missing function calls: {all_missing_calls}")
+            lines.append("These C functions are called but have no Rust equivalent call.")
+            lines.append("Each needs to be implemented or the logic inlined.")
+            lines.append("")
+
+    # Rules
+    lines.append("## Rules")
+    lines.append("- No unsafe code")
+    lines.append("- Match C behavior exactly")
+    lines.append("- Keep changes minimal and focused")
+    lines.append("- Use Rust std types (String, Vec, HashMap) instead of C pools/hash tables")
+    lines.append("- Read the existing Rust code before making changes")
+    lines.append("")
+    lines.append("## Verification")
+    lines.append("```bash")
+    lines.append("cargo build -p expat-rust 2>&1 | tail -5")
+    lines.append("```")
+
+    return "\n".join(lines)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
+
+    # Parse --files flag to override C/Rust source files
+    # Usage: --files <c_file> <rust_file> <command> ...
+    global C_FILE, RUST_FILE
+    if sys.argv[1] == "--files":
+        if len(sys.argv) < 5:
+            print("Usage: ast-compare.py --files <c_file> <rust_file> <command> ...")
+            sys.exit(1)
+        C_FILE = os.path.join(ROOT, sys.argv[2])
+        RUST_FILE = os.path.join(ROOT, sys.argv[3])
+        sys.argv = [sys.argv[0]] + sys.argv[4:]  # Remove --files args
+
+    # Shorthand: --tok sets files to tokenizer sources
+    if sys.argv[1] == "--tok":
+        tok_c = os.path.join(ROOT, "expat", "expat", "lib", "xmltok.c")
+        if not os.path.exists(tok_c):
+            tok_c = os.path.join(ROOT, "expat", "lib", "xmltok.c")
+        C_FILE = tok_c
+        RUST_FILE = os.path.join(ROOT, "expat-rust", "src", "xmltok.rs")
+        sys.argv = [sys.argv[0]] + sys.argv[2:]  # Remove --tok
+
+    # Shorthand: --tok-impl sets files to tokenizer implementation
+    if sys.argv[1] == "--tok-impl":
+        tok_c = os.path.join(ROOT, "expat", "expat", "lib", "xmltok_impl.c")
+        if not os.path.exists(tok_c):
+            tok_c = os.path.join(ROOT, "expat", "lib", "xmltok_impl.c")
+        C_FILE = tok_c
+        RUST_FILE = os.path.join(ROOT, "expat-rust", "src", "xmltok_impl.rs")
+        sys.argv = [sys.argv[0]] + sys.argv[2:]  # Remove --tok-impl
 
     if sys.argv[1] == "--all":
         pairs = get_pairs()
@@ -489,6 +853,82 @@ def main():
             results = compare(c_name, r_name, extra)
             if results:
                 print(format_report(results))
+                print()
+        return
+
+    if sys.argv[1] == "--prompt":
+        # Generate a Haiku-ready prompt for fixing divergences
+        # Usage: ast-compare.py --prompt <c_func> <rust_func> [extra_rust_funcs...]
+        if len(sys.argv) < 4:
+            print("Usage: ast-compare.py --prompt <c_func> <rust_func> [extra_rust_funcs...]")
+            sys.exit(1)
+        c_name = sys.argv[2]
+        r_name = sys.argv[3]
+        extra = sys.argv[4:] if len(sys.argv) > 4 else []
+        prompt = generate_prompt(c_name, r_name, extra if extra else None)
+        print(prompt)
+        return
+
+    if sys.argv[1] == "--missing-functions":
+        # List C functions that have no Rust equivalent
+        c_src = open(C_FILE, 'rb').read()
+        r_src = open(RUST_FILE, 'rb').read()
+        c_tree = parse_c(c_src)
+        r_tree = parse_rust(r_src)
+        # Extract all C function names
+        c_funcs = {}
+        for node in walk_all(c_tree.root_node):
+            if node.type == "function_definition":
+                decl = node.child_by_field_name("declarator")
+                if decl:
+                    for child in walk_all(decl):
+                        if child.type == "identifier":
+                            name = child.text.decode()
+                            lines = node.text.decode().count('\n') + 1
+                            c_funcs[name] = lines
+                            break
+        # Extract all Rust function names
+        r_funcs = set()
+        for node in walk_all(r_tree.root_node):
+            if node.type == "function_item":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    r_funcs.add(name_node.text.decode())
+        # Check which C functions have no Rust equivalent
+        missing = []
+        for c_name, lines in sorted(c_funcs.items()):
+            rust_name = c_to_rust_call_name(c_name)
+            if rust_name not in r_funcs and c_name not in SUPPRESSED_CALLS:
+                # Also check if it's a suppressed category
+                skip = False
+                for sup in SUPPRESSED_CALLS:
+                    if c_name.startswith(sup) or c_name == sup:
+                        skip = True
+                        break
+                if c_name.startswith("pool") or c_name.startswith("hash"):
+                    skip = True
+                if not skip:
+                    missing.append((c_name, rust_name, lines))
+        print(f"C functions in xmlparse.c with no Rust equivalent ({len(missing)} of {len(c_funcs)}):")
+        print(f"{'C Function':<40} {'Expected Rust Name':<35} {'Lines':>5}")
+        print("-" * 82)
+        for c_name, r_name, lines in sorted(missing, key=lambda x: -x[2]):
+            print(f"{c_name:<40} {r_name:<35} {lines:>5}")
+        return
+
+    if sys.argv[1] == "--prompt-all":
+        # Generate prompts for all function pairs that have divergences
+        pairs = get_pairs()
+        for item in pairs:
+            c_name, r_name = item[0], item[1]
+            extra = item[2] if len(item) > 2 else []
+            results = compare(c_name, r_name, extra)
+            if results and results["divergences"]:
+                prompt = generate_prompt(c_name, r_name, extra if extra else None)
+                print(f"{'='*80}")
+                print(f"PROMPT FOR: {c_name} -> {r_name}")
+                print(f"{'='*80}")
+                print(prompt)
                 print()
         return
 

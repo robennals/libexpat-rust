@@ -120,6 +120,11 @@ pub enum PrologState {
     Doctype4,
     Doctype5,
     InternalSubset,
+    ExternalSubset0,
+    ExternalSubset1,
+    CondSect0,
+    CondSect1,
+    CondSect2,
     Entity0,
     Entity1,
     Entity2,
@@ -184,6 +189,12 @@ impl XmlRoleState {
     pub fn new() -> Self {
         Self::default()
     }
+
+    pub fn init_external_entity(&mut self) {
+        self.state = PrologState::ExternalSubset0;
+        self.document_entity = false;
+        self.include_level = 0;
+    }
 }
 
 fn keyword_matches(text: &[u8], keyword: &str) -> bool {
@@ -222,6 +233,11 @@ pub fn xml_token_role(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &
         PrologState::Doctype4 => doctype4(state, tok, _ptr, _end),
         PrologState::Doctype5 => doctype5(state, tok, _ptr, _end),
         PrologState::InternalSubset => internal_subset(state, tok, _ptr, _end),
+        PrologState::ExternalSubset0 => external_subset0(state, tok, _ptr, _end),
+        PrologState::ExternalSubset1 => external_subset1(state, tok, _ptr, _end),
+        PrologState::CondSect0 => cond_sect0(state, tok, _ptr, _end),
+        PrologState::CondSect1 => cond_sect1(state, tok, _ptr, _end),
+        PrologState::CondSect2 => cond_sect2(state, tok, _ptr, _end),
         PrologState::Entity0 => entity0(state, tok, _ptr, _end),
         PrologState::Entity1 => entity1(state, tok, _ptr, _end),
         PrologState::Entity2 => entity2(state, tok, _ptr, _end),
@@ -1064,6 +1080,81 @@ fn decl_close(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) ->
         Token::DeclarationClose => {
             set_top_level(state);
             state.role_none
+        }
+        _ => common(state, tok),
+    }
+}
+
+fn external_subset0(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> Role {
+    state.state = PrologState::ExternalSubset1;
+    if tok == Token::XmlDecl {
+        Role::TextDecl
+    } else {
+        external_subset1(state, tok, _ptr, _end)
+    }
+}
+
+fn external_subset1(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> Role {
+    match tok {
+        Token::CondSectOpen => {
+            state.state = PrologState::CondSect0;
+            Role::None
+        }
+        Token::CondSectClose => {
+            if state.include_level == 0 {
+                return common(state, tok);
+            }
+            state.include_level -= 1;
+            Role::None
+        }
+        Token::PrologS => Role::None,
+        Token::CloseBracket => common(state, tok),
+        Token::None => {
+            if state.include_level == 0 {
+                return Role::None;
+            }
+            common(state, tok)
+        }
+        _ => internal_subset(state, tok, _ptr, _end),
+    }
+}
+
+fn cond_sect0(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> Role {
+    match tok {
+        Token::PrologS => Role::None,
+        Token::Name => {
+            if keyword_matches(_ptr, "INCLUDE") {
+                state.state = PrologState::CondSect1;
+                Role::None
+            } else if keyword_matches(_ptr, "IGNORE") {
+                state.state = PrologState::CondSect2;
+                Role::None
+            } else {
+                common(state, tok)
+            }
+        }
+        _ => common(state, tok),
+    }
+}
+
+fn cond_sect1(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> Role {
+    match tok {
+        Token::PrologS => Role::None,
+        Token::OpenBracket => {
+            state.state = PrologState::ExternalSubset1;
+            state.include_level += 1;
+            Role::None
+        }
+        _ => common(state, tok),
+    }
+}
+
+fn cond_sect2(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> Role {
+    match tok {
+        Token::PrologS => Role::None,
+        Token::OpenBracket => {
+            state.state = PrologState::ExternalSubset1;
+            Role::IgnoreSect
         }
         _ => common(state, tok),
     }

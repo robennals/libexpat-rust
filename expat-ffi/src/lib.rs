@@ -54,6 +54,28 @@ struct ParserHandle {
     c_end_ns_handler: XML_EndNamespaceDeclHandler,
     c_unknown_encoding_handler: XML_UnknownEncodingHandler,
     c_unknown_encoding_data: *mut c_void,
+    // Content handlers (needed for ext entity parser inheritance)
+    c_start_element_handler: XML_StartElementHandler,
+    c_end_element_handler: XML_EndElementHandler,
+    c_character_data_handler: XML_CharacterDataHandler,
+    c_processing_instruction_handler: XML_ProcessingInstructionHandler,
+    c_comment_handler: XML_CommentHandler,
+    c_default_handler: XML_DefaultHandler,
+    c_start_cdata_handler: XML_StartCdataSectionHandler,
+    c_end_cdata_handler: XML_EndCdataSectionHandler,
+    c_xml_decl_handler: XML_XmlDeclHandler,
+    c_start_doctype_handler: XML_StartDoctypeDeclHandler,
+    c_end_doctype_handler: XML_EndDoctypeDeclHandler,
+    /// Last built content model as a C-allocated array (for XML_FreeContentModel)
+    last_content_model_array: Option<Box<[XML_Content]>>,
+    /// Name buffers for the content model (kept alive with the array)
+    last_content_model_names: Vec<Vec<u8>>,
+    /// Custom encoding map from unknown encoding handler
+    custom_encoding_map: Option<Box<[i32; 256]>>,
+    /// Custom encoding converter function from unknown encoding handler
+    custom_encoding_converter: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int>,
+    /// User data for custom encoding converter
+    custom_encoding_data: *mut c_void,
 }
 
 type XML_Parser = *mut ParserHandle;
@@ -215,6 +237,18 @@ const XML_FALSE: XML_Bool = 0;
 
 // --- Helper conversions ---
 
+/// Check if an ASCII byte has XML significance (not BT_OTHER/BT_NONXML in C terms)
+/// Matches the check in C's XmlInitUnknownEncoding
+fn is_significant_ascii(b: u8) -> bool {
+    // XML-significant characters: letters, digits, whitespace, punctuation used in XML
+    matches!(b,
+        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' |
+        b' ' | b'\t' | b'\n' | b'\r' |
+        b'<' | b'>' | b'&' | b'\'' | b'"' | b'=' | b'/' | b'?' | b'!' |
+        b'-' | b'.' | b'_' | b':' | b';' | b'[' | b']' | b'#' | b'%'
+    )
+}
+
 fn status_to_c(s: XmlStatus) -> XML_Status_t {
     match s {
         XmlStatus::Error => XML_STATUS_ERROR,
@@ -246,6 +280,22 @@ fn new_handle(parser: Parser) -> XML_Parser {
         c_end_ns_handler: None,
         c_unknown_encoding_handler: None,
         c_unknown_encoding_data: ptr::null_mut(),
+        c_start_element_handler: None,
+        c_end_element_handler: None,
+        c_character_data_handler: None,
+        c_processing_instruction_handler: None,
+        c_comment_handler: None,
+        c_default_handler: None,
+        c_start_cdata_handler: None,
+        c_end_cdata_handler: None,
+        c_xml_decl_handler: None,
+        c_start_doctype_handler: None,
+        c_end_doctype_handler: None,
+        last_content_model_array: None,
+        last_content_model_names: Vec::new(),
+        custom_encoding_map: None,
+        custom_encoding_converter: None,
+        custom_encoding_data: ptr::null_mut(),
     });
     Box::into_raw(handle)
 }
@@ -318,6 +368,98 @@ pub unsafe extern "C" fn XML_ParserFree(parser: XML_Parser) {
 // Parsing
 // ============================================================================
 
+/// Transcode data from custom encoding to UTF-8 using the encoding map and converter.
+/// Returns Ok(transcoded_data) or Err(error_code) if transcoding fails.
+fn transcode_custom_encoding(
+    data: &[u8],
+    map: &[i32; 256],
+    converter: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int>,
+    conv_data: *mut c_void,
+) -> Result<Vec<u8>, i32> {
+    let mut result = Vec::new();
+    let mut i = 0;
+
+    while i < data.len() {
+        let byte = data[i] as u8;
+        let map_val = map[byte as usize];
+
+        if map_val == -1 {
+            // Malformed byte — skip it but continue
+            i += 1;
+            continue;
+        } else if map_val >= 0 {
+            // Single-byte mapping to Unicode codepoint
+            let codepoint = map_val as u32;
+            // Encode codepoint to UTF-8
+            if codepoint <= 0x7F {
+                result.push(codepoint as u8);
+            } else if codepoint <= 0x7FF {
+                result.push(0xC0 | ((codepoint >> 6) as u8));
+                result.push(0x80 | ((codepoint & 0x3F) as u8));
+            } else if codepoint <= 0xFFFF {
+                result.push(0xE0 | ((codepoint >> 12) as u8));
+                result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
+                result.push(0x80 | ((codepoint & 0x3F) as u8));
+            } else {
+                result.push(0xF0 | ((codepoint >> 18) as u8));
+                result.push(0x80 | (((codepoint >> 12) & 0x3F) as u8));
+                result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
+                result.push(0x80 | ((codepoint & 0x3F) as u8));
+            }
+            i += 1;
+        } else if map_val < -4 {
+            // Invalid multi-byte length indicator
+            return Err(-1);
+        } else {
+            // Multi-byte sequence: map_val in [-4, -2]
+            let n_bytes = (-map_val) as usize;
+            if i + n_bytes > data.len() {
+                // Not enough bytes
+                break;
+            }
+
+            if let Some(conv_fn) = converter {
+                // Build a buffer for the converter: first byte + remaining bytes
+                let mut conv_buf = [0u8; 4];
+                for j in 0..n_bytes {
+                    conv_buf[j] = data[i + j];
+                }
+
+                let codepoint = unsafe { conv_fn(conv_data, conv_buf.as_ptr() as *const c_char) };
+
+                if codepoint < 0 {
+                    // Converter failed
+                    return Err(codepoint as i32);
+                }
+
+                // Encode codepoint to UTF-8
+                let codepoint = codepoint as u32;
+                if codepoint <= 0x7F {
+                    result.push(codepoint as u8);
+                } else if codepoint <= 0x7FF {
+                    result.push(0xC0 | ((codepoint >> 6) as u8));
+                    result.push(0x80 | ((codepoint & 0x3F) as u8));
+                } else if codepoint <= 0xFFFF {
+                    result.push(0xE0 | ((codepoint >> 12) as u8));
+                    result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
+                    result.push(0x80 | ((codepoint & 0x3F) as u8));
+                } else {
+                    result.push(0xF0 | ((codepoint >> 18) as u8));
+                    result.push(0x80 | (((codepoint >> 12) & 0x3F) as u8));
+                    result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
+                    result.push(0x80 | ((codepoint & 0x3F) as u8));
+                }
+                i += n_bytes;
+            } else {
+                // No converter but multi-byte needed — this shouldn't happen after validation
+                return Err(-1);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn XML_Parse(
     parser: XML_Parser,
@@ -339,7 +481,31 @@ pub unsafe extern "C" fn XML_Parse(
     } else {
         std::slice::from_raw_parts(s as *const u8, len as usize)
     };
-    let status = handle.parser.parse(data, is_final != 0);
+
+    // If custom encoding is pre-set (from a previous parse call), transcode the data
+    let transcoded: Vec<u8>;
+    let parse_data = if let Some(ref map) = handle.custom_encoding_map {
+        match transcode_custom_encoding(
+            data,
+            map,
+            handle.custom_encoding_converter,
+            handle.custom_encoding_data,
+        ) {
+            Ok(t) => {
+                transcoded = t;
+                transcoded.as_slice()
+            }
+            Err(_err_code) => {
+                // Transcoding failed — treat as a parse error
+                handle.parser.set_error(XmlError::InvalidToken);
+                return XML_STATUS_ERROR;
+            }
+        }
+    } else {
+        data
+    };
+
+    let status = handle.parser.parse(parse_data, is_final != 0);
     status_to_c(status)
 }
 
@@ -349,7 +515,8 @@ pub unsafe extern "C" fn XML_GetBuffer(parser: XML_Parser, len: c_int) -> *mut c
         return ptr::null_mut();
     }
     // Reject excessively large buffers (matches C overflow detection)
-    if len as usize > (i32::MAX as usize) / 2 {
+    // C allows up to INT_MAX/2 + (INT_MAX & 1) which rounds up to (INT_MAX+1)/2
+    if len as usize > ((i32::MAX as usize) + 1) / 2 {
         return ptr::null_mut();
     }
     let handle = &mut *parser;
@@ -538,7 +705,9 @@ pub unsafe extern "C" fn XML_SetEncoding(
     }
     let handle = &mut *parser;
     if encoding.is_null() {
-        return XML_STATUS_ERROR;
+        // NULL encoding clears the encoding setting (matches C behavior)
+        handle.parser.clear_encoding();
+        return XML_STATUS_OK;
     }
     let enc_str = match CStr::from_ptr(encoding).to_str() {
         Ok(s) => s,
@@ -706,13 +875,18 @@ pub unsafe extern "C" fn XML_SetStartElementHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_start_element_handler = handler;
 
     if let Some(start_fn) = handler {
         let parser_ptr = parser;
         handle
             .parser
             .set_start_element_handler(Some(Box::new(move |name, attrs| {
-                let ud = (*parser_ptr).user_data;
+                let ud = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
                 let mut name_bytes: Vec<u8> = name.as_bytes().to_vec();
                 name_bytes.push(0);
 
@@ -749,6 +923,7 @@ pub unsafe extern "C" fn XML_SetEndElementHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_end_element_handler = handler;
 
     if let Some(end_fn) = handler {
         let parser_ptr = parser;
@@ -757,10 +932,12 @@ pub unsafe extern "C" fn XML_SetEndElementHandler(
             .set_end_element_handler(Some(Box::new(move |name| {
                 let mut name_bytes: Vec<u8> = name.as_bytes().to_vec();
                 name_bytes.push(0);
-                end_fn(
-                    (*parser_ptr).user_data,
-                    name_bytes.as_ptr() as *const XML_Char,
-                );
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+                end_fn(handler_arg, name_bytes.as_ptr() as *const XML_Char);
             })));
     } else {
         handle.parser.set_end_element_handler(None);
@@ -776,14 +953,20 @@ pub unsafe extern "C" fn XML_SetCharacterDataHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_character_data_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
         handle
             .parser
             .set_character_data_handler(Some(Box::new(move |data| {
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
                 handler_fn(
-                    (*parser_ptr).user_data,
+                    handler_arg,
                     data.as_ptr() as *const XML_Char,
                     data.len() as c_int,
                 );
@@ -802,6 +985,7 @@ pub unsafe extern "C" fn XML_SetProcessingInstructionHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_processing_instruction_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -812,8 +996,13 @@ pub unsafe extern "C" fn XML_SetProcessingInstructionHandler(
                 target_bytes.push(0);
                 let mut data_bytes: Vec<u8> = data.as_bytes().to_vec();
                 data_bytes.push(0);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
                 handler_fn(
-                    (*parser_ptr).user_data,
+                    handler_arg,
                     target_bytes.as_ptr() as *const XML_Char,
                     data_bytes.as_ptr() as *const XML_Char,
                 );
@@ -829,6 +1018,7 @@ pub unsafe extern "C" fn XML_SetCommentHandler(parser: XML_Parser, handler: XML_
         return;
     }
     let handle = &mut *parser;
+    handle.c_comment_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -837,7 +1027,12 @@ pub unsafe extern "C" fn XML_SetCommentHandler(parser: XML_Parser, handler: XML_
             .set_comment_handler(Some(Box::new(move |data| {
                 let mut bytes: Vec<u8> = data.to_vec();
                 bytes.push(0);
-                handler_fn((*parser_ptr).user_data, bytes.as_ptr() as *const XML_Char);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+                handler_fn(handler_arg, bytes.as_ptr() as *const XML_Char);
             })));
     } else {
         handle.parser.set_comment_handler(None);
@@ -866,13 +1061,19 @@ pub unsafe extern "C" fn XML_SetStartCdataSectionHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_start_cdata_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
         handle
             .parser
             .set_start_cdata_section_handler(Some(Box::new(move || {
-                handler_fn((*parser_ptr).user_data);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+                handler_fn(handler_arg);
             })));
     } else {
         handle.parser.set_start_cdata_section_handler(None);
@@ -888,13 +1089,19 @@ pub unsafe extern "C" fn XML_SetEndCdataSectionHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_end_cdata_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
         handle
             .parser
             .set_end_cdata_section_handler(Some(Box::new(move || {
-                handler_fn((*parser_ptr).user_data);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+                handler_fn(handler_arg);
             })));
     } else {
         handle.parser.set_end_cdata_section_handler(None);
@@ -907,14 +1114,20 @@ pub unsafe extern "C" fn XML_SetDefaultHandler(parser: XML_Parser, handler: XML_
         return;
     }
     let handle = &mut *parser;
+    handle.c_default_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
         handle
             .parser
             .set_default_handler(Some(Box::new(move |data| {
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
                 handler_fn(
-                    (*parser_ptr).user_data,
+                    handler_arg,
                     data.as_ptr() as *const XML_Char,
                     data.len() as c_int,
                 );
@@ -939,8 +1152,13 @@ pub unsafe extern "C" fn XML_SetDefaultHandlerExpand(
         handle
             .parser
             .set_default_handler_expand(Some(Box::new(move |data| {
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
                 handler_fn(
-                    (*parser_ptr).user_data,
+                    handler_arg,
                     data.as_ptr() as *const XML_Char,
                     data.len() as c_int,
                 );
@@ -972,6 +1190,7 @@ pub unsafe extern "C" fn XML_SetStartDoctypeDeclHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_start_doctype_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -998,8 +1217,14 @@ pub unsafe extern "C" fn XML_SetStartDoctypeDeclHandler(
                     .as_ref()
                     .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
 
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+
                 handler_fn(
-                    (*parser_ptr).user_data,
+                    handler_arg,
                     name_bytes.as_ptr() as *const XML_Char,
                     sysid_ptr,
                     pubid_ptr,
@@ -1021,13 +1246,19 @@ pub unsafe extern "C" fn XML_SetEndDoctypeDeclHandler(
         return;
     }
     let handle = &mut *parser;
+    handle.c_end_doctype_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
         handle
             .parser
             .set_end_doctype_decl_handler(Some(Box::new(move || {
-                handler_fn((*parser_ptr).user_data);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+                handler_fn(handler_arg);
             })));
     } else {
         handle.parser.set_end_doctype_decl_handler(None);
@@ -1040,6 +1271,7 @@ pub unsafe extern "C" fn XML_SetXmlDeclHandler(parser: XML_Parser, handler: XML_
         return;
     }
     let handle = &mut *parser;
+    handle.c_xml_decl_handler = handler;
 
     if let Some(handler_fn) = handler {
         let parser_ptr = parser;
@@ -1070,12 +1302,13 @@ pub unsafe extern "C" fn XML_SetXmlDeclHandler(parser: XML_Parser, handler: XML_
                     None => -1,
                 };
 
-                handler_fn(
-                    (*parser_ptr).user_data,
-                    version_ptr,
-                    encoding_ptr,
-                    standalone_int,
-                );
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    (*parser_ptr).user_data
+                };
+
+                handler_fn(handler_arg, version_ptr, encoding_ptr, standalone_int);
             })));
     } else {
         handle.parser.set_xml_decl_handler(None);
@@ -1136,7 +1369,23 @@ pub unsafe extern "C" fn XML_SetExternalEntityRefHandler(
                     .as_ref()
                     .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
 
-                let result = handler_fn(parser_ptr, ctx_ptr, base_ptr, sysid_ptr, pubid_ptr);
+                // Get the handler arg at call time - if NULL, use parser itself
+                let handler_arg = unsafe {
+                    let handle = &*parser_ptr;
+                    if handle.ext_entity_ref_handler_arg.is_null() {
+                        parser_ptr as *mut c_void
+                    } else {
+                        handle.ext_entity_ref_handler_arg
+                    }
+                };
+
+                let result = handler_fn(
+                    handler_arg as XML_Parser,
+                    ctx_ptr,
+                    base_ptr,
+                    sysid_ptr,
+                    pubid_ptr,
+                );
                 result != 0
             },
         )));
@@ -1193,7 +1442,7 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
     if parser.is_null() {
         return ptr::null_mut();
     }
-    let handle = &*parser;
+    let handle = &mut *parser;
 
     let ctx_str = if context.is_null() {
         ""
@@ -1212,10 +1461,98 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
 
     match handle.parser.create_external_entity_parser(ctx_str, enc) {
         Some(ext_parser) => {
+            // If creating a DTD subset parser (empty context), mark param entity as read
+            // This matches C's behavior where creating a child parser implies DTD content will be processed
+            if ctx_str.is_empty() {
+                handle.parser.dtd.borrow_mut().param_entity_read = true;
+            }
             let new_ptr = new_handle(ext_parser);
             // Copy user_data and handler settings from parent (matches C behavior)
             (*new_ptr).user_data = handle.user_data;
             (*new_ptr).use_parser_as_handler_arg = handle.use_parser_as_handler_arg;
+
+            // Copy ext_entity_ref_handler_arg
+            if handle.ext_entity_ref_handler_arg == parser as *mut c_void {
+                (*new_ptr).ext_entity_ref_handler_arg = new_ptr as *mut c_void;
+            } else {
+                (*new_ptr).ext_entity_ref_handler_arg = handle.ext_entity_ref_handler_arg;
+            }
+
+            // Copy content handlers
+            (*new_ptr).c_start_element_handler = handle.c_start_element_handler;
+            (*new_ptr).c_end_element_handler = handle.c_end_element_handler;
+            (*new_ptr).c_character_data_handler = handle.c_character_data_handler;
+            (*new_ptr).c_processing_instruction_handler = handle.c_processing_instruction_handler;
+            (*new_ptr).c_comment_handler = handle.c_comment_handler;
+            (*new_ptr).c_default_handler = handle.c_default_handler;
+            (*new_ptr).c_start_cdata_handler = handle.c_start_cdata_handler;
+            (*new_ptr).c_end_cdata_handler = handle.c_end_cdata_handler;
+            (*new_ptr).c_xml_decl_handler = handle.c_xml_decl_handler;
+            (*new_ptr).c_start_doctype_handler = handle.c_start_doctype_handler;
+            (*new_ptr).c_end_doctype_handler = handle.c_end_doctype_handler;
+
+            // Copy DTD handlers
+            (*new_ptr).c_element_decl_handler = handle.c_element_decl_handler;
+            (*new_ptr).c_attlist_decl_handler = handle.c_attlist_decl_handler;
+            (*new_ptr).c_entity_decl_handler = handle.c_entity_decl_handler;
+            (*new_ptr).c_notation_decl_handler = handle.c_notation_decl_handler;
+            (*new_ptr).c_unparsed_entity_decl_handler = handle.c_unparsed_entity_decl_handler;
+
+            // Copy namespace handlers
+            (*new_ptr).c_start_ns_handler = handle.c_start_ns_handler;
+            (*new_ptr).c_end_ns_handler = handle.c_end_ns_handler;
+
+            // Re-register handlers on child parser (creates closures with correct parser pointer)
+            XML_SetElementHandler(
+                new_ptr,
+                handle.c_start_element_handler,
+                handle.c_end_element_handler,
+            );
+            XML_SetCharacterDataHandler(new_ptr, handle.c_character_data_handler);
+            XML_SetProcessingInstructionHandler(new_ptr, handle.c_processing_instruction_handler);
+            XML_SetCommentHandler(new_ptr, handle.c_comment_handler);
+            if handle.c_default_handler.is_some() {
+                XML_SetDefaultHandler(new_ptr, handle.c_default_handler);
+            }
+            XML_SetCdataSectionHandler(
+                new_ptr,
+                handle.c_start_cdata_handler,
+                handle.c_end_cdata_handler,
+            );
+            XML_SetXmlDeclHandler(new_ptr, handle.c_xml_decl_handler);
+            XML_SetStartDoctypeDeclHandler(new_ptr, handle.c_start_doctype_handler);
+            XML_SetEndDoctypeDeclHandler(new_ptr, handle.c_end_doctype_handler);
+            if handle.c_ext_entity_ref_handler.is_some() {
+                XML_SetExternalEntityRefHandler(new_ptr, handle.c_ext_entity_ref_handler);
+            }
+            if handle.c_not_standalone_handler.is_some() {
+                XML_SetNotStandaloneHandler(new_ptr, handle.c_not_standalone_handler);
+            }
+            if handle.c_skipped_entity_handler.is_some() {
+                XML_SetSkippedEntityHandler(new_ptr, handle.c_skipped_entity_handler);
+            }
+
+            // Re-register DTD handlers on child parser
+            if handle.c_element_decl_handler.is_some() {
+                XML_SetElementDeclHandler(new_ptr, handle.c_element_decl_handler);
+            }
+            if handle.c_attlist_decl_handler.is_some() {
+                XML_SetAttlistDeclHandler(new_ptr, handle.c_attlist_decl_handler);
+            }
+            if handle.c_entity_decl_handler.is_some() {
+                XML_SetEntityDeclHandler(new_ptr, handle.c_entity_decl_handler);
+            }
+            if handle.c_notation_decl_handler.is_some() {
+                XML_SetNotationDeclHandler(new_ptr, handle.c_notation_decl_handler);
+            }
+            if handle.c_unparsed_entity_decl_handler.is_some() {
+                XML_SetUnparsedEntityDeclHandler(new_ptr, handle.c_unparsed_entity_decl_handler);
+            }
+
+            // Re-register namespace handlers on child parser
+            XML_SetStartNamespaceDeclHandler(new_ptr, handle.c_start_ns_handler);
+            XML_SetEndNamespaceDeclHandler(new_ptr, handle.c_end_ns_handler);
+
             new_ptr
         }
         None => ptr::null_mut(),
@@ -1417,8 +1754,13 @@ pub unsafe extern "C" fn XML_SetSkippedEntityHandler(
                 let h = &*parser_ptr;
                 let mut nb: Vec<u8> = name.as_bytes().to_vec();
                 nb.push(0);
+                let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    h.user_data
+                };
                 handler_fn(
-                    h.user_data,
+                    handler_arg,
                     nb.as_ptr() as *const XML_Char,
                     if is_param { 1 } else { 0 },
                 );
@@ -1444,17 +1786,81 @@ pub unsafe extern "C" fn XML_SetElementDeclHandler(
         handle
             .parser
             .set_element_decl_handler(Some(Box::new(move |name: &str, _model: &str| {
-                let h = &*parser_ptr;
+                let h = unsafe { &mut *(parser_ptr as *mut ParserHandle) };
                 let mut nb: Vec<u8> = name.as_bytes().to_vec();
                 nb.push(0);
-                let mut content = XML_Content {
-                    type_: 0,
-                    quant: 0,
-                    name: ptr::null_mut(),
-                    numchildren: 0,
-                    children: ptr::null_mut(),
+
+                // Build the flat content model array from the Rust tree
+                let model_ptr = if let Some(rust_model) = h.parser.last_content_model() {
+                    if rust_model.is_empty() {
+                        // EMPTY or ANY element - pass NULL
+                        ptr::null_mut()
+                    } else {
+                        // First, pre-collect all name buffers to avoid reallocation issues
+                        h.last_content_model_names.clear();
+                        h.last_content_model_names.reserve(rust_model.len());
+
+                        for (_, _, name_bytes, _) in rust_model.iter() {
+                            if let Some(nb) = name_bytes {
+                                h.last_content_model_names.push(nb.clone());
+                            } else {
+                                h.last_content_model_names.push(Vec::new());
+                            }
+                        }
+
+                        // Now build the array with stable name pointers
+                        let mut array: Vec<XML_Content> = Vec::with_capacity(rust_model.len());
+                        for (idx, (type_u, quant_u, name_bytes, numchildren)) in
+                            rust_model.iter().enumerate()
+                        {
+                            let name_ptr = if !h.last_content_model_names[idx].is_empty() {
+                                h.last_content_model_names[idx].as_ptr() as *mut c_char
+                            } else {
+                                ptr::null_mut()
+                            };
+
+                            array.push(XML_Content {
+                                type_: *type_u as c_int,
+                                quant: *quant_u as c_int,
+                                name: name_ptr,
+                                numchildren: 0,
+                                children: ptr::null_mut(),
+                            });
+                        }
+
+                        // Now set numchildren and children pointers
+                        // The children are laid out in the order produced by flatten_content_node
+                        let array_ptr = array.as_mut_ptr();
+                        let mut next_idx = 1; // next available index for children
+
+                        for (idx, (_, _, _, numchildren)) in rust_model.iter().enumerate() {
+                            (*array_ptr.add(idx)).numchildren = *numchildren as c_int;
+                            if *numchildren > 0 && next_idx < rust_model.len() {
+                                (*array_ptr.add(idx)).children = array_ptr.add(next_idx);
+                                // Skip to next sibling group
+                                // Children are laid out sequentially, then we recursively process their children
+                                next_idx += *numchildren as usize;
+                            }
+                        }
+
+                        // Store the array on the handle
+                        h.last_content_model_array =
+                            Some(array.into_boxed_slice() as Box<[XML_Content]>);
+
+                        // Return pointer to the stored array
+                        if let Some(ref boxed) = h.last_content_model_array {
+                            boxed.as_ptr() as *mut XML_Content
+                        } else {
+                            ptr::null_mut()
+                        }
+                    }
+                } else {
+                    ptr::null_mut()
                 };
-                handler_fn(h.user_data, nb.as_ptr() as *const XML_Char, &mut content);
+
+                unsafe {
+                    handler_fn(h.user_data, nb.as_ptr() as *const XML_Char, model_ptr);
+                }
             })));
     } else {
         handle.parser.set_element_decl_handler(None);
@@ -1680,6 +2086,11 @@ pub unsafe extern "C" fn XML_SetStartNamespaceDeclHandler(
             .set_start_namespace_decl_handler(Some(Box::new(
                 move |prefix: Option<&str>, uri: &str| {
                     let h = &*parser_ptr;
+                    let ud = if h.use_parser_as_handler_arg {
+                        parser_ptr as *mut c_void
+                    } else {
+                        h.user_data
+                    };
                     let pb = prefix.map(|s| {
                         let mut b = s.as_bytes().to_vec();
                         b.push(0);
@@ -1688,7 +2099,7 @@ pub unsafe extern "C" fn XML_SetStartNamespaceDeclHandler(
                     let mut ub = uri.as_bytes().to_vec();
                     ub.push(0);
                     handler_fn(
-                        h.user_data,
+                        ud,
                         pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
                         ub.as_ptr() as _,
                     );
@@ -1714,15 +2125,17 @@ pub unsafe extern "C" fn XML_SetEndNamespaceDeclHandler(
         handle.parser.set_end_namespace_decl_handler(Some(Box::new(
             move |prefix: Option<&str>| {
                 let h = &*parser_ptr;
+                let ud = if h.use_parser_as_handler_arg {
+                    parser_ptr as *mut c_void
+                } else {
+                    h.user_data
+                };
                 let pb = prefix.map(|s| {
                     let mut b = s.as_bytes().to_vec();
                     b.push(0);
                     b
                 });
-                handler_fn(
-                    h.user_data,
-                    pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _),
-                );
+                handler_fn(ud, pb.as_ref().map_or(ptr::null(), |b| b.as_ptr() as _));
             },
         )));
     } else {
@@ -1744,6 +2157,7 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
     handle.c_unknown_encoding_data = data;
     if let Some(handler_fn) = handler {
         let enc_data = data;
+        let parser_ptr = parser;
         handle
             .parser
             .set_unknown_encoding_handler(Some(Box::new(move |name: &str| -> bool {
@@ -1755,7 +2169,44 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
                     convert: None,
                     release: None,
                 };
-                handler_fn(enc_data, nb.as_ptr() as _, &mut enc) != 0
+                if handler_fn(enc_data, nb.as_ptr() as _, &mut enc) == 0 {
+                    return false;
+                }
+                // Validate the encoding map (matches C xmltok.c XmlInitUnknownEncoding)
+                let has_converter = enc.convert.is_some();
+                for i in 0..256 {
+                    let c = enc.map[i];
+                    if c == -1 {
+                        // Unmapped byte — will be treated as malformed during parsing
+                        // This is OK — C marks these as BT_MALFORM and continues
+                    } else if c < -4 {
+                        return false; // Invalid multi-byte indicator
+                    } else if c < 0 {
+                        if !has_converter {
+                            return false; // Multi-byte needs converter
+                        }
+                    } else if c > 0xFFFF {
+                        return false; // Out of Unicode range
+                    } else if c < 0x80 && is_significant_ascii(c as u8) && c != i as i32 {
+                        // ASCII character with XML significance mapped to wrong position
+                        return false;
+                    } else if i < 128 && is_significant_ascii(i as u8) && c != i as i32 {
+                        // Significant ASCII byte mapped to different value
+                        return false;
+                    }
+                }
+                // Store the encoding map and converter on the ParserHandle and Rust Parser
+                let ffi_handle = &mut *(parser_ptr as *mut ParserHandle);
+                ffi_handle.custom_encoding_map = Some(Box::new(enc.map));
+                ffi_handle.custom_encoding_converter = enc.convert;
+                ffi_handle.custom_encoding_data = enc.data;
+
+                // Also store on the Rust Parser so the transcoding logic can use it
+                ffi_handle.parser.custom_encoding_map = Some(enc.map);
+                ffi_handle.parser.custom_encoding_converter = enc.convert;
+                ffi_handle.parser.custom_encoding_data = enc.data;
+
+                true
             })));
     } else {
         handle.parser.set_unknown_encoding_handler(None);
@@ -1776,9 +2227,9 @@ pub unsafe extern "C" fn XML_DefaultCurrent(parser: XML_Parser) {
 
 #[no_mangle]
 pub unsafe extern "C" fn XML_FreeContentModel(parser: XML_Parser, model: *mut XML_Content) {
-    if !model.is_null() {
-        // The model was stack-allocated in our element_decl handler shim, don't free
-    }
+    let _ = parser;
+    // Model pointer may be NULL (our shim doesn't build XML_Content trees yet)
+    // When non-null, it was heap-allocated and should be freed
 }
 
 #[no_mangle]
@@ -1911,10 +2362,21 @@ pub static mut g_reparseDeferralEnabledDefault: XML_Bool = 1; // XML_TRUE
 
 #[no_mangle]
 pub unsafe extern "C" fn _INTERNAL_trim_to_complete_utf8_characters(
-    _from: *const c_char,
-    _from_lim_ref: *mut *const c_char,
+    from: *const c_char,
+    from_lim_ref: *mut *const c_char,
 ) {
-    // Stub
+    if from.is_null() || from_lim_ref.is_null() || (*from_lim_ref).is_null() {
+        return;
+    }
+    let from_ptr = from as *const u8;
+    let lim_ptr = *from_lim_ref as *const u8;
+    let len = lim_ptr.offset_from(from_ptr) as usize;
+    if len == 0 {
+        return;
+    }
+    let data = std::slice::from_raw_parts(from_ptr, len);
+    let new_len = expat_rust::xmltok::trim_to_complete_utf8_characters(data);
+    *from_lim_ref = from.add(new_len);
 }
 
 #[no_mangle]
