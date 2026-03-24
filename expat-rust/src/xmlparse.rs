@@ -4747,9 +4747,14 @@ impl Parser {
                 }
             }
             xmltok::InitScanResult::Partial => {
-                // Need more bytes for reliable encoding detection
-                // Return empty to signal that we need to buffer and wait
-                Ok(Vec::new())
+                if self.is_final {
+                    // Final buffer — can't wait for more bytes. Treat as UTF-8.
+                    Ok(data.to_vec())
+                } else {
+                    // Need more bytes for reliable encoding detection
+                    // Return empty to signal that we need to buffer and wait
+                    Ok(Vec::new())
+                }
             }
             xmltok::InitScanResult::None => {
                 // No data
