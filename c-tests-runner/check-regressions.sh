@@ -45,6 +45,7 @@ echo ""
 # Check for regressions: tests that FAIL but are NOT in known-failures
 REGRESSIONS=""
 while IFS= read -r test; do
+    [ -z "$test" ] && continue
     if ! echo "$KNOWN" | grep -q "^${test}$"; then
         REGRESSIONS="$REGRESSIONS $test"
     fi
@@ -53,6 +54,7 @@ done <<< "$FAIL_TESTS"
 # Check for newly passing: tests in known-failures that now PASS
 NEWLY_PASSING=""
 while IFS= read -r test; do
+    [ -z "$test" ] && continue
     if echo "$PASS_TESTS" | grep -q "^${test}$"; then
         NEWLY_PASSING="$NEWLY_PASSING $test"
     fi
