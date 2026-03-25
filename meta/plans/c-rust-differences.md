@@ -32,25 +32,14 @@ and the Rust implementation. Any difference NOT listed here is a bug to be fixed
 
 ## Unauthorized Differences (bugs to fix)
 
-### 1. GE Expansion: Inline vs processEntity Pipeline
-- **C**: `doContent` calls `processEntity()` for GE expansion, which sets up
-  `internalEntityProcessor` through the `callProcessor` reenter loop
-- **Rust**: `do_content` expands GE inline by calling `do_content` recursively
-  on entity text
-- **Impact**: Suspend/resume during GE expansion fails; entity text position
-  tracking is wrong
-- **Root cause**: `do_content` missing reenter check at xmlparse.c:3784, AND
-  `run_processor` missing match for C's `callProcessor` loop semantics for
-  buffer management across reenter cycles. Specifically, C's `callProcessor`
-  passes `*endPtr` (which advances between iterations), while Rust's
-  `run_processor` takes the buffer once and uses a `start` variable. When
-  entity processing completes and Content resumes, the buffer may be exhausted
-  (all data consumed in the first Content dispatch), causing `do_content` to
-  see an empty buffer and return NoElements.
-- **Fix needed**: Match C's buffer management in callProcessor. The Content
-  processor should buffer remaining data when it encounters an entity ref and
-  returns for reenter, ensuring the buffer is available for the re-dispatch
-  after entity processing.
+### 1. GE Expansion — FIXED
+- **Status**: Fixed. `do_content` now calls `process_entity()` matching C's
+  `processEntity()` at xmlparse.c:3450. Added reenter check at xmlparse.c:3784.
+  Fixed `internal_entity_processor` to use captured entity index (not `last()`)
+  when updating entity state, preventing corruption when nested entities push
+  onto the stack.
+- **Remaining issue**: 2 test regressions (test_ext_entity_good_cdata,
+  test_misc_expected_event_ptr_issue_980) need investigation.
 
 ### 2. Unknown Encoding Handler: Post-XmlDecl Transcoding
 - **C**: `processXmlDecl` switches the encoding object; subsequent tokenization

@@ -3393,7 +3393,7 @@ impl Parser {
                     }
 
                     // Check if root element closed (empty root element)
-                    if self.tag_level == start_tag_level {
+                    if self.tag_level == 0 && self.parsing_state != ParsingState::Finished {
                         self.root_closed = true;
                         self.processor = Processor::Epilog;
                         if next < end {
