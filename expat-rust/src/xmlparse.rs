@@ -3493,12 +3493,6 @@ impl Parser {
                     }
 
                     // C: xmlparse.c:3638 — epilog transition when tag_level reaches 0.
-                    // C checks tagLevel == 0 because it's the absolute root close.
-                    // For external entity child parsers (startTagLevel=1), the root
-                    // close brings tagLevel to 0 too, so this is universal.
-                    // Note: for entity text (via internal_entity_processor), the check
-                    // at line 3513 (start_tag_level > 0 && tag_level == start_tag_level)
-                    // returns before reaching here.
                     if self.tag_level == 0 {
                         self.root_closed = true;
                         self.processor = Processor::Epilog;
@@ -4898,10 +4892,13 @@ impl Parser {
                 self.parsing_state = ParsingState::Finished;
                 return XmlStatus::Error;
             }
-            // If root element was opened but not closed, that's unclosed token
+            // If root element was opened but not closed, that's unclosed token.
+            // Skip for external entity/subordinate parsers where tag_level starts > 0
+            // and content completion is handled by do_content's startTagLevel check.
             if self.seen_root
                 && !self.root_closed
                 && self.tag_level > 0
+                && self.content_start_tag_level == 0  // main parser only
                 && self.error_code == XmlError::None
             {
                 self.error_code = XmlError::UnclosedToken;
