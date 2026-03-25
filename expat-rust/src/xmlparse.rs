@@ -969,8 +969,10 @@ impl Parser {
             // set self.error_code for informational purposes (e.g., SuspendPe)
             // without causing a processor error. Clear stale handler-set errors
             // when the processor completed successfully.
-            if error == XmlError::None && self.error_code != XmlError::None
-                && self.parsing_state == ParsingState::Parsing {
+            if error == XmlError::None
+                && self.error_code != XmlError::None
+                && self.parsing_state == ParsingState::Parsing
+            {
                 self.error_code = XmlError::None;
             }
 
