@@ -1934,13 +1934,21 @@ impl Parser {
                 if let Some(name) = name {
                     if is_pe {
                         // PE value → store in param_entities (not internal_entities)
-                        // C: callStoreEntityValue for param entities
+                        // C: callStoreEntityValue for param entities, then call entityDeclHandler
                         match self.store_entity_value(tok_text) {
                             Ok(value) => {
                                 if let Some(pe) =
                                     self.dtd.borrow_mut().param_entities.get_mut(&name)
                                 {
-                                    pe.value = Some(value);
+                                    pe.value = Some(value.clone());
+                                }
+                                // Call entity declaration handler for PE (matches C xmlparse.c:5638-5644)
+                                if self.dtd.borrow().keep_processing {
+                                    if let Some(handler) = &mut self.entity_decl_handler {
+                                        let base = self.base_uri.clone();
+                                        handler(&name, true, Some(&value), base.as_deref(), None);
+                                        handler_called = true;
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -1951,7 +1959,7 @@ impl Parser {
                                 }
                             }
                         }
-                        return (XmlError::None, self.entity_decl_handler.is_some());
+                        return (XmlError::None, handler_called);
                     }
                     // tok_text has quotes already stripped by extract_token_text
                     match self.store_entity_value(tok_text) {
