@@ -36,10 +36,8 @@ and the Rust implementation. Any difference NOT listed here is a bug to be fixed
 - **Status**: Fixed. `do_content` now calls `process_entity()` matching C's
   `processEntity()` at xmlparse.c:3450. Added reenter check at xmlparse.c:3784.
   Fixed `internal_entity_processor` to use captured entity index (not `last()`)
-  when updating entity state, preventing corruption when nested entities push
-  onto the stack.
-- **Remaining issue**: 2 test regressions (test_ext_entity_good_cdata,
-  test_misc_expected_event_ptr_issue_980) need investigation.
+  when updating entity state. Fixed epilog transition to use `tag_level == 0`
+  matching C. Fixed UnclosedToken check to skip child parsers.
 
 ### 2. Unknown Encoding Handler: Post-XmlDecl Transcoding
 - **C**: `processXmlDecl` switches the encoding object; subsequent tokenization
