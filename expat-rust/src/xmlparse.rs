@@ -226,6 +226,12 @@ struct OpenInternalEntity {
     /// Whether entity still has content to process (C: entity->hasMore)
     /// First pass (true): process entity text. Second pass (false): cleanup.
     has_more: bool,
+    /// Position of the entity reference in the outer document (for error reporting).
+    /// In C, m_eventPtr stays pointing at the entity reference during expansion
+    /// because doProlog/doContent use eventPP indirection. We save/restore explicitly.
+    entity_ref_line: u64,
+    entity_ref_column: u64,
+    entity_ref_event_pos: usize,
 }
 
 /// Processor type enumeration — idiomatic Rust alternative to C function pointers
@@ -854,13 +860,13 @@ impl Parser {
                 Processor::Prolog => {
                     let have_more = !self.is_final;
                     let enc = xmltok::Utf8Encoding;
-                    self.do_prolog(&enc, &data, start, end, have_more)
+                    self.do_prolog(&enc, &data, start, end, have_more, false)
                 }
                 Processor::Content => {
                     let have_more = !self.is_final;
                     let enc = xmltok::Utf8Encoding;
                     let stl = self.content_start_tag_level;
-                    self.do_content(stl, &enc, &data, start, end, have_more)
+                    self.do_content(stl, &enc, &data, start, end, have_more, false)
                 }
                 Processor::CdataSection => {
                     // CDATA section resumed — delegate to do_cdata_section
@@ -937,7 +943,7 @@ impl Parser {
                             let have_more = !self.is_final;
                             let enc = xmltok::Utf8Encoding;
                             let stl = self.content_start_tag_level;
-                            self.do_content(stl, &enc, &new_data, 0, new_data.len(), have_more)
+                            self.do_content(stl, &enc, &new_data, 0, new_data.len(), have_more, false)
                         }
                         _ => (XmlError::None, 0),
                     };
@@ -1144,7 +1150,7 @@ impl Parser {
         // to do_prolog, which correctly maps token errors to XML error codes.
         self.processor = Processor::Prolog;
         let have_more = !self.is_final;
-        self.do_prolog(&enc, data, s, end, have_more)
+        self.do_prolog(&enc, data, s, end, have_more, false)
     }
 
     /// Initial prolog processor — detects encoding and transitions to prolog processor
@@ -1285,7 +1291,7 @@ impl Parser {
         let have_more = !self.is_final;
         let enc = xmltok::Utf8Encoding;
 
-        let (error, next_pos) = self.do_prolog(&enc, &data, 0, data.len(), have_more);
+        let (error, next_pos) = self.do_prolog(&enc, &data, 0, data.len(), have_more, false);
 
         if error != XmlError::None {
             self.error_code = error;
@@ -1335,6 +1341,14 @@ impl Parser {
 
     /// Main prolog parsing loop — corresponds to C doProlog()
     /// Uses prolog_tok from xmltok_impl to tokenize, and xml_token_role from xmlrole to determine roles
+    /// Process prolog tokens.
+    ///
+    /// `is_internal_entity`: true when called from internal_entity_processor on
+    /// entity replacement text. In C, doProlog uses `enc == parser->m_encoding`
+    /// to decide whether to write event positions to `parser->m_eventPtr` (main
+    /// document) or `openEntity->internalEventPtr` (entity text). When true,
+    /// we skip updating `self.event_pos` so position queries report the entity
+    /// reference location in the outer document, not a position in entity text.
     fn do_prolog(
         &mut self,
         enc: &xmltok::Utf8Encoding,
@@ -1342,10 +1356,17 @@ impl Parser {
         start: usize,
         end: usize,
         have_more: bool,
+        is_internal_entity: bool,
     ) -> (XmlError, usize) {
         let mut pos = start;
 
         loop {
+            // Set event_pos for position tracking (C: *eventPP = s)
+            // Only update when processing the main document buffer, not entity text.
+            if !is_internal_entity {
+                self.event_pos = pos;
+            }
+
             // Get the next token from the tokenizer
             let result = xmltok_impl::prolog_tok(enc, data, pos, end);
             let (tok, next) = match result {
@@ -1372,7 +1393,6 @@ impl Parser {
                         self.buffer = data[next..].to_vec();
                         return (XmlError::None, end);
                     }
-                    self.advance_pos_slice(&data[pos..next]);
                     pos = next;
                     continue;
                 }
@@ -1460,7 +1480,6 @@ impl Parser {
                         if self.default_handler.is_some() || self.default_handler_expand.is_some() {
                             self.report_default(&xmltok::Utf8Encoding, data, pos, ignore_end);
                         }
-                        self.advance_pos_slice(&data[pos..ignore_end]);
                         pos = ignore_end;
                         continue;
                     }
@@ -1491,9 +1510,6 @@ impl Parser {
                     {
                         self.report_default(&xmltok::Utf8Encoding, data, pos, next);
                     }
-
-                    // Update position tracking for this token
-                    self.advance_pos_slice(&data[pos..next]);
 
                     // C doProlog: check parsing state after handler calls
                     // Matches C xmlparse.c lines 6261-6271.
@@ -2614,7 +2630,7 @@ impl Parser {
         let enc = xmltok::Utf8Encoding;
         let stl = self.content_start_tag_level;
 
-        let (error, next_pos) = self.do_content(stl, &enc, &data, 0, data.len(), have_more);
+        let (error, next_pos) = self.do_content(stl, &enc, &data, 0, data.len(), have_more, false);
 
         // Set event_pos for successful completion too (for position query after parse)
         if error == XmlError::None {
@@ -2746,8 +2762,26 @@ impl Parser {
             let entity_end = entity_text.len();
 
             let enc = xmltok::Utf8Encoding;
+
+            // Save event_pos before processing entity text.
+            // In C, doProlog/doContent use eventPP indirection: when processing
+            // entity text (enc != parser->m_encoding), events go to
+            // openEntity->internalEventPtr instead of parser->m_eventPtr.
+            // This keeps m_eventPtr pointing at the entity reference in the
+            // outer document, so XML_GetCurrentLineNumber/ColumnNumber report
+            // the entity reference position on error — not a position inside
+            // the entity replacement text.
+            // Save the entity reference position from when process_entity was called.
+            // In C, m_eventPtr stays pointing at the entity reference in the outer
+            // document because doProlog/doContent use eventPP indirection (writing
+            // to openEntity->internalEventPtr instead of parser->m_eventPtr).
+            // We save/restore explicitly to match this behavior.
+            let entity_ref_line = self.open_internal_entities.last().unwrap().entity_ref_line;
+            let entity_ref_column = self.open_internal_entities.last().unwrap().entity_ref_column;
+            let entity_ref_event_pos = self.open_internal_entities.last().unwrap().entity_ref_event_pos;
+
             let (error, next_pos) = if is_param {
-                self.do_prolog(&enc, &entity_text, start_pos, entity_end, false)
+                self.do_prolog(&enc, &entity_text, start_pos, entity_end, false, true)
             } else {
                 self.do_content(
                     start_tag_level,
@@ -2756,10 +2790,20 @@ impl Parser {
                     start_pos,
                     entity_end,
                     false,
+                    true, // is_internal_entity
                 )
             };
 
+            // Restore event_pos so position queries reference the outer document
+            // (matches C where m_eventPtr is never modified during entity text processing)
+            self.event_pos = entity_ref_event_pos;
+
             if error != XmlError::None {
+                // On error inside entity expansion, restore position to the entity
+                // reference in the outer document (matching C's behavior where
+                // m_eventPtr points to %entity; or &entity; in the main buffer)
+                self.line_number = entity_ref_line;
+                self.column_number = entity_ref_column;
                 return (error, start);
             }
 
@@ -2829,6 +2873,12 @@ impl Parser {
             between_decl: false,
             saved_processor: self.processor,
             has_more: true,
+            // Save current position — this is the entity reference position in the
+            // outer document. In C, m_eventPtr retains this position because entity
+            // text processing uses openEntity->internalEventPtr instead.
+            entity_ref_line: self.line_number,
+            entity_ref_column: self.column_number,
+            entity_ref_event_pos: self.event_pos,
         };
 
         self.open_internal_entities.push(open);
@@ -2909,7 +2959,12 @@ impl Parser {
     }
 
     /// Main content parsing loop — corresponds to C doContent()
-    /// Uses content_tok from xmltok_impl to tokenize, then dispatches on token type
+    /// Uses content_tok from xmltok_impl to tokenize, then dispatches on token type.
+    ///
+    /// `is_internal_entity`: true when called from internal_entity_processor on
+    /// entity replacement text. Prevents updating self.event_pos (which should
+    /// stay pointing at the entity reference in the outer document). Matches C's
+    /// eventPP indirection pattern.
     fn do_content<E: Encoding>(
         &mut self,
         start_tag_level: u32,
@@ -2918,6 +2973,7 @@ impl Parser {
         start: usize,
         end: usize,
         have_more: bool,
+        is_internal_entity: bool,
     ) -> (XmlError, usize) {
         let mut pos = start;
         const MAX_ITERATIONS: usize = 10_000_000;
@@ -2960,7 +3016,11 @@ impl Parser {
 
             // Record the current token position for lazy line/column computation.
             // XML_GetCurrentLineNumber/ColumnNumber will scan parse_data on demand.
-            self.event_pos = pos;
+            // Only update when processing the main document, not entity text
+            // (C: *eventPP = s, where eventPP differs based on enc == m_encoding).
+            if !is_internal_entity {
+                self.event_pos = pos;
+            }
 
             match tok {
                 XmlTok::TrailingCr => {
@@ -3064,10 +3124,6 @@ impl Parser {
                                 let saved_entity_ref_context =
                                     self.entity_reference_context.clone();
 
-                                // Set event_pos to entity reference position BEFORE recursion so async errors
-                                // report the correct column
-                                self.event_pos = pos;
-
                                 let entity_name = name.to_string();
                                 self.open_entities.insert(entity_name.clone());
                                 // Save the entity reference text for XML_GetInputContext
@@ -3080,6 +3136,7 @@ impl Parser {
                                     0,
                                     entity_bytes.len(),
                                     false,
+                                    true, // is_internal_entity
                                 );
                                 self.open_entities.remove(&entity_name);
 
@@ -3107,10 +3164,6 @@ impl Parser {
                                 let saved_entity_ref_context =
                                     self.entity_reference_context.clone();
 
-                                // Set event_pos to entity reference position BEFORE recursion so async errors
-                                // report the correct column
-                                self.event_pos = pos;
-
                                 let entity_name = name.to_string();
                                 self.open_entities.insert(entity_name.clone());
                                 // Save the entity reference text for XML_GetInputContext
@@ -3123,6 +3176,7 @@ impl Parser {
                                     0,
                                     entity_bytes.len(),
                                     false,
+                                    true, // is_internal_entity
                                 );
                                 self.open_entities.remove(&entity_name);
 
@@ -5240,7 +5294,8 @@ impl Parser {
                 return XmlStatus::Error;
             }
             self.parsing_state = ParsingState::Suspended;
-            XmlStatus::Suspended
+            // C returns XML_STATUS_OK here, not XML_STATUS_SUSPENDED
+            XmlStatus::Ok
         } else {
             self.error_code = XmlError::Aborted;
             self.parsing_state = ParsingState::Finished;
