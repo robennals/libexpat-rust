@@ -2860,6 +2860,8 @@ impl Parser {
         // Restore processor
         if self.open_internal_entities.is_empty() {
             self.processor = closed.saved_processor;
+            // Clear entity reference context when all entities are closed
+            self.entity_reference_context = None;
         }
         // Signal run_processor to re-dispatch with restored processor (C: triggerReenter)
         self.reenter = true;
@@ -3031,15 +3033,15 @@ impl Parser {
                 }
             };
 
-            // Track byte count and raw data of current token for XML_GetCurrentByteCount
-            // and XML_DefaultCurrent
+            // Track byte count and raw data of current token for reportDefault/DefaultCurrent
+            // These are always updated (even for entity text) since reportDefault needs
+            // the current token's bytes.
             self.event_cur_byte_count = (next - pos) as i32;
             self.event_cur_data = data[pos..next].to_vec();
 
             // Record the current token position for lazy line/column computation.
-            // XML_GetCurrentLineNumber/ColumnNumber will scan parse_data on demand.
-            // Only update when processing the main document, not entity text
-            // (C: *eventPP = s, where eventPP differs based on enc == m_encoding).
+            // Only update for main document tokens, not entity text.
+            // C: *eventPP = s (main doc) vs openEntity->internalEventPtr (entity text)
             if !is_internal_entity {
                 self.event_pos = pos;
             }
@@ -3146,6 +3148,8 @@ impl Parser {
                                 // C: break (from switch)
                             } else {
                                 // C: processEntity(parser, entity, FALSE, ENTITY_INTERNAL)
+                                // Save entity reference text for XML_GetInputContext/ByteCount
+                                self.entity_reference_context = Some(data[pos..next].to_vec());
                                 let entity_name = name.to_string();
                                 let entity_bytes = value.as_bytes().to_vec();
                                 let result = self.process_entity(
