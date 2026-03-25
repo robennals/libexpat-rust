@@ -3492,27 +3492,22 @@ impl Parser {
                         self.pop_ns_bindings(self.tag_level + 1);
                     }
 
-                    // C: xmlparse.c:3638 — epilog transition when tag_level reaches 0
-                    // Note: C checks tagLevel == 0, NOT tagLevel == startTagLevel.
-                    // The startTagLevel check is only for the async entity guard above.
-                    if self.tag_level == 0
-                        && self.parsing_state != ParsingState::Finished
-                    {
-                        // C: xmlparse.c:3640-3645 — set epilog processor
-                        if self.parsing_state == ParsingState::Suspended
-                            || (self.parsing_state == ParsingState::Parsing && self.reenter)
-                        {
-                            self.processor = Processor::Epilog;
-                        } else {
-                            self.root_closed = true;
-                            self.processor = Processor::Epilog;
-                            if next < end {
-                                let epilog_data = data[next..end].to_vec();
-                                self.buffer = epilog_data;
-                                self.epilog_processor();
-                            }
-                            return (self.error_code, end);
+                    // C: xmlparse.c:3638 — epilog transition when tag_level reaches 0.
+                    // C checks tagLevel == 0 because it's the absolute root close.
+                    // For external entity child parsers (startTagLevel=1), the root
+                    // close brings tagLevel to 0 too, so this is universal.
+                    // Note: for entity text (via internal_entity_processor), the check
+                    // at line 3513 (start_tag_level > 0 && tag_level == start_tag_level)
+                    // returns before reaching here.
+                    if self.tag_level == 0 {
+                        self.root_closed = true;
+                        self.processor = Processor::Epilog;
+                        if next < end {
+                            let epilog_data = data[next..end].to_vec();
+                            self.buffer = epilog_data;
+                            self.epilog_processor();
                         }
+                        return (self.error_code, end);
                     }
                     // For entity/external entity content: return when tag_level
                     // returns to start level (C: no separate check, implicit)
