@@ -5313,14 +5313,70 @@ impl Parser {
         }
         self.parsing_state = ParsingState::Parsing;
 
-        // Re-process the saved data from when we suspended
+        // C: XML_ResumeParser calls callProcessor(parser, m_bufferPtr, m_parseEndPtr, &m_bufferPtr)
+        // directly — it does NOT call XML_Parse again. We match this by calling run_processor()
+        // on the existing buffer, without the setup/teardown that parse() does.
+
+        // Restore saved data to buffer for run_processor
         if !self.suspended_data.is_empty() || self.suspended_is_final {
-            let data = std::mem::take(&mut self.suspended_data);
-            let is_final = self.suspended_is_final;
+            self.buffer = std::mem::take(&mut self.suspended_data);
+            self.is_final = self.suspended_is_final;
             self.suspended_is_final = false;
-            // Clear the buffer since parse() will re-add data
-            self.buffer.clear();
-            return self.parse(&data, is_final);
+
+            // Set up parse_data for position tracking (same buffer)
+            self.parse_data = self.buffer.clone();
+            self.position_pos = 0;
+            self.event_pos = self.buffer.len();
+
+            // Run the processor (which may be InternalEntity, Content, Prolog, etc.)
+            self.run_processor();
+
+            // Post-processing: update position tracking
+            {
+                let calc_end =
+                    if self.error_code != XmlError::None && self.event_pos < self.parse_data.len() {
+                        self.event_pos
+                    } else {
+                        self.parse_data.len()
+                    };
+                if self.position_pos < calc_end {
+                    let enc = xmltok::Utf8Encoding;
+                    let pos = xmltok_impl::update_position(
+                        &enc,
+                        &self.parse_data,
+                        self.position_pos,
+                        calc_end,
+                    );
+                    if pos.line_number > 0 {
+                        self.line_number += pos.line_number as u64;
+                        self.column_number = pos.column_number as u64;
+                    } else {
+                        self.column_number += pos.column_number as u64;
+                    }
+                    self.position_pos = calc_end;
+                }
+                self.event_pos = self.position_pos;
+            }
+
+            // Check for errors
+            if self.error_code != XmlError::None {
+                self.parsing_state = ParsingState::Finished;
+                return XmlStatus::Error;
+            }
+
+            // Check if suspended again
+            if self.parsing_state == ParsingState::Suspended {
+                self.suspended_data = self.buffer.clone();
+                self.suspended_is_final = self.is_final;
+                return XmlStatus::Suspended;
+            }
+
+            // If final buffer and parsing complete, mark as finished
+            if self.is_final {
+                self.parsing_state = ParsingState::Finished;
+            }
+
+            return XmlStatus::Ok;
         }
 
         XmlStatus::Ok
