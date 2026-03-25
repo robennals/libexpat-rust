@@ -910,7 +910,9 @@ impl Parser {
             }
 
             // If processor changed, re-dispatch with remaining data
-            if self.processor != prev_processor && next_pos < end {
+            // Skip re-dispatch when suspended — resume() will handle it
+            if self.processor != prev_processor && next_pos < end
+                && self.parsing_state == ParsingState::Parsing {
                 // If transitioning from Prolog and need to transcode, do it now
                 let mut transcoded_data = None;
 
@@ -2802,6 +2804,7 @@ impl Parser {
                 )
             };
 
+
             // Restore event_pos so position queries reference the outer document
             // (matches C where m_eventPtr is never modified during entity text processing)
             self.event_pos = entity_ref_event_pos;
@@ -2851,6 +2854,9 @@ impl Parser {
             {
                 pe.open = false;
             }
+        } else {
+            // GE — remove from open_entities set
+            self.open_entities.remove(&closed.entity_name);
         }
 
         // Restore processor
@@ -3131,14 +3137,15 @@ impl Parser {
                                 let saved_event_cur_data = self.event_cur_data.clone();
                                 let saved_entity_ref_context =
                                     self.entity_reference_context.clone();
+                                let saved_tag_level = self.tag_level;
 
                                 let entity_name = name.to_string();
                                 self.open_entities.insert(entity_name.clone());
                                 // Save the entity reference text for XML_GetInputContext
                                 self.entity_reference_context = Some(data[pos..next].to_vec());
                                 let entity_bytes = value.as_bytes().to_vec();
-                                let (entity_err, _) = self.do_content(
-                                    self.tag_level,
+                                let (entity_err, entity_next) = self.do_content(
+                                    saved_tag_level,
                                     &xmltok::Utf8Encoding,
                                     &entity_bytes,
                                     0,
@@ -3146,6 +3153,30 @@ impl Parser {
                                     false,
                                     true, // is_internal_entity
                                 );
+
+                                // Check for suspension during inline entity expansion
+                                if self.parsing_state == ParsingState::Suspended {
+                                    let open = OpenInternalEntity {
+                                        entity_name: entity_name.clone(),
+                                        entity_text: entity_bytes,
+                                        start_tag_level: saved_tag_level,
+                                        processed: entity_next,
+                                        is_param: false,
+                                        between_decl: false,
+                                        saved_processor: Processor::Content,
+                                        has_more: entity_next < value.len(),
+                                        entity_ref_line: self.line_number,
+                                        entity_ref_column: self.column_number,
+                                        entity_ref_event_pos: saved_event_pos,
+                                    };
+                                    self.open_internal_entities.push(open);
+                                    self.processor = Processor::InternalEntity;
+                                    self.event_cur_data = saved_event_cur_data;
+                                    self.entity_reference_context = saved_entity_ref_context;
+                                    self.event_pos = saved_event_pos;
+                                    return (XmlError::None, next);
+                                }
+
                                 self.open_entities.remove(&entity_name);
 
                                 // Restore event context to point to the entity reference, not expanded content
@@ -3171,14 +3202,15 @@ impl Parser {
                                 let saved_event_cur_data = self.event_cur_data.clone();
                                 let saved_entity_ref_context =
                                     self.entity_reference_context.clone();
+                                let saved_tag_level = self.tag_level;
 
                                 let entity_name = name.to_string();
                                 self.open_entities.insert(entity_name.clone());
                                 // Save the entity reference text for XML_GetInputContext
                                 self.entity_reference_context = Some(data[pos..next].to_vec());
                                 let entity_bytes = value.as_bytes().to_vec();
-                                let (entity_err, _) = self.do_content(
-                                    self.tag_level,
+                                let (entity_err, entity_next) = self.do_content(
+                                    saved_tag_level,
                                     &xmltok::Utf8Encoding,
                                     &entity_bytes,
                                     0,
@@ -3186,6 +3218,34 @@ impl Parser {
                                     false,
                                     true, // is_internal_entity
                                 );
+
+                                // Check if handler suspended during inline entity expansion.
+                                // If so, save entity state for resume via internalEntityProcessor.
+                                // This matches C where processEntity sets up the pipeline that
+                                // naturally supports suspend/resume through entity->processed.
+                                if self.parsing_state == ParsingState::Suspended {
+                                    let open = OpenInternalEntity {
+                                        entity_name: entity_name.clone(),
+                                        entity_text: entity_bytes,
+                                        start_tag_level: saved_tag_level,
+                                        processed: entity_next,
+                                        is_param: false,
+                                        between_decl: false,
+                                        saved_processor: Processor::Content,
+                                        has_more: entity_next < value.len(),
+                                        entity_ref_line: self.line_number,
+                                        entity_ref_column: self.column_number,
+                                        entity_ref_event_pos: saved_event_pos,
+                                    };
+                                    self.open_internal_entities.push(open);
+                                    self.processor = Processor::InternalEntity;
+                                    self.event_cur_data = saved_event_cur_data;
+                                    self.entity_reference_context = saved_entity_ref_context;
+                                    self.event_pos = saved_event_pos;
+                                    // Return next so remaining main doc data is buffered
+                                    return (XmlError::None, next);
+                                }
+
                                 self.open_entities.remove(&entity_name);
 
                                 // Restore event context to point to the entity reference, not expanded content
