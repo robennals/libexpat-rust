@@ -4234,7 +4234,12 @@ impl Parser {
                 }
                 XmlTok::ParamEntityRef => {
                     // C: storeEntityValue case XML_TOK_PARAM_ENTITY_REF (xmlparse.c:6824-6884)
-                    if self.is_param_entity {
+                    // C checks: parser->m_isParamEntity || enc != parser->m_encoding
+                    // The enc != m_encoding check detects entity expansion context
+                    // (internal entity processor uses m_internalEncoding).
+                    // In Rust, we check open_internal_entities as the equivalent.
+                    let in_entity_context = !self.open_internal_entities.is_empty();
+                    if self.is_param_entity || in_entity_context {
                         // In external subset — resolve the PE reference
                         // Extract entity name from %name; token
                         let pe_name = if value_data.len() > pos && value_data[pos] == b'%' {
@@ -4299,10 +4304,28 @@ impl Parser {
                                         self.dtd.borrow_mut().keep_processing = standalone;
                                     }
                                 } else if let Some(ref value) = pe.value {
-                                    // Internal PE — inline the value
+                                    // Internal PE — recursively process the value
                                     // C: processEntity(parser, entity, XML_FALSE, ENTITY_VALUE)
-                                    // For entity values, we can inline the text directly
-                                    result.extend_from_slice(value.as_bytes());
+                                    // Must mark entity as open during processing to detect recursion
+                                    let inner_value = value.clone();
+                                    if let Some(e) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                                        e.open = true;
+                                    }
+                                    // Recursively process the inner value to resolve nested PE refs
+                                    match self.store_entity_value(inner_value.as_bytes()) {
+                                        Ok(resolved) => {
+                                            result.extend_from_slice(resolved.as_bytes());
+                                        }
+                                        Err(e) => {
+                                            if let Some(pe) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                                                pe.open = false;
+                                            }
+                                            return Err(e);
+                                        }
+                                    }
+                                    if let Some(e) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                                        e.open = false;
+                                    }
                                 }
                             } else {
                                 // Entity not found — not a well-formedness error
