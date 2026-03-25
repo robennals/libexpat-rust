@@ -889,7 +889,13 @@ impl Parser {
                 return;
             }
 
-            // C: callProcessor reenter loop (xmlparse.c:1303-1309)
+            // C: callProcessor (xmlparse.c:1299-1307)
+            // Make parsing status (and in particular Suspended) take
+            // precedence over re-enter flag when they disagree
+            if self.parsing_state != ParsingState::Parsing {
+                self.reenter = false;
+            }
+
             // If reenter flag is set, clear it and loop to re-dispatch.
             if self.reenter {
                 self.reenter = false;
@@ -956,6 +962,18 @@ impl Parser {
             // Set event_pos for position tracking
             if error == XmlError::None {
                 self.event_pos = next_pos;
+            }
+
+            // C's callProcessor returns the processor error code, and XML_Parse
+            // only checks that return — not m_errorCode. In Rust, handlers may
+            // set self.error_code for informational purposes (e.g., SuspendPe)
+            // without causing a processor error. Clear stale handler-set errors
+            // when the processor completed successfully.
+            if error == XmlError::None
+                && self.error_code != XmlError::None
+                && self.parsing_state == ParsingState::Parsing
+            {
+                self.error_code = XmlError::None;
             }
 
             // Note: not_standalone check for external DTD subsets is done by
@@ -1477,6 +1495,18 @@ impl Parser {
                     // Update position tracking for this token
                     self.advance_pos_slice(&data[pos..next]);
 
+                    // C doProlog: check parsing state after handler calls
+                    // Matches C xmlparse.c lines 6261-6271.
+                    match self.parsing_state {
+                        ParsingState::Suspended => {
+                            return (XmlError::None, next);
+                        }
+                        ParsingState::Finished => {
+                            return (XmlError::Aborted, next);
+                        }
+                        _ => {}
+                    }
+
                     // C: if reenter flag is set (from processEntity → triggerReenter),
                     // return to let callProcessor/run_processor re-dispatch.
                     // Matches C xmlparse.c line 6268-6270.
@@ -1708,6 +1738,11 @@ impl Parser {
                 (XmlError::None, handler_called)
             }
             Role::DoctypeClose => {
+                // C issue #317: reject ]> inside entity expansion
+                // Entity content cannot close the DOCTYPE declaration
+                if !self.open_internal_entities.is_empty() {
+                    return (XmlError::InvalidToken, false);
+                }
                 // Fire start handler if not already called (DOCTYPE without internal subset)
                 let mut handler_called = false;
                 if !self.doctype_handler_called {
@@ -1850,6 +1885,8 @@ impl Parser {
             Role::ParamEntityName => {
                 // PE declaration — store name and mark as param entity
                 let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+                // C: if entity already exists (duplicate declaration), m_declEntity=NULL
+                let is_new = !self.dtd.borrow().param_entities.contains_key(&name);
                 // Create entry in param_entities (will be updated with value/system_id later)
                 self.dtd
                     .borrow_mut()
@@ -1862,7 +1899,12 @@ impl Parser {
                         is_internal: false,
                         open: false,
                     });
-                self.current_entity_name = Some(name);
+                if is_new {
+                    self.current_entity_name = Some(name);
+                } else {
+                    // Duplicate declaration — set to None (C: m_declEntity=NULL)
+                    self.current_entity_name = None;
+                }
                 self.current_is_param_entity = true;
                 (XmlError::None, self.entity_decl_handler.is_some())
             }
@@ -2164,12 +2206,11 @@ impl Parser {
                 (XmlError::None, handler_called)
             }
             Role::ContentPcdata => {
-                self.content_model_stack.push(ContentNode {
-                    content_type: ContentType::Mixed,
-                    quant: ContentQuant::None,
-                    children: Vec::new(),
-                    name: None,
-                });
+                // C: modifies existing scaffold entry's type to Mixed
+                // (does NOT push a new node — just changes the current group's type)
+                if let Some(node) = self.content_model_stack.last_mut() {
+                    node.content_type = ContentType::Mixed;
+                }
                 (XmlError::None, self.element_decl_handler.is_some())
             }
             Role::GroupOpen => {
@@ -5193,6 +5234,11 @@ impl Parser {
         }
 
         if resumable {
+            // C: cannot suspend a param entity parser (subordinate parser for DTD)
+            if self.parsing_foreign_dtd {
+                self.error_code = XmlError::SuspendPe;
+                return XmlStatus::Error;
+            }
             self.parsing_state = ParsingState::Suspended;
             XmlStatus::Suspended
         } else {
