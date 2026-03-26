@@ -4897,6 +4897,40 @@ impl Parser {
         self.event_cur_byte_count = 0;
         self.event_cur_data.clear();
 
+        // If the parser was suspended during a handler callback, update position
+        // tracking only up to the event point (not beyond), save remaining data,
+        // and return Suspended. Resume will continue position tracking from there.
+        if self.parsing_state == ParsingState::Suspended {
+            // Track position up to event_pos (where suspension occurred)
+            let suspend_end = if self.event_pos < self.parse_data.len() {
+                self.event_pos
+            } else {
+                self.parse_data.len()
+            };
+            if self.position_pos < suspend_end {
+                let enc = xmltok::Utf8Encoding;
+                let pos = xmltok_impl::update_position(
+                    &enc,
+                    &self.parse_data,
+                    self.position_pos,
+                    suspend_end,
+                );
+                if pos.line_number > 0 {
+                    self.line_number += pos.line_number as u64;
+                    self.column_number = pos.column_number as u64;
+                } else {
+                    self.column_number += pos.column_number as u64;
+                }
+                self.position_pos = suspend_end;
+            }
+            // Save the buffer for resume — the buffer still has unprocessed data
+            self.suspended_data = self.buffer.clone();
+            self.suspended_is_final = is_final;
+            // Track total byte offset (for XML_GetCurrentByteIndex)
+            self.byte_offset += data.len() as u64;
+            return XmlStatus::Suspended;
+        }
+
         // Update final position tracking from processed data.
         // After this, line_number/column_number reflect the end of processed data.
         // On error: calculate position up to event_pos (error location)
@@ -4931,14 +4965,6 @@ impl Parser {
 
         // Track total byte offset (for XML_GetCurrentByteIndex)
         self.byte_offset += data.len() as u64;
-
-        // If the parser was suspended during a handler callback, save remaining data and return Suspended
-        if self.parsing_state == ParsingState::Suspended {
-            // Save the buffer for resume — the buffer still has unprocessed data
-            self.suspended_data = self.buffer.clone();
-            self.suspended_is_final = is_final;
-            return XmlStatus::Suspended;
-        }
 
         // If an error occurred during processing, return error
         if self.error_code != XmlError::None {
