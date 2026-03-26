@@ -169,28 +169,6 @@ Excluding unreachable utilities, effective coverage of API-reachable code is app
 | `generated_comparison_tests.rs` | 109 | Generated: XML feature matrix with incremental byte-split testing |
 | `c_comparison_tests.rs` | 59 | Original: foundational status/error/handler comparison tests |
 
-## Bugs Found and Fixed
+## Note on Encoding
 
-The comparison tests discovered 8 behavioral differences (bugs in the Rust parser) which were all fixed:
-
-1. **Valueless attribute panic**: `<r a/>` caused a slice bounds panic instead of returning `InvalidToken`
-2. **Attribute value normalization**: Tab, newline, CR, CRLF in attribute values were not normalized to spaces; entity/char refs were not expanded
-3. **Reserved PI target**: `<?XML?>` (case-insensitive) was not rejected as `InvalidToken`
-4. **Multi-byte UTF-8 in DTD literals**: `scan_lit()` rejected TRAIL bytes from multi-byte characters
-5. **Multi-byte UTF-8 in comments**: `scan_comment()` had the same TRAIL byte issue
-6. **UTF-16 incremental BOM split**: Splitting a UTF-16 BOM across parse calls caused incorrect error
-7. **ATTLIST default attributes**: Default attribute values from DTD were not applied to elements
-8. **Close-paren split**: `)` at the end of a parse chunk returned `CloseParen` instead of `Partial`, breaking `)*`/`)?`/`)+` across chunks
-
-Every fix was verified by the comparison test that discovered it — the test passes only when both parsers produce identical output.
-
-## Design Decision: Transcode-to-UTF-8
-
-One deliberate architectural difference from C: the Rust parser transcodes all non-UTF-8 input (UTF-16, Latin-1) to UTF-8 before tokenizing. C libexpat tokenizes in the native encoding using encoding-specific byte-type tables.
-
-Both approaches produce identical results:
-- SAX events are identical for all XML-legal inputs (confirmed by comparison tests)
-- `XML_GetCurrentByteIndex` returns byte offsets in the **original** input encoding — for non-UTF-8 input, the parser re-scans the current chunk to convert internal UTF-8 positions back to original byte offsets (O(chunk_size) per call, no per-byte overhead during normal parsing)
-- Line and column numbers are encoding-independent and always match
-
-See [architecture.md](architecture.md) and [design-decisions.md](design-decisions.md) for the full rationale.
+The Rust parser transcodes all non-UTF-8 input to UTF-8 before tokenizing (unlike C, which tokenizes in the native encoding). This produces identical results for all inputs — see [design-decisions.md](design-decisions.md) for the rationale and [architecture.md](architecture.md) for details on byte offset handling.

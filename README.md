@@ -2,6 +2,7 @@
 
 A memory-safe, idiomatic Rust reimplementation of [libexpat](https://github.com/libexpat/libexpat) — the most widely deployed XML parser in the world.
 
+[![CI](https://github.com/robennals/libexpat-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/robennals/libexpat-rust/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust: 1.70+](https://img.shields.io/badge/rust-1.70%2B-orange.svg)]()
 
@@ -20,6 +21,8 @@ Like libexpat, it is a **streaming SAX-style XML parser**: you register callback
 - **Memory safety**: Zero `unsafe` blocks. Buffer overflows, use-after-free, and double-free bugs are structurally impossible.
 - **Behavioral compatibility**: Passes all of libexpat 2.7.5's own test suite (285/290 tests; 5 skipped test C-specific allocator APIs). Additionally verified by [463 comparison tests](docs/verification.md) that confirm identical SAX event traces across normal parsing, error handling, encodings, DTDs, namespaces, and security limits.
 - **Familiar API**: The same SAX callback model that libexpat users know, expressed in idiomatic Rust.
+- **C drop-in replacement**: The `expat-ffi` crate produces a `libexpat.so`/`.dylib`/`.dll` with the same C ABI — swap it into existing C/C++ applications without changing a line of code.
+- **Zero dependencies**: The core parser has no production dependencies.
 - **DoS protection**: Built-in billion laughs attack protection, matching libexpat's security features.
 
 ## Status
@@ -31,8 +34,9 @@ Like libexpat, it is a **streaming SAX-style XML parser**: you register callback
 | Original C test suite | 285/290 pass (5 skipped: C-specific allocator APIs) |
 | Additional comparison tests | 463 (identical XML through both C and Rust parsers) |
 | Line coverage (reachable code) | 76% |
-| Lines of Rust | ~8,500 |
+| Lines of Rust (core parser) | ~11,800 |
 | `unsafe` blocks | 0 |
+| Production dependencies | 0 |
 | Minimum Rust version | 1.70 |
 
 The original C test suite (`basic_tests.c`, `ns_tests.c`, `misc_tests.c`, `acc_tests.c` — 290 tests) is compiled and linked against the Rust parser's C-compatible FFI layer, verifying not just parse status but handler callback data, error positions, encoding handling, external entities, and more. The 5 skipped tests exercise C-specific custom allocator hooks (`XML_ParserCreate_MM`) which don't apply to Rust.
@@ -88,6 +92,8 @@ assert_eq!(status, XmlStatus::Ok);
 
 The parser cannot produce memory safety violations regardless of input — malformed, malicious, or otherwise.
 
+The FFI layer (`expat-ffi`) necessarily uses `unsafe` for the C ABI boundary, but all unsafety is confined there — the core parser is entirely safe Rust.
+
 ## How It Was Built
 
 This port was created using an AI-assisted methodology with rigorous automated verification:
@@ -135,6 +141,7 @@ For detailed architecture documentation, see [docs/architecture.md](docs/archite
 | Entity expansion | Yes | Partial | No | Partial |
 | libexpat compatible | Yes | No | No | No |
 | `unsafe`-free | Yes | No | Yes | No |
+| Zero dependencies | Yes | No | No | No |
 
 `expat-rust` is the right choice when you need **libexpat behavioral compatibility**, **full DTD support**, or are replacing libexpat in an existing system.
 
@@ -165,16 +172,18 @@ Benchmarks comparing `expat-rust` against C libexpat 2.7.5 (Apple M-series, `car
 
 | Scenario | expat-rust | libexpat (C) | Ratio |
 |----------|-----------|-------------|-------|
-| Small document (44 B) | 1.25 us | 2.48 us | **0.50x (Rust 2x faster)** |
-| Medium document (~10 KB) | 171 us | 79 us | 2.2x |
-| Large document (~100 KB) | 1.65 ms | 898 us | 1.8x |
-| Deep nesting (100 levels) | 7.1 us | 20.8 us | **0.34x (Rust 2.9x faster)** |
-| Many attributes (25/elem) | 35 us | 17.9 us | 2.0x |
-| Error detection | 416 ns | 986 ns | **0.42x (Rust 2.4x faster)** |
+| Small document (44 B) | 871 ns | 1.04 us | **0.84x (Rust faster)** |
+| Medium document (~10 KB) | 268 us | 80 us | 3.4x |
+| 100 KB document | 2.67 ms | 898 us | 3.0x |
+| 100 MB document | 847 ms | 282 ms | 3.0x |
+| 100 MB streamed (8 KB chunks) | 835 ms | 347 ms | 2.4x |
+| Deep nesting (100 levels) | 23.6 us | 20.7 us | 1.1x |
+| Many attributes (25/elem) | 40.4 us | 18.2 us | 2.2x |
+| Error detection | 731 ns | 998 ns | **0.73x (Rust faster)** |
 
-**Summary**: Rust is 2-3x faster on small documents, deeply nested structures, and error detection. C is ~2x faster on larger documents with many elements and attributes. The gap on larger documents is due to Rust's use of standard `String`/`Vec`/`HashMap` (with per-element allocation) versus C's pooled arena allocator. This is a deliberate trade-off: we chose memory safety and idiomatic Rust data structures over matching C's allocation performance.
+**Summary**: Rust is faster for small documents and error detection. C is 2-3x faster on larger documents with many elements and attributes. The gap is due to Rust's use of standard `String`/`Vec`/`HashMap` (with per-element allocation) versus C's pooled arena allocator. This is a deliberate trade-off: we chose memory safety and idiomatic Rust data structures over matching C's allocation performance. The ratio stays constant as document size scales — Rust processes 100 MB in under a second.
 
-For most real-world use cases, the performance difference is negligible — both parsers process typical XML documents in microseconds.
+**Memory**: Both parsers stream with O(1) memory. In chunked mode (8 KB chunks), both use ~35 KB regardless of total document size (memory does scale with nesting depth, but not with document length). See [docs/benchmarks.md](docs/benchmarks.md) for full memory analysis.
 
 Run benchmarks yourself:
 
@@ -186,9 +195,10 @@ cargo bench -p expat-rust
 
 ```
 .
-├── expat-rust/       The main Rust crate
+├── expat-rust/       The main Rust crate (zero dependencies, zero unsafe)
 ├── expat-ffi/        C-compatible FFI wrapper (produces libexpat.so/.dylib/.dll)
 ├── expat-sys/        FFI bindings to C libexpat (for comparison testing only)
+├── c-tests-runner/   Runs the original C test suite against the Rust parser
 ├── expat/            Git submodule — upstream libexpat at R_2_7_5
 ├── meta/             Porting process artifacts (tooling, plans, analysis)
 ├── docs/             Detailed documentation
