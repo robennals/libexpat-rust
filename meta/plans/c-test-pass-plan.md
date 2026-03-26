@@ -1,10 +1,10 @@
 # Plan: Pass All C Tests
 
-## Current State: 274/290 (94.5%)
+## Current State: 279/290 (96.2%)
 
-Of the 16 failing tests:
+Of the 11 failing tests:
 - **5 are Principled Skips** (custom C allocator / byte-accounting internals)
-- **11 need to be fixed** to reach full parity (ceiling: 285/290 = 98.3%)
+- **6 need to be fixed** to reach full parity (ceiling: 285/290 = 98.3%)
 
 ## Tests We Are Okay Not Passing (5)
 
@@ -20,81 +20,62 @@ These test C implementation details that have no equivalent in Rust:
 
 ## Remaining Fixable Failures (11)
 
-### Category A: Position Tracking During Entity Expansion (2 tests)
+### ~~Category A: Position Tracking~~ — FIXED (PR #16)
 
-Error detection works correctly; only the reported line/column is wrong.
+Both tests now pass via eventPP indirection pattern matching C.
 
-| Test | Status |
-|------|--------|
-| `test_misc_deny_internal_entity_closing_doctype_issue_317` | `InvalidToken` correctly returned for `]>` in PE content, but line/col wrong (expects line=6 col=0). |
-| `test_misc_async_entity_rejected` | `AsyncEntity` correctly detected for case[1], but column=5 instead of expected column=8. |
+### ~~Category B: PE Expansion in Entity Values~~ — FIXED (PR #16)
 
-**Root cause**: `internal_entity_processor` calls `do_prolog`/`do_content` on entity text. Errors report positions within the *entity text* buffer, not the outer document. C uses `m_eventPtr` relative to the document buffer.
+PE recursion detection now works via recursive `store_entity_value` with open/close tracking.
 
-**Fix**: Store the outer-document position of `%name;`/`&name;` in `OpenInternalEntity`. On error inside entity expansion, use that stored position for `event_pos`.
+### ~~Category C: Suspend/Resume in Internal GE~~ — FIXED (PR #16)
 
-### Category B: PE Expansion in Entity Values (1 test)
+GE expansion now uses `process_entity` pipeline matching C's `processEntity` at xmlparse.c:3450.
 
-| Test | What's Needed |
-|------|--------------|
-| `test_no_indirectly_recursive_entity_refs` case[2] | `&#37;` (char ref for `%`) expands to `%` during entity value storage, creating `%p2;`. When that PE is later expanded, the recursion chain `p1→p2→p1` must be detected. Requires two-pass entity value processing: first expand char refs, then re-scan for PE refs. |
+### ~~Category D: External Entity Sub-parser Edge Cases~~ — FIXED (PR #16)
 
-### Category C: Suspend/Resume in Internal GE (1 test)
+PE entity_decl_handler now fires for PE declarations matching C.
+
+### Category E: Encoding (4 tests) — remaining
 
 | Test | What's Needed |
 |------|--------------|
-| `test_suspend_resume_internal_entity` | Suspend inside GE `&foo;` (content `<suspend>Hi<suspend>Ho</suspend></suspend>`) when start element handler fires. First resume → "Hi", second → "HiHo". `do_content` detects suspension correctly, but the entity text position may not be correctly restored on resume. |
-
-### Category D: External Entity Sub-parser Edge Cases (1 test)
-
-| Test | What's Needed |
-|------|--------------|
-| `test_param_entity_with_trailing_cr` | PE declared in external subset with trailing `\r` in value. `store_entity_value` handles `TrailingCr` → `\n` correctly, but the entity declaration handler never fires for the PE. The child parser's inherited `entity_decl_handler` closure may not be wired correctly. |
-
-### Category E: Encoding (4 tests)
-
-| Test | What's Needed |
-|------|--------------|
-| `test_unknown_encoding_success` | `XML_SetUnknownEncodingHandler` callback must be invoked during encoding detection. Handler is stored but never called. |
-| `test_unknown_encoding_bad_ignore` | Same handler but inside an `IGNORE` section in conditional DTD. |
+| `test_unknown_encoding_success` | After unknown encoding handler sets custom_encoding_map, remaining buffer data needs transcoding. |
+| `test_unknown_encoding_bad_ignore` | Same encoding infrastructure. |
 | `test_utf16_pe` | PE names using Thai characters in UTF-16. Requires UTF-16 transcoding for PE name extraction. |
 | `test_invalid_character_entity_3` | Character entity in UTF-16LE context. |
 
-### Category F: Other (2 tests)
+### Category F: Other (2 tests) — remaining
 
 | Test | What's Needed |
 |------|--------------|
-| `test_bad_doctype` | Invalid bytes in DOCTYPE. May require unknown encoding handler. |
-| `test_pool_integrity_with_unfinished_attr` | Partial attribute parse state preservation across `parse()` calls. |
+| `test_bad_doctype` | Invalid bytes in DOCTYPE. Requires unknown encoding handler infrastructure. |
+| `test_pool_integrity_with_unfinished_attr` | ATTLIST with PE refs in enumeration values. |
 
-## Recommended Fix Order
+### Category G: Position Tracking (1 test) — remaining
 
-### Tier 1 — Straightforward (3 tests, ~+3 pass)
+| Test | What's Needed |
+|------|--------------|
+| `test_misc_deny_internal_entity_closing_doctype_issue_317` (suspend variant) | Position tracking across suspend/resume in PE entity expansion. |
 
-1. **Position tracking in entity expansion** (Cat A, 2 tests) — Store outer position in `OpenInternalEntity`, use on error
-2. **Suspend/resume in internal GE** (Cat C, 1 test) — Trace and fix entity text position through suspend cycle
-
-### Tier 2 — Medium (2 tests, ~+2 pass)
-
-3. **Entity decl handler in external subset** (Cat D, 1 test) — Fix handler inheritance for PEs in child parser
-4. **Indirect PE recursion** (Cat B, 1 test) — Two-pass char-ref then PE-ref expansion in entity values
+## Recommended Fix Order (remaining)
 
 ### Tier 3 — Encoding infrastructure (4 tests, ~+4 pass)
 
-5. **Unknown encoding handler** (2 tests) — Integrate callback with encoding detection
+5. **Unknown encoding handler** (2 tests) — Post-XmlDecl buffer transcoding
 6. **UTF-16 PE + char entity** (2 tests) — Transcoding in PE processing path
 
-### Tier 4 — Misc (2 tests)
+### Tier 4 — Misc (3 tests)
 
-7. **Bad doctype + pool integrity** — Investigate individually
+7. **Bad doctype** — Requires unknown encoding handler
+8. **Pool integrity** — ATTLIST PE handling
+9. **PE position tracking** (suspend variant) — Position across suspend/resume
 
 ## Expected Progress
 
 | After Tier | Tests Fixed | Cumulative | Pass Rate |
 |-----------|-------------|------------|-----------|
-| Current   | —           | 274/290    | 94.5%     |
-| Tier 1    | +3          | 277/290    | 95.5%     |
-| Tier 2    | +2          | 279/290    | 96.2%     |
+| Current   | —           | 279/290    | 96.2%     |
 | Tier 3    | +4          | 283/290    | 97.6%     |
 | Tier 4    | +2          | 285/290    | 98.3%     |
 
@@ -109,6 +90,7 @@ Maximum achievable: **285/290 (98.3%)** — remaining 5 are principled skips.
 | 2025-03-24 | 268/290 | 92.4% | Encoding improvements (PR #12) |
 | 2025-03-24 | 272/290 | 93.8% | PE handling, handler inheritance, TextDecl (PR #13) |
 | 2025-03-24 | 274/290 | 94.5% | PE edge cases: suspension, recursion detection, content model, DoctypeClose |
+| 2026-03-25 | 279/290 | 96.2% | GE processEntity pipeline, position tracking, PE entity_decl_handler, PE recursion (PR #16) |
 
 ## Fixes Applied (cumulative)
 
@@ -141,6 +123,15 @@ Maximum achievable: **285/290 (98.3%)** — remaining 5 are principled skips.
 | **Duplicate PE declaration tracking** | **Prevents false recursion on redeclarations** |
 | **DoctypeClose rejection in entity context** | **test_misc_deny_internal_entity_closing_doctype_issue_317 (partial)** |
 | **Parsing state precedence over reenter** | **Correct suspension propagation** |
+| **Position tracking: eventPP indirection** | **test_misc_async_entity_rejected** |
+| **PE entity_decl_handler** | **test_param_entity_with_trailing_cr** |
+| **PE recursion in entity context** | **test_no_indirectly_recursive_entity_refs** |
+| **GE expansion via process_entity** | **test_suspend_resume_internal_entity, test_misc_sync_entity_tolerated** |
+| **Reenter check in do_content (C:3784)** | **Enables process_entity for GE** |
+| **entity_idx fix for nested entities** | **Prevents stack corruption** |
+| **Epilog tag_level==0 (C:3638)** | **Correct epilog transition** |
+| **Event tracking for entity text** | **test_misc_expected_event_ptr_issue_980, test_default_current** |
+| **UnclosedToken skip for child parsers** | **test_ext_entity_good_cdata + 2 more** |
 
 ## Subsystems Already Complete
 
