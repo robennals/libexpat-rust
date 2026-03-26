@@ -75,28 +75,28 @@ fn utf8_is_in_class_3(data: &[u8], pos: usize, pages: &[u8]) -> bool {
 /// Matches C's utf8_isNmstrt2 / UTF8_GET_NAMING2(nmstrtPages, byte).
 #[inline]
 fn utf8_is_nmstrt2(data: &[u8], pos: usize) -> bool {
-    utf8_is_in_class_2(data, pos, &NMSTRT_PAGES)
+    utf8_is_in_class_2(data, pos, NMSTRT_PAGES)
 }
 
 /// Check if a 3-byte UTF-8 sequence is a name-start character.
 /// Matches C's utf8_isNmstrt3 / UTF8_GET_NAMING3(nmstrtPages, byte).
 #[inline]
 fn utf8_is_nmstrt3(data: &[u8], pos: usize) -> bool {
-    utf8_is_in_class_3(data, pos, &NMSTRT_PAGES)
+    utf8_is_in_class_3(data, pos, NMSTRT_PAGES)
 }
 
 /// Check if a 2-byte UTF-8 sequence is a name character (not necessarily name-start).
 /// Matches C's utf8_isName2 / UTF8_GET_NAMING2(namePages, byte).
 #[inline]
 fn utf8_is_name2(data: &[u8], pos: usize) -> bool {
-    utf8_is_in_class_2(data, pos, &NAME_PAGES)
+    utf8_is_in_class_2(data, pos, NAME_PAGES)
 }
 
 /// Check if a 3-byte UTF-8 sequence is a name character (not necessarily name-start).
 /// Matches C's utf8_isName3 / UTF8_GET_NAMING3(namePages, byte).
 #[inline]
 fn utf8_is_name3(data: &[u8], pos: usize) -> bool {
-    utf8_is_in_class_3(data, pos, &NAME_PAGES)
+    utf8_is_in_class_3(data, pos, NAME_PAGES)
 }
 
 /// Check if a multi-byte UTF-8 sequence has valid continuation bytes.
