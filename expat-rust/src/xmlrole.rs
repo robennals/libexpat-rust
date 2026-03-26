@@ -5,7 +5,10 @@
 //! tokens from [`xmltok_impl`](crate::xmltok_impl) into [`xml_token_role`],
 //! which advances a state machine and returns the role for each token.
 
-// Return codes for token roles
+/// Semantic role assigned to each token in the XML prolog/DTD.
+/// Returned by [`xml_token_role`] to tell the parser what a token means
+/// in context (e.g., a name token might be a doctype name, entity name,
+/// or attribute name depending on where it appears).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Error = -1,
@@ -72,7 +75,8 @@ pub enum Role {
     ParamEntityRef,
 }
 
-// Token types processed by the state machine
+/// Lexical token types fed into the role state machine.
+/// These are produced by the tokenizer and classified into [`Role`]s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token {
     PrologS,
@@ -107,7 +111,8 @@ pub enum Token {
     ParamEntityRef,
 }
 
-// State machine states
+/// States of the prolog/DTD role state machine.
+/// Each state represents a position within a DTD declaration or prolog construct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrologState {
     Prolog0,
@@ -163,6 +168,8 @@ pub enum PrologState {
     Error,
 }
 
+/// Prolog/DTD role classifier state machine.
+/// Tracks position within DTD declarations to assign semantic [`Role`]s to tokens.
 pub struct XmlRoleState {
     pub state: PrologState,
     pub level: u32,
@@ -222,6 +229,7 @@ fn common(state: &mut XmlRoleState, _tok: Token) -> Role {
     Role::Error
 }
 
+/// Advance the prolog state machine with a token and return its semantic role.
 pub fn xml_token_role(state: &mut XmlRoleState, tok: Token, _ptr: &[u8], _end: &[u8]) -> Role {
     match state.state {
         PrologState::Prolog0 => prolog0(state, tok, _ptr, _end),

@@ -132,7 +132,7 @@ The Rust port takes a different approach: it **transcodes all non-UTF-8 input to
 
 **Verified by**: 459+ comparison tests confirm identical SAX event sequences, status codes, and error codes between C and Rust parsers for UTF-8, UTF-16 (LE/BE), Latin-1, and US-ASCII inputs, including byte-by-byte incremental parsing.
 
-**Known limitation**: `XML_GetCurrentByteIndex` returns byte offsets in the **transcoded UTF-8** stream, not the original input stream. For UTF-8 input (>99% of real-world XML), this makes no difference. For UTF-16 or Latin-1 input, byte offsets will differ from C. This is documented in the FFI layer.
+**Byte offset correctness**: `XML_GetCurrentByteIndex` returns byte offsets in the **original input encoding**, not the internal UTF-8 stream. For non-UTF-8 input (UTF-16, Latin-1), the FFI layer lazily re-scans the original buffer to map transcoded UTF-8 positions back to original-encoding byte offsets. This produces identical results to C libexpat for all encodings.
 
 ## Error Handling
 

@@ -2,6 +2,7 @@
 
 A memory-safe, idiomatic Rust reimplementation of [libexpat](https://github.com/libexpat/libexpat) — the most widely deployed XML parser in the world.
 
+[![CI](https://github.com/robennals/libexpat-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/robennals/libexpat-rust/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust: 1.70+](https://img.shields.io/badge/rust-1.70%2B-orange.svg)]()
 
@@ -20,6 +21,8 @@ Like libexpat, it is a **streaming SAX-style XML parser**: you register callback
 - **Memory safety**: Zero `unsafe` blocks. Buffer overflows, use-after-free, and double-free bugs are structurally impossible.
 - **Behavioral compatibility**: Passes all of libexpat 2.7.5's own test suite (285/290 tests; 5 skipped test C-specific allocator APIs). Additionally verified by [463 comparison tests](docs/verification.md) that confirm identical SAX event traces across normal parsing, error handling, encodings, DTDs, namespaces, and security limits.
 - **Familiar API**: The same SAX callback model that libexpat users know, expressed in idiomatic Rust.
+- **C drop-in replacement**: The `expat-ffi` crate produces a `libexpat.so`/`.dylib`/`.dll` with the same C ABI — swap it into existing C/C++ applications without changing a line of code.
+- **Zero dependencies**: The core parser has no production dependencies.
 - **DoS protection**: Built-in billion laughs attack protection, matching libexpat's security features.
 
 ## Status
@@ -31,8 +34,9 @@ Like libexpat, it is a **streaming SAX-style XML parser**: you register callback
 | Original C test suite | 285/290 pass (5 skipped: C-specific allocator APIs) |
 | Additional comparison tests | 463 (identical XML through both C and Rust parsers) |
 | Line coverage (reachable code) | 76% |
-| Lines of Rust | ~8,500 |
+| Lines of Rust (core parser) | ~11,800 |
 | `unsafe` blocks | 0 |
+| Production dependencies | 0 |
 | Minimum Rust version | 1.70 |
 
 The original C test suite (`basic_tests.c`, `ns_tests.c`, `misc_tests.c`, `acc_tests.c` — 290 tests) is compiled and linked against the Rust parser's C-compatible FFI layer, verifying not just parse status but handler callback data, error positions, encoding handling, external entities, and more. The 5 skipped tests exercise C-specific custom allocator hooks (`XML_ParserCreate_MM`) which don't apply to Rust.
@@ -88,6 +92,8 @@ assert_eq!(status, XmlStatus::Ok);
 
 The parser cannot produce memory safety violations regardless of input — malformed, malicious, or otherwise.
 
+The FFI layer (`expat-ffi`) necessarily uses `unsafe` for the C ABI boundary, but all unsafety is confined there — the core parser is entirely safe Rust.
+
 ## How It Was Built
 
 This port was created using an AI-assisted methodology with rigorous automated verification:
@@ -135,6 +141,7 @@ For detailed architecture documentation, see [docs/architecture.md](docs/archite
 | Entity expansion | Yes | Partial | No | Partial |
 | libexpat compatible | Yes | No | No | No |
 | `unsafe`-free | Yes | No | Yes | No |
+| Zero dependencies | Yes | No | No | No |
 
 `expat-rust` is the right choice when you need **libexpat behavioral compatibility**, **full DTD support**, or are replacing libexpat in an existing system.
 
@@ -186,9 +193,10 @@ cargo bench -p expat-rust
 
 ```
 .
-├── expat-rust/       The main Rust crate
+├── expat-rust/       The main Rust crate (zero dependencies, zero unsafe)
 ├── expat-ffi/        C-compatible FFI wrapper (produces libexpat.so/.dylib/.dll)
 ├── expat-sys/        FFI bindings to C libexpat (for comparison testing only)
+├── c-tests-runner/   Runs the original C test suite against the Rust parser
 ├── expat/            Git submodule — upstream libexpat at R_2_7_5
 ├── meta/             Porting process artifacts (tooling, plans, analysis)
 ├── docs/             Detailed documentation
