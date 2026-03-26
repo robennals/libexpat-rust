@@ -476,7 +476,7 @@ fn check_pi_target<E: Encoding>(enc: &E, data: &[u8], pos: usize, end: usize) ->
     }
 }
 
-/// Check if byte type is valid for name continuation
+/// Check if byte type is valid for name continuation (single-byte only)
 fn is_name_char(bt: ByteType) -> bool {
     matches!(
         bt,
@@ -489,9 +489,40 @@ fn is_name_char(bt: ByteType) -> bool {
     )
 }
 
-/// Check if byte type is valid for name start
+/// Check if byte type is valid for name start (single-byte only)
 fn is_nmstrt_char(bt: ByteType) -> bool {
     matches!(bt, ByteType::NMSTRT | ByteType::HEX)
+}
+
+/// Check if a multi-byte UTF-8 sequence at pos is a valid XML name-start character.
+/// Uses the existing infrastructure from the top of the file.
+/// Returns the number of bytes consumed if valid, or 0 if invalid/incomplete.
+fn check_nmstrt_utf8(data: &[u8], pos: usize, end: usize) -> usize {
+    let bt = if pos < data.len() && data[pos] >= 0x80 {
+        crate::char_tables::UTF8_BYTE_TYPES[(data[pos] & 0x7f) as usize]
+    } else {
+        return 0;
+    };
+    let n = lead_byte_len(bt);
+    match check_lead_nmstrt(data, pos, end, n) {
+        Ok(true) => n,
+        _ => 0,
+    }
+}
+
+/// Check if a multi-byte UTF-8 sequence at pos is a valid XML name character.
+/// Returns the number of bytes consumed if valid, or 0 if invalid/incomplete.
+fn check_name_utf8(data: &[u8], pos: usize, end: usize) -> usize {
+    let bt = if pos < data.len() && data[pos] >= 0x80 {
+        crate::char_tables::UTF8_BYTE_TYPES[(data[pos] & 0x7f) as usize]
+    } else {
+        return 0;
+    };
+    let n = lead_byte_len(bt);
+    match check_lead_name(data, pos, end, n) {
+        Ok(true) => n,
+        _ => 0,
+    }
 }
 
 /// Scan a PI starting after "<?"
@@ -1096,6 +1127,13 @@ pub fn scan_ref<E: Encoding>(
         _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
             pos += enc.min_bytes_per_char();
         }
+        ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4 => {
+            let n = check_nmstrt_utf8(data, pos, end);
+            if n == 0 {
+                return Err(pos);
+            }
+            pos += n;
+        }
         _ => {
             return Err(pos);
         }
@@ -1111,6 +1149,13 @@ pub fn scan_ref<E: Encoding>(
             }
             _ if is_name_char(enc.byte_type(data, pos)) => {
                 pos += enc.min_bytes_per_char();
+            }
+            ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4 => {
+                let n = check_name_utf8(data, pos, end);
+                if n == 0 {
+                    return Err(pos);
+                }
+                pos += n;
             }
             _ => {
                 return Err(pos);
@@ -2227,21 +2272,26 @@ pub fn prolog_tok<E: Encoding>(
         }
     }
 
-    // Skip whitespace/parse name
-    let start_pos = pos;
-    // Determine if the first character was a name-start character
-    let first_bt = enc.byte_type(data, start_pos - minbpc);
-    let is_name = if matches!(first_bt, ByteType::NMSTRT | ByteType::HEX) {
-        true
-    } else if matches!(
-        first_bt,
-        ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4
-    ) {
-        // For multi-byte chars, re-check the first character position
-        let first_pos = start_pos - lead_byte_len(first_bt);
-        check_lead_nmstrt(data, first_pos, end, lead_byte_len(first_bt)).unwrap_or(false)
-    } else {
-        false
+    // Determine if the first character was a name-start character.
+    // For multi-byte UTF-8 sequences, we need to find the lead byte, not just
+    // look back by minbpc (which is 1 for UTF-8 but the char may be 2-3 bytes).
+    let is_name = {
+        // Walk back to find the lead byte of the first character
+        let mut first_pos = pos - 1;
+        while first_pos > 0 && (data[first_pos] & 0xC0) == 0x80 {
+            first_pos -= 1;
+        }
+        let first_bt = enc.byte_type(data, first_pos);
+        if matches!(first_bt, ByteType::NMSTRT | ByteType::HEX) {
+            true
+        } else if matches!(
+            first_bt,
+            ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4
+        ) {
+            check_lead_nmstrt(data, first_pos, end, lead_byte_len(first_bt)).unwrap_or(false)
+        } else {
+            false
+        }
     };
 
     while enc.has_char(data, pos, end) {

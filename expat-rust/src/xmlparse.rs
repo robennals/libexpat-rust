@@ -398,6 +398,8 @@ pub struct Parser {
     utf16_pending_byte: Option<u8>,
     /// Pending bytes for custom encoding multi-byte sequences split across parse() calls
     custom_encoding_pending: Vec<u8>,
+    /// Flag: unknown encoding handler just succeeded in prolog — remaining data needs transcoding
+    encoding_needs_transcode: bool,
     /// Buffer for partial encoding detection (BOM bytes received across calls)
     encoding_detection_buf: Vec<u8>,
     /// Current ATTLIST element name being processed
@@ -552,6 +554,7 @@ impl Parser {
             event_cur_data: Vec::new(),
             utf16_pending_byte: None,
             custom_encoding_pending: Vec::new(),
+            encoding_needs_transcode: false,
             encoding_detection_buf: Vec::new(),
             current_attlist_element: None,
             current_attlist_attr: None,
@@ -667,6 +670,7 @@ impl Parser {
             event_cur_data: Vec::new(),
             utf16_pending_byte: None,
             custom_encoding_pending: Vec::new(),
+            encoding_needs_transcode: false,
             encoding_detection_buf: Vec::new(),
             current_attlist_element: None,
             current_attlist_attr: None,
@@ -820,7 +824,7 @@ impl Parser {
     /// Run the current processor on the buffered data
     fn run_processor(&mut self) {
         // Take buffer once — matches C where parse() passes data to the processor
-        let data = std::mem::take(&mut self.buffer);
+        let mut data = std::mem::take(&mut self.buffer);
         if data.is_empty() {
             if !self.is_final {
                 return; // Non-final empty buffer — nothing to process
@@ -849,7 +853,7 @@ impl Parser {
 
         // Dispatch to processor — may loop if processor transitions
         let mut start = 0usize;
-        let end = data.len();
+        let mut end = data.len();
         loop {
             let prev_processor = self.processor;
             let (error, next_pos) = match self.processor {
@@ -908,6 +912,29 @@ impl Parser {
                 start = next_pos;
                 continue;
             }
+
+            // If the prolog tokenizer hit custom-encoded bytes that aren't
+            // valid UTF-8, transcode the remaining data and re-dispatch.
+            // This handles the case where the XML declaration specified a
+            // custom encoding and subsequent data contains non-UTF-8 bytes.
+            if self.encoding_needs_transcode && next_pos < end {
+                self.encoding_needs_transcode = false;
+                let remaining = &data[next_pos..end];
+                match self.transcode_custom_encoding(remaining) {
+                    Ok(transcoded) => {
+                        // Replace data with transcoded version and continue the loop
+                        data = transcoded;
+                        start = 0;
+                        end = data.len();
+                        continue;
+                    }
+                    Err(err) => {
+                        self.error_code = err;
+                        return;
+                    }
+                }
+            }
+            self.encoding_needs_transcode = false;
 
             // If processor changed, re-dispatch with remaining data
             // Skip re-dispatch when suspended — resume() will handle it
@@ -1393,6 +1420,13 @@ impl Parser {
                         }
                         // Final buffer with partial char → PartialChar error (C: XML_ERROR_PARTIAL_CHAR)
                         return (XmlError::PartialChar, pos);
+                    }
+                    // If a custom encoding is active, the error may be because
+                    // we're hitting custom-encoded bytes that aren't valid UTF-8.
+                    // Signal the caller to transcode remaining data and retry.
+                    if self.custom_encoding_map.is_some() && !is_internal_entity {
+                        self.encoding_needs_transcode = true;
+                        return (XmlError::None, pos);
                     }
                     return (XmlError::InvalidToken, pos);
                 }
@@ -4713,9 +4747,28 @@ impl Parser {
                         }
                     }
                 } else if !is_known_encoding(&enc_upper) {
-                    self.error_code = XmlError::UnknownEncoding;
-                    self.parsing_state = ParsingState::Finished;
-                    return XmlStatus::Error;
+                    // Unknown encoding — try the unknown encoding handler first
+                    let mut handled = false;
+                    if let Some(handler) = &mut self.unknown_encoding_handler {
+                        handled = handler(enc);
+                    }
+                    if handled {
+                        // Handler set up custom_encoding_map — transcode through it
+                        match self.transcode_custom_encoding(data) {
+                            Ok(transcoded) => {
+                                self.buffer = transcoded;
+                            }
+                            Err(err) => {
+                                self.error_code = err;
+                                self.parsing_state = ParsingState::Finished;
+                                return XmlStatus::Error;
+                            }
+                        }
+                    } else {
+                        self.error_code = XmlError::UnknownEncoding;
+                        self.parsing_state = ParsingState::Finished;
+                        return XmlStatus::Error;
+                    }
                 } else if self.protocol_encoding_set && is_latin1_encoding(Some(&enc_upper)) {
                     // Explicit Latin-1/ISO-8859-x encoding set via XML_SetEncoding —
                     // bypass BOM detection entirely. Bytes like 0xFF 0xFE are Latin-1
@@ -4844,6 +4897,40 @@ impl Parser {
         self.event_cur_byte_count = 0;
         self.event_cur_data.clear();
 
+        // If the parser was suspended during a handler callback, update position
+        // tracking only up to the event point (not beyond), save remaining data,
+        // and return Suspended. Resume will continue position tracking from there.
+        if self.parsing_state == ParsingState::Suspended {
+            // Track position up to event_pos (where suspension occurred)
+            let suspend_end = if self.event_pos < self.parse_data.len() {
+                self.event_pos
+            } else {
+                self.parse_data.len()
+            };
+            if self.position_pos < suspend_end {
+                let enc = xmltok::Utf8Encoding;
+                let pos = xmltok_impl::update_position(
+                    &enc,
+                    &self.parse_data,
+                    self.position_pos,
+                    suspend_end,
+                );
+                if pos.line_number > 0 {
+                    self.line_number += pos.line_number as u64;
+                    self.column_number = pos.column_number as u64;
+                } else {
+                    self.column_number += pos.column_number as u64;
+                }
+                self.position_pos = suspend_end;
+            }
+            // Save the buffer for resume — the buffer still has unprocessed data
+            self.suspended_data = self.buffer.clone();
+            self.suspended_is_final = is_final;
+            // Track total byte offset (for XML_GetCurrentByteIndex)
+            self.byte_offset += data.len() as u64;
+            return XmlStatus::Suspended;
+        }
+
         // Update final position tracking from processed data.
         // After this, line_number/column_number reflect the end of processed data.
         // On error: calculate position up to event_pos (error location)
@@ -4878,14 +4965,6 @@ impl Parser {
 
         // Track total byte offset (for XML_GetCurrentByteIndex)
         self.byte_offset += data.len() as u64;
-
-        // If the parser was suspended during a handler callback, save remaining data and return Suspended
-        if self.parsing_state == ParsingState::Suspended {
-            // Save the buffer for resume — the buffer still has unprocessed data
-            self.suspended_data = self.buffer.clone();
-            self.suspended_is_final = is_final;
-            return XmlStatus::Suspended;
-        }
 
         // If an error occurred during processing, return error
         if self.error_code != XmlError::None {
