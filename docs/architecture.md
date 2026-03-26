@@ -130,7 +130,7 @@ The Rust port takes a different approach: it **transcodes all non-UTF-8 input to
 - **Simplicity**: One tokenizer code path instead of four (UTF-8, Latin-1, ASCII, UTF-16). In C, `xmltok_impl.c` is `#include`d three times with different macros — this complexity is eliminated.
 - **Correctness**: The XML spec defines the same abstract character model regardless of encoding. Lossless transcoding produces identical tokens for all XML-legal inputs.
 
-**Verified by**: 459+ comparison tests confirm identical SAX event sequences, status codes, and error codes between C and Rust parsers for UTF-8, UTF-16 (LE/BE), Latin-1, and US-ASCII inputs, including byte-by-byte incremental parsing.
+**Verified by**: 463 comparison tests confirm identical SAX event sequences, status codes, and error codes between C and Rust parsers for UTF-8, UTF-16 (LE/BE), Latin-1, and US-ASCII inputs, including byte-by-byte incremental parsing.
 
 **Byte offset correctness**: `XML_GetCurrentByteIndex` returns byte offsets in the **original input encoding**, not the internal UTF-8 stream. For non-UTF-8 input (UTF-16, Latin-1), the FFI layer lazily re-scans the original buffer to map transcoded UTF-8 positions back to original-encoding byte offsets. This produces identical results to C libexpat for all encodings.
 

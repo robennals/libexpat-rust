@@ -25,23 +25,21 @@ Performance comparison between `expat-rust` and C libexpat 2.7.5.
 
 ## Analysis
 
-### Where Rust is faster (2-3x)
+### Where Rust is faster
 
-**Small documents and parser creation**: Rust's `Parser::new()` is lighter than C's `XML_ParserCreate()` because it doesn't need to set up a memory allocator, string pool, or hash table infrastructure. For applications that create many short-lived parsers, this is a significant advantage.
-
-**Deep nesting**: Rust's `Vec`-based element stack is more cache-friendly than C's linked-list-style structure. Push/pop operations on a contiguous vector are cheaper than pointer chasing.
+**Small documents and parser creation**: Rust's `Parser::new()` is lighter than C's `XML_ParserCreate()` because it doesn't need to set up a memory allocator, string pool, or hash table infrastructure. For applications that create many short-lived parsers, this is an advantage.
 
 **Error detection**: Rust's pattern matching and early-return paths in the tokenizer are slightly more efficient than C's switch/goto error handling.
 
-### Where C is faster (~2x)
+### Where C is faster (2-3x)
 
-**Medium and large documents**: C's `STRING_POOL` arena allocator amortizes allocation costs by allocating large blocks and carving out strings from them. Rust's `String` and `Vec` allocate individually for each element name, attribute name/value, and text chunk. For documents with thousands of elements, this adds up.
+**Element-heavy documents**: C's `STRING_POOL` arena allocator amortizes allocation costs by allocating large blocks and carving out strings from them. Rust's `String` and `Vec` allocate individually for each element name, attribute name/value, and text chunk. For documents with thousands of elements, this adds up. The ratio stays constant as documents scale from 10 KB to 100 MB.
 
 **Attribute-heavy documents**: C interns attribute names in a hash table with pool-allocated strings. Rust creates new `String` objects for each attribute, which involves allocation and copying.
 
 ### The trade-off
 
-The ~2x gap on larger documents is a deliberate design choice. Replacing C's arena allocator and interning hash table with Rust's standard library types was essential for:
+The 2-3x gap on element-heavy documents is a deliberate design choice. Replacing C's arena allocator and interning hash table with Rust's standard library types was essential for:
 
 1. **Memory safety**: Arena allocators in Rust would require `unsafe` or complex lifetime annotations
 2. **Simplicity**: Standard types are well-tested and easy to reason about

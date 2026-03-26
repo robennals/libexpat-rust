@@ -58,7 +58,7 @@ This caught many subtle bugs that behavioral tests alone would have missed — f
 
 ### Phase 4: Behavioral Verification
 
-350+ FFI comparison tests drive the correctness guarantee. Each test:
+463 FFI comparison tests drive the correctness guarantee. Each test:
 
 1. Creates both a C parser (via `expat-sys` FFI bindings) and a Rust parser
 2. Registers equivalent handlers on both
@@ -100,10 +100,11 @@ The agent prompts and tooling are preserved in [`meta/agents/`](../meta/agents/)
 | Metric | Value |
 |--------|-------|
 | C source analyzed | ~9,200 lines (`xmlparse.c`) + ~5,000 lines (tokenizer, role, support) |
-| Rust code produced | ~8,500 lines |
-| Comparison tests | 350+ |
-| Unit tests | 55 |
+| Rust code produced | ~11,800 lines |
+| Comparison tests | 463 |
+| C test suite | 286/291 pass (5 skipped: C allocator APIs) |
 | `unsafe` blocks | 0 |
+| Production dependencies | 0 |
 | Modules ported | 8 (ascii, char_tables, nametab, siphash, xmltok_impl, xmlrole, xmltok, xmlparse) |
 | Verified against | libexpat 2.7.5 (tag R_2_7_5) |
 
