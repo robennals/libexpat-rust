@@ -1,6 +1,6 @@
 # expat-rust
 
-A memory-safe, idiomatic Rust reimplementation of [libexpat](https://github.com/libexpat/libexpat) — the most widely deployed XML parser in the world.
+A memory-safe, idiomatic Rust reimplementation of [libexpat](https://github.com/libexpat/libexpat, one of the most used XML parsers.
 
 [![CI](https://github.com/robennals/libexpat-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/robennals/libexpat-rust/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
