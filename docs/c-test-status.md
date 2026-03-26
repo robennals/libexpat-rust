@@ -2,7 +2,8 @@
 
 Running the original C libexpat test suite against our Rust parser via `expat-ffi`.
 
-**Current results: 173 pass, 117 fail** of 290 tests reached (60% pass rate).
+**Current results: 279 pass, 11 fail** of 290 tests (96.2% pass rate).
+5 of the 11 failures are principled skips (C allocator/accounting internals).
 
 ## How to run
 
