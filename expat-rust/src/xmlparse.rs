@@ -3102,7 +3102,11 @@ impl Parser {
                         }
                     }
                     for (i, (name, _)) in attrs.iter().enumerate() {
-                        if type_map.get(name.as_str()).map(|t| t == "ID").unwrap_or(false) {
+                        if type_map
+                            .get(name.as_str())
+                            .map(|t| t == "ID")
+                            .unwrap_or(false)
+                        {
                             self.id_att_index = Some(i * 2);
                             break;
                         }
@@ -3308,19 +3312,18 @@ impl Parser {
             let was_triplet = self.tag_triplet_flags.pop().unwrap_or(false);
             self.tag_level = self.tag_level.saturating_sub(1);
 
-            let handler_name =
-                if was_triplet && !self.ns_triplets && self.ns_separator != '\0' {
-                    if let Some(colon_pos) = tag_name.find(':') {
-                        let prefix = &tag_name[..colon_pos];
-                        format!("{}{}{}", effective_tag_name, self.ns_separator, prefix)
-                    } else {
-                        effective_tag_name.clone()
-                    }
-                } else if !was_triplet && self.ns_triplets && self.ns_separator != '\0' {
-                    self.strip_triplet(&effective_tag_name)
+            let handler_name = if was_triplet && !self.ns_triplets && self.ns_separator != '\0' {
+                if let Some(colon_pos) = tag_name.find(':') {
+                    let prefix = &tag_name[..colon_pos];
+                    format!("{}{}{}", effective_tag_name, self.ns_separator, prefix)
                 } else {
-                    effective_tag_name
-                };
+                    effective_tag_name.clone()
+                }
+            } else if !was_triplet && self.ns_triplets && self.ns_separator != '\0' {
+                self.strip_triplet(&effective_tag_name)
+            } else {
+                effective_tag_name
+            };
 
             if let Some(handler) = &mut self.handlers.end_element {
                 handler(&handler_name);
@@ -3973,8 +3976,7 @@ impl Parser {
         let mut attr_buf = std::mem::take(&mut self.attr_buf);
         let dtd = self.dtd.borrow();
         for (i, attr) in atts.iter().enumerate() {
-            let name_str = std::str::from_utf8(&data[attr.name..attr.name_end])
-                .unwrap_or("");
+            let name_str = std::str::from_utf8(&data[attr.name..attr.name_end]).unwrap_or("");
             let raw_value = &data[attr.value_ptr..attr.value_end];
             // Check for duplicates against already-processed attrs
             for j in 0..i {
@@ -3988,7 +3990,11 @@ impl Parser {
                 // Reuse existing String capacity
                 attr_buf[i].0.clear();
                 attr_buf[i].0.push_str(name_str);
-                Self::normalize_attribute_value_into(raw_value, &dtd.internal_entities, &mut attr_buf[i].1);
+                Self::normalize_attribute_value_into(
+                    raw_value,
+                    &dtd.internal_entities,
+                    &mut attr_buf[i].1,
+                );
             } else {
                 let value = Self::normalize_attribute_value(raw_value, &dtd.internal_entities);
                 attr_buf.push((name_str.to_string(), value));
@@ -4066,7 +4072,10 @@ impl Parser {
         entities: &std::collections::HashMap<String, String>,
     ) -> String {
         // Fast path: if no special characters, just return as-is (avoids allocation)
-        if !raw.iter().any(|&b| b == b'&' || b == b'\r' || b == b'\n' || b == b'\t') {
+        if !raw
+            .iter()
+            .any(|&b| b == b'&' || b == b'\r' || b == b'\n' || b == b'\t')
+        {
             return std::str::from_utf8(raw).unwrap_or_default().to_string();
         }
         let mut result = Vec::with_capacity(raw.len());
@@ -4167,7 +4176,10 @@ impl Parser {
     ) {
         out.clear();
         // Fast path: if no special characters, just copy as-is
-        if !raw.iter().any(|&b| b == b'&' || b == b'\r' || b == b'\n' || b == b'\t') {
+        if !raw
+            .iter()
+            .any(|&b| b == b'&' || b == b'\r' || b == b'\n' || b == b'\t')
+        {
             if let Ok(s) = std::str::from_utf8(raw) {
                 out.push_str(s);
             }
