@@ -29,3 +29,20 @@ __pycache__/
 expat/build/
 expat-ffi/examples/basic_parse
 expat-ffi/tests/test_ffi
+
+# Parameter entity test binaries (compiled from .c files)
+test_c_libexpat
+test_c_libexpat_c
+test_debug
+test_debug_c
+test_foreign_dtd
+test_foreign_dtd_c
+test_foreign_dtd_debug
+test_foreign_dtd_debug_c
+test_invalid_dtd
+test_invalid_dtd_c
+test_invalid_dtd2
+test_invalid_dtd2_c
+test_trace
+test_trace.c
+test_trace_c
