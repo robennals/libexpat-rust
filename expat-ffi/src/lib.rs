@@ -1,3 +1,17 @@
+// C-compatible FFI layer implementing the libexpat API.
+//
+// API surface derived from expat's xmlparse.c:
+//   Copyright (c) 1997-2000 Thai Open Source Software Center Ltd
+//   Copyright (c) 2000      Clark Cooper <coopercc@users.sourceforge.net>
+//   Copyright (c) 2000-2006 Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
+//   Copyright (c) 2016-2026 Sebastian Pipping <sebastian@pipping.org>
+//   (and other contributors — see expat-rust/src/xmlparse.rs for full list)
+//
+// Rust FFI implementation:
+//   Copyright (c) 2026 Rob Ennals <rob@ennals.org>
+//
+// Licensed under the MIT license (see LICENSE file).
+
 //! C-compatible FFI layer for expat-rust.
 //!
 //! This crate exposes the Rust XML parser through the same C API as libexpat,
