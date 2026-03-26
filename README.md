@@ -102,7 +102,7 @@ This port was created using an AI-assisted methodology with rigorous automated v
 
 2. **Bottom-up porting**: Starting from leaf modules (ASCII tables, character classification, SipHash) and working up through the tokenizer, role state machine, and finally the main parser — ensuring each layer was solid before building on it.
 
-3. **Structural verification**: A custom AST comparison tool verified that each Rust function structurally matched its C counterpart — same switch/match arms, same error paths, same handler calls.
+3. **Structural verification**: An [AST-based structural validator](validator/) compares each Rust function to its C counterpart using tree-sitter — same switch/match arms, same error codes, same handler calls, same function calls. Every tolerated difference has a written justification in [`validator/deliberate-divergences.json`](validator/deliberate-divergences.json). Security-critical features (amplification attack detection, entity tracking) are protected from accidental suppression. This runs in CI.
 
 4. **Original test suite**: The 290 tests from libexpat's own C test suite (`basic_tests.c`, `ns_tests.c`, `misc_tests.c`, `acc_tests.c`) are compiled and linked against the Rust parser's C FFI layer — 285 pass, with 5 skipped for testing C-specific allocator APIs.
 
@@ -200,6 +200,7 @@ cargo bench -p expat-rust
 ├── expat-sys/        FFI bindings to C libexpat (for comparison testing only)
 ├── c-tests-runner/   Runs the original C test suite against the Rust parser
 ├── expat/            Git submodule — upstream libexpat at R_2_7_5
+├── validator/        AST structural validator (C-vs-Rust comparison, CI enforced)
 ├── meta/             Porting process artifacts (tooling, plans, analysis)
 ├── docs/             Detailed documentation
 └── Cargo.toml        Workspace root

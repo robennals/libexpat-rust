@@ -99,6 +99,24 @@ jobs:
       - run: cargo install cargo-audit --locked
       - run: cargo audit
 
+  ast-validator:
+    name: AST Structural Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install tree-sitter dependencies
+        run: pip install tree-sitter tree-sitter-c tree-sitter-rust
+      - name: Run AST structural comparison (C vs Rust)
+        run: python3 validator/ast-compare.py --ci
+      - name: Show suppression audit
+        if: always()
+        run: python3 validator/ast-compare.py --audit
+
   msrv:
     name: MSRV (1.70)
     runs-on: ubuntu-latest
