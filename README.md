@@ -172,16 +172,18 @@ Benchmarks comparing `expat-rust` against C libexpat 2.7.5 (Apple M-series, `car
 
 | Scenario | expat-rust | libexpat (C) | Ratio |
 |----------|-----------|-------------|-------|
-| Small document (44 B) | 1.25 us | 2.48 us | **0.50x (Rust 2x faster)** |
-| Medium document (~10 KB) | 171 us | 79 us | 2.2x |
-| Large document (~100 KB) | 1.65 ms | 898 us | 1.8x |
-| Deep nesting (100 levels) | 7.1 us | 20.8 us | **0.34x (Rust 2.9x faster)** |
-| Many attributes (25/elem) | 35 us | 17.9 us | 2.0x |
-| Error detection | 416 ns | 986 ns | **0.42x (Rust 2.4x faster)** |
+| Small document (44 B) | 871 ns | 1.04 us | **0.84x (Rust faster)** |
+| Medium document (~10 KB) | 268 us | 80 us | 3.4x |
+| 100 KB document | 2.67 ms | 898 us | 3.0x |
+| 100 MB document | 847 ms | 282 ms | 3.0x |
+| 100 MB streamed (8 KB chunks) | 835 ms | 347 ms | 2.4x |
+| Deep nesting (100 levels) | 23.6 us | 20.7 us | 1.1x |
+| Many attributes (25/elem) | 40.4 us | 18.2 us | 2.2x |
+| Error detection | 731 ns | 998 ns | **0.73x (Rust faster)** |
 
-**Summary**: Rust is 2-3x faster on small documents, deeply nested structures, and error detection. C is ~2x faster on larger documents with many elements and attributes. The gap on larger documents is due to Rust's use of standard `String`/`Vec`/`HashMap` (with per-element allocation) versus C's pooled arena allocator. This is a deliberate trade-off: we chose memory safety and idiomatic Rust data structures over matching C's allocation performance.
+**Summary**: Rust is faster for small documents and error detection. C is 2-3x faster on larger documents with many elements and attributes. The gap is due to Rust's use of standard `String`/`Vec`/`HashMap` (with per-element allocation) versus C's pooled arena allocator. This is a deliberate trade-off: we chose memory safety and idiomatic Rust data structures over matching C's allocation performance. The ratio stays constant as document size scales — Rust processes 100 MB in under a second.
 
-For most real-world use cases, the performance difference is negligible — both parsers process typical XML documents in microseconds.
+**Memory**: Both parsers stream with O(1) memory. In chunked mode (8 KB chunks), both use ~35 KB regardless of total document size (memory does scale with nesting depth, but not with document length). See [docs/benchmarks.md](docs/benchmarks.md) for full memory analysis.
 
 Run benchmarks yourself:
 

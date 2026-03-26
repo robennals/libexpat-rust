@@ -14,12 +14,14 @@ Performance comparison between `expat-rust` and C libexpat 2.7.5.
 
 | Scenario | expat-rust | libexpat (C) | Ratio | Notes |
 |----------|-----------|-------------|-------|-------|
-| Small document (44 B) | 1.25 us | 2.48 us | **0.50x** | Rust wins — lower per-parser overhead |
-| Medium document (~10 KB) | 171 us | 79 us | 2.16x | C wins — arena allocator advantage |
-| Large document (~100 KB) | 1.65 ms | 898 us | 1.84x | C wins — consistent with medium |
-| Deep nesting (100 levels) | 7.13 us | 20.8 us | **0.34x** | Rust wins — efficient stack/Vec handling |
-| Many attributes (25/elem) | 35.1 us | 17.9 us | 1.96x | C wins — interned strings vs String clones |
-| Error detection (malformed) | 416 ns | 986 ns | **0.42x** | Rust wins — fast early-exit paths |
+| Small document (44 B) | 871 ns | 1.04 us | **0.84x** | Rust wins — lower per-parser overhead |
+| Medium document (~10 KB) | 268 us | 80 us | 3.4x | C wins — arena allocator advantage |
+| 100 KB document | 2.67 ms | 898 us | 3.0x | C wins — consistent with medium |
+| 100 MB document | 847 ms | 282 ms | 3.0x | Scales linearly — ratio stays constant |
+| 100 MB streamed (8 KB chunks) | 835 ms | 347 ms | 2.4x | Realistic streaming workload |
+| Deep nesting (100 levels) | 23.6 us | 20.7 us | 1.1x | Near-parity |
+| Many attributes (25/elem) | 40.4 us | 18.2 us | 2.2x | C wins — interned strings vs String clones |
+| Error detection (malformed) | 731 ns | 998 ns | **0.73x** | Rust wins — fast early-exit paths |
 
 ## Analysis
 
@@ -45,7 +47,7 @@ The ~2x gap on larger documents is a deliberate design choice. Replacing C's are
 2. **Simplicity**: Standard types are well-tested and easy to reason about
 3. **Correctness**: Simpler code means fewer bugs
 
-For most real-world applications, even the "slower" Rust path processes 100KB of XML in 1.6ms — well under any perceptible threshold.
+For most real-world applications, even the "slower" Rust path processes 100 MB of XML in under a second. The ratio stays constant as document size scales — there are no algorithmic surprises at large inputs.
 
 ### Future optimization opportunities
 
@@ -78,7 +80,7 @@ expat is a streaming parser — it's designed to parse arbitrarily large inputs 
 | 50 MB (750K elements) | **35 KB** | 31 KB | 1.15x |
 | 200 MB (3M elements) | **35 KB** | 31 KB | 1.15x |
 
-**Both parsers use ~35 KB regardless of whether they parse 10 MB or 200 MB.** Memory is bounded by chunk size and parser state depth, not by total bytes parsed. Rust is within 15% of C in streaming mode.
+**Both parsers use ~35 KB regardless of whether they parse 10 MB or 200 MB.** Memory is bounded by chunk size and parser state (including nesting depth), not by total bytes parsed. For flat or shallowly-nested documents, memory stays constant. Deeply nested structures will increase stack memory proportionally to depth. Rust is within 15% of C in streaming mode.
 
 ### One-shot parsing (entire document in memory)
 
@@ -112,7 +114,7 @@ Both parsers achieve O(1) memory with respect to document size when streaming.
 
 ### Analysis
 
-**Streaming mode (the common case)**: When parsing in chunks — the way expat is designed to be used — Rust and C are nearly identical. Both use ~35 KB regardless of input size. The 15% overhead comes from Rust's `Vec` and `String` metadata for the small amount of in-flight parser state.
+**Streaming mode (the common case)**: When parsing in chunks — the way expat is designed to be used — Rust and C are nearly identical. Both use ~35 KB regardless of total document size for flat/shallow documents. Memory does scale with nesting depth (each open element adds to the stack), but not with document length. The 15% overhead comes from Rust's `Vec` and `String` metadata for the small amount of in-flight parser state.
 
 **One-shot mode**: When the entire document is passed at once, Rust uses 2-3x more memory than C. This is because:
 - C's `STRING_POOL` arena allocator has zero per-allocation overhead
