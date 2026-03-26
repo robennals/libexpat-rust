@@ -355,10 +355,8 @@ pub struct Parser {
     /// If true, conflicts with XML declaration encoding are ignored
     protocol_encoding_set: bool,
     /// Enable namespace processing
-    #[allow(dead_code)]
     ns_enabled: bool,
     /// Namespace separator character
-    #[allow(dead_code)]
     ns_separator: char,
     /// Element nesting depth
     tag_level: u32,
@@ -1190,80 +1188,6 @@ impl Parser {
         self.do_prolog(&enc, data, s, end, have_more, false)
     }
 
-    /// Initial prolog processor — detects encoding and transitions to prolog processor
-    #[allow(dead_code)]
-    fn prolog_init_processor(&mut self) {
-        // For now, skip encoding detection and go straight to prolog
-        // In a full implementation, this would call initializeEncoding()
-        self.processor = Processor::Prolog;
-        self.prolog_processor();
-    }
-
-    /// External entity init processor — port of C externalEntityInitProcessor3.
-    /// Uses content tokenizer to detect text declaration. On text decl, processes it
-    /// via prolog. On any other token, sets tag_level=1 and delegates to content.
-    /// On Partial/None, buffers and waits for more data.
-    #[allow(dead_code)]
-    fn external_entity_init_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            return;
-        }
-
-        let enc = xmltok::Utf8Encoding;
-        let tok_result = xmltok_impl::content_tok(&enc, &data, 0, data.len());
-
-        match tok_result {
-            Ok(TokenResult { token, next_pos }) => match token {
-                XmlTok::XmlDecl => {
-                    // Text declaration found — process via prolog then content
-                    // C: processXmlDecl(parser, 1, start, next)
-                    // Use prolog processor to handle the text declaration
-                    self.processor = Processor::Prolog;
-                    self.buffer = data;
-                    self.prolog_processor();
-                }
-                XmlTok::Partial | XmlTok::PartialChar => {
-                    if !self.is_final {
-                        // Need more data — stay in init processor
-                        self.buffer = data;
-                    } else {
-                        self.error_code = if token == XmlTok::Partial {
-                            XmlError::UnclosedToken
-                        } else {
-                            XmlError::PartialChar
-                        };
-                    }
-                }
-                XmlTok::Bom => {
-                    // Skip BOM, stay in init processor for next token
-                    if next_pos < data.len() {
-                        self.buffer = data[next_pos..].to_vec();
-                    }
-                    // Stay in ExternalEntity processor
-                }
-                _ => {
-                    // Not a text declaration — transition to content mode
-                    // C: parser->m_processor = externalEntityContentProcessor;
-                    //    parser->m_tagLevel = 1;
-                    //    return externalEntityContentProcessor(parser, start, end, endPtr);
-                    self.processor = Processor::Content;
-                    // tag_level already set at parser creation time
-                    // Pass ALL data to content processor (it will re-tokenize from start)
-                    self.buffer = data;
-                    self.content_processor();
-                }
-            },
-            Err(_err_pos) => {
-                if !self.is_final {
-                    self.buffer = data;
-                } else {
-                    self.error_code = XmlError::InvalidToken;
-                }
-            }
-        }
-    }
-
     /// Convert XmlTok to xmlrole::Token
     fn xmltok_to_role_token(tok: XmlTok) -> xmlrole::Token {
         match tok {
@@ -1298,81 +1222,6 @@ impl Parser {
             XmlTok::CloseParenPlus => xmlrole::Token::CloseParenPlus,
             // All other tokens map to None
             _ => xmlrole::Token::None,
-        }
-    }
-
-    /// Prolog processor — corresponds to C prologProcessor()
-    /// Uses do_prolog with the tokenizer+role architecture to parse the XML prolog
-    #[allow(dead_code)]
-    fn prolog_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            if self.is_final && !self.seen_root && !self.parsing_foreign_dtd {
-                self.error_code = XmlError::NoElements;
-            }
-            // For foreign DTD parsing, check not_standalone when DTD parsing is complete
-            // even if buffer is empty (already consumed) but is_final is true
-            if self.is_final
-                && self.parsing_foreign_dtd
-                && self.dtd.borrow().has_param_entity_refs
-                && !self.dtd.borrow().standalone
-            {
-                if let Some(handler) = &mut self.not_standalone_handler {
-                    if !handler() {
-                        self.error_code = XmlError::NotStandalone;
-                    }
-                }
-            }
-            return;
-        }
-        let have_more = !self.is_final;
-        let enc = xmltok::Utf8Encoding;
-
-        let (error, next_pos) = self.do_prolog(&enc, &data, 0, data.len(), have_more, false);
-
-        if error != XmlError::None {
-            self.error_code = error;
-            return;
-        }
-
-        // If processor switched to Content, process remaining data as content
-        if self.processor == Processor::Content && next_pos < data.len() {
-            let remaining = &data[next_pos..];
-            // If Latin-1 encoding was detected, transcode remaining bytes
-            self.buffer = if is_latin1_encoding(self.detected_encoding.as_deref()) {
-                transcode_latin1_to_utf8(remaining)
-            } else {
-                remaining.to_vec()
-            };
-            self.content_processor();
-            return;
-        }
-
-        // Keep unprocessed data for next parse call
-        if next_pos < data.len() {
-            let remaining = &data[next_pos..];
-            self.buffer = if is_latin1_encoding(self.detected_encoding.as_deref()) {
-                transcode_latin1_to_utf8(remaining)
-            } else {
-                remaining.to_vec()
-            };
-        } else if self.is_final {
-            if self.processor != Processor::Content && !self.seen_root && !self.parsing_foreign_dtd
-            {
-                // All prolog data consumed, is_final, but no root element seen
-                self.error_code = XmlError::NoElements;
-            }
-            // For foreign DTD parsing, check not_standalone when DTD parsing is complete
-            if self.parsing_foreign_dtd
-                && self.dtd.borrow().has_param_entity_refs
-                && !self.dtd.borrow().standalone
-            {
-                if let Some(handler) = &mut self.not_standalone_handler {
-                    if !handler() {
-                        self.error_code = XmlError::NotStandalone;
-                    }
-                }
-            }
         }
     }
 
@@ -2632,73 +2481,6 @@ impl Parser {
     }
 
     /// CDATA section processor — resumes interrupted CDATA section parsing
-    /// Corresponds to C cdataSectionProcessor()
-    #[allow(dead_code)]
-    fn cdata_section_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            if self.is_final {
-                self.error_code = XmlError::UnclosedCdataSection;
-            }
-            return;
-        }
-        let have_more = !self.is_final;
-        let enc = xmltok::Utf8Encoding;
-
-        let (error, next_pos) = self.do_cdata_section(&enc, &data, 0, data.len(), have_more);
-
-        if error != XmlError::None {
-            self.error_code = error;
-            return;
-        }
-
-        // CDATA section completed — switch back to content processor
-        self.processor = Processor::Content;
-
-        // Process remaining data as content
-        if next_pos < data.len() {
-            self.buffer = data[next_pos..].to_vec();
-            self.content_processor();
-        } else if have_more {
-            // All data consumed, more coming
-        } else if self.is_final {
-            // Final and no more data — check if we're properly closed
-            // (The content processor will handle this)
-        }
-    }
-
-    /// Content processor — corresponds to C contentProcessor()
-    /// Uses do_content with the tokenizer for content parsing.
-    #[allow(dead_code)]
-    fn content_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            if self.is_final && !self.seen_root && self.content_start_tag_level == 0 {
-                self.error_code = XmlError::NoElements;
-            }
-            return;
-        }
-        let have_more = !self.is_final;
-        let enc = xmltok::Utf8Encoding;
-        let stl = self.content_start_tag_level;
-
-        let (error, next_pos) = self.do_content(stl, &enc, &data, 0, data.len(), have_more, false);
-
-        // Set event_pos for successful completion too (for position query after parse)
-        if error == XmlError::None {
-            self.event_pos = next_pos;
-        }
-
-        if error != XmlError::None {
-            self.error_code = error;
-        }
-
-        // Keep unprocessed data for next parse call
-        if next_pos < data.len() && error == XmlError::None {
-            self.buffer = data[next_pos..].to_vec();
-        }
-    }
-
     /// Check if the data starting from err_pos is part of a partial UTF-8 sequence
     /// This checks if err_pos points to the start of a multi-byte UTF-8 lead byte that's incomplete,
     /// or if it's part of an incomplete sequence starting earlier
