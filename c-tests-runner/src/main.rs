@@ -13,9 +13,7 @@ extern "C" {
 extern "C" {}
 
 fn main() {
-    let args: Vec<CString> = std::env::args()
-        .map(|a| CString::new(a).unwrap())
-        .collect();
+    let args: Vec<CString> = std::env::args().map(|a| CString::new(a).unwrap()).collect();
     let arg_ptrs: Vec<*const c_char> = args.iter().map(|a| a.as_ptr()).collect();
 
     let ret = unsafe { c_test_main(arg_ptrs.len() as c_int, arg_ptrs.as_ptr()) };

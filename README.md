@@ -110,7 +110,7 @@ This port was created using an AI-assisted methodology with rigorous automated v
 
 6. **C2Rust reference**: The C2Rust transpiler produced a mechanically-correct (but unsafe) Rust translation, used as a reference when C behavior was ambiguous due to preprocessor macros or implicit conversions.
 
-For the full story, see [docs/porting-process.md](docs/porting-process.md). The complete porting tooling is preserved in [`meta/`](meta/).
+For the full story, see [docs/porting-process.md](docs/porting-process.md).
 
 ## Architecture
 
@@ -200,7 +200,6 @@ cargo bench -p expat-rust
 ├── expat-sys/        FFI bindings to C libexpat (for comparison testing only)
 ├── c-tests-runner/   Runs the original C test suite against the Rust parser
 ├── expat/            Git submodule — upstream libexpat at R_2_7_5
-├── meta/             Porting process artifacts (tooling, plans, analysis)
 ├── docs/             Detailed documentation
 └── Cargo.toml        Workspace root
 ```

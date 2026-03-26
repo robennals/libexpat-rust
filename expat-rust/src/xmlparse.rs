@@ -1,3 +1,51 @@
+// Rust port of expat's xmlparse.c
+//
+// Original C code:
+//   Copyright (c) 1997-2000 Thai Open Source Software Center Ltd
+//   Copyright (c) 2000      Clark Cooper <coopercc@users.sourceforge.net>
+//   Copyright (c) 2000-2006 Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
+//   Copyright (c) 2001-2002 Greg Stein <gstein@users.sourceforge.net>
+//   Copyright (c) 2002-2016 Karl Waclawek <karl@waclawek.net>
+//   Copyright (c) 2005-2009 Steven Solie <steven@solie.ca>
+//   Copyright (c) 2016      Eric Rahm <erahm@mozilla.com>
+//   Copyright (c) 2016-2026 Sebastian Pipping <sebastian@pipping.org>
+//   Copyright (c) 2016      Gaurav <g.gupta@samsung.com>
+//   Copyright (c) 2016      Thomas Beutlich <tc@tbeu.de>
+//   Copyright (c) 2016      Gustavo Grieco <gustavo.grieco@imag.fr>
+//   Copyright (c) 2016      Pascal Cuoq <cuoq@trust-in-soft.com>
+//   Copyright (c) 2016      Ed Schouten <ed@nuxi.nl>
+//   Copyright (c) 2017-2022 Rhodri James <rhodri@wildebeest.org.uk>
+//   Copyright (c) 2017      Václav Slavík <vaclav@slavik.io>
+//   Copyright (c) 2017      Viktor Szakats <commit@vsz.me>
+//   Copyright (c) 2017      Chanho Park <chanho61.park@samsung.com>
+//   Copyright (c) 2017      Rolf Eike Beer <eike@sf-mail.de>
+//   Copyright (c) 2017      Hans Wennborg <hans@chromium.org>
+//   Copyright (c) 2018      Anton Maklakov <antmak.pub@gmail.com>
+//   Copyright (c) 2018      Benjamin Peterson <benjamin@python.org>
+//   Copyright (c) 2018      Marco Maggi <marco.maggi-ipsu@poste.it>
+//   Copyright (c) 2018      Mariusz Zaborski <oshogbo@vexillium.org>
+//   Copyright (c) 2019      David Loffredo <loffredo@steptools.com>
+//   Copyright (c) 2019-2020 Ben Wagner <bungeman@chromium.org>
+//   Copyright (c) 2019      Vadim Zeitlin <vadim@zeitlins.org>
+//   Copyright (c) 2021      Donghee Na <donghee.na@python.org>
+//   Copyright (c) 2022      Samanta Navarro <ferivoz@riseup.net>
+//   Copyright (c) 2022      Jeffrey Walton <noloader@gmail.com>
+//   Copyright (c) 2022      Jann Horn <jannh@google.com>
+//   Copyright (c) 2022      Sean McBride <sean@rogue-research.com>
+//   Copyright (c) 2023      Owain Davies <owaind@bath.edu>
+//   Copyright (c) 2023-2024 Sony Corporation / Snild Dolkow <snild@sony.com>
+//   Copyright (c) 2024-2025 Berkay Eren Ürün <berkay.ueruen@siemens.com>
+//   Copyright (c) 2024      Hanno Böck <hanno@gentoo.org>
+//   Copyright (c) 2025      Matthew Fernandez <matthew.fernandez@gmail.com>
+//   Copyright (c) 2025      Atrem Borovik <polzovatellllk@gmail.com>
+//   Copyright (c) 2025      Alfonso Gregory <gfunni234@gmail.com>
+//   Copyright (c) 2026      Rosen Penev <rosenp@gmail.com>
+//
+// Rust port:
+//   Copyright (c) 2026 Rob Ennals <rob@ennals.org>
+//
+// Licensed under the MIT license (see LICENSE file).
+
 //! Main XML parser module — the public API of expat-rust.
 //!
 //! Ported from expat's `xmlparse.c` with 1:1 function correspondence. Create a
@@ -355,10 +403,8 @@ pub struct Parser {
     /// If true, conflicts with XML declaration encoding are ignored
     protocol_encoding_set: bool,
     /// Enable namespace processing
-    #[allow(dead_code)]
     ns_enabled: bool,
     /// Namespace separator character
-    #[allow(dead_code)]
     ns_separator: char,
     /// Element nesting depth
     tag_level: u32,
@@ -1190,80 +1236,6 @@ impl Parser {
         self.do_prolog(&enc, data, s, end, have_more, false)
     }
 
-    /// Initial prolog processor — detects encoding and transitions to prolog processor
-    #[allow(dead_code)]
-    fn prolog_init_processor(&mut self) {
-        // For now, skip encoding detection and go straight to prolog
-        // In a full implementation, this would call initializeEncoding()
-        self.processor = Processor::Prolog;
-        self.prolog_processor();
-    }
-
-    /// External entity init processor — port of C externalEntityInitProcessor3.
-    /// Uses content tokenizer to detect text declaration. On text decl, processes it
-    /// via prolog. On any other token, sets tag_level=1 and delegates to content.
-    /// On Partial/None, buffers and waits for more data.
-    #[allow(dead_code)]
-    fn external_entity_init_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            return;
-        }
-
-        let enc = xmltok::Utf8Encoding;
-        let tok_result = xmltok_impl::content_tok(&enc, &data, 0, data.len());
-
-        match tok_result {
-            Ok(TokenResult { token, next_pos }) => match token {
-                XmlTok::XmlDecl => {
-                    // Text declaration found — process via prolog then content
-                    // C: processXmlDecl(parser, 1, start, next)
-                    // Use prolog processor to handle the text declaration
-                    self.processor = Processor::Prolog;
-                    self.buffer = data;
-                    self.prolog_processor();
-                }
-                XmlTok::Partial | XmlTok::PartialChar => {
-                    if !self.is_final {
-                        // Need more data — stay in init processor
-                        self.buffer = data;
-                    } else {
-                        self.error_code = if token == XmlTok::Partial {
-                            XmlError::UnclosedToken
-                        } else {
-                            XmlError::PartialChar
-                        };
-                    }
-                }
-                XmlTok::Bom => {
-                    // Skip BOM, stay in init processor for next token
-                    if next_pos < data.len() {
-                        self.buffer = data[next_pos..].to_vec();
-                    }
-                    // Stay in ExternalEntity processor
-                }
-                _ => {
-                    // Not a text declaration — transition to content mode
-                    // C: parser->m_processor = externalEntityContentProcessor;
-                    //    parser->m_tagLevel = 1;
-                    //    return externalEntityContentProcessor(parser, start, end, endPtr);
-                    self.processor = Processor::Content;
-                    // tag_level already set at parser creation time
-                    // Pass ALL data to content processor (it will re-tokenize from start)
-                    self.buffer = data;
-                    self.content_processor();
-                }
-            },
-            Err(_err_pos) => {
-                if !self.is_final {
-                    self.buffer = data;
-                } else {
-                    self.error_code = XmlError::InvalidToken;
-                }
-            }
-        }
-    }
-
     /// Convert XmlTok to xmlrole::Token
     fn xmltok_to_role_token(tok: XmlTok) -> xmlrole::Token {
         match tok {
@@ -1298,81 +1270,6 @@ impl Parser {
             XmlTok::CloseParenPlus => xmlrole::Token::CloseParenPlus,
             // All other tokens map to None
             _ => xmlrole::Token::None,
-        }
-    }
-
-    /// Prolog processor — corresponds to C prologProcessor()
-    /// Uses do_prolog with the tokenizer+role architecture to parse the XML prolog
-    #[allow(dead_code)]
-    fn prolog_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            if self.is_final && !self.seen_root && !self.parsing_foreign_dtd {
-                self.error_code = XmlError::NoElements;
-            }
-            // For foreign DTD parsing, check not_standalone when DTD parsing is complete
-            // even if buffer is empty (already consumed) but is_final is true
-            if self.is_final
-                && self.parsing_foreign_dtd
-                && self.dtd.borrow().has_param_entity_refs
-                && !self.dtd.borrow().standalone
-            {
-                if let Some(handler) = &mut self.not_standalone_handler {
-                    if !handler() {
-                        self.error_code = XmlError::NotStandalone;
-                    }
-                }
-            }
-            return;
-        }
-        let have_more = !self.is_final;
-        let enc = xmltok::Utf8Encoding;
-
-        let (error, next_pos) = self.do_prolog(&enc, &data, 0, data.len(), have_more, false);
-
-        if error != XmlError::None {
-            self.error_code = error;
-            return;
-        }
-
-        // If processor switched to Content, process remaining data as content
-        if self.processor == Processor::Content && next_pos < data.len() {
-            let remaining = &data[next_pos..];
-            // If Latin-1 encoding was detected, transcode remaining bytes
-            self.buffer = if is_latin1_encoding(self.detected_encoding.as_deref()) {
-                transcode_latin1_to_utf8(remaining)
-            } else {
-                remaining.to_vec()
-            };
-            self.content_processor();
-            return;
-        }
-
-        // Keep unprocessed data for next parse call
-        if next_pos < data.len() {
-            let remaining = &data[next_pos..];
-            self.buffer = if is_latin1_encoding(self.detected_encoding.as_deref()) {
-                transcode_latin1_to_utf8(remaining)
-            } else {
-                remaining.to_vec()
-            };
-        } else if self.is_final {
-            if self.processor != Processor::Content && !self.seen_root && !self.parsing_foreign_dtd
-            {
-                // All prolog data consumed, is_final, but no root element seen
-                self.error_code = XmlError::NoElements;
-            }
-            // For foreign DTD parsing, check not_standalone when DTD parsing is complete
-            if self.parsing_foreign_dtd
-                && self.dtd.borrow().has_param_entity_refs
-                && !self.dtd.borrow().standalone
-            {
-                if let Some(handler) = &mut self.not_standalone_handler {
-                    if !handler() {
-                        self.error_code = XmlError::NotStandalone;
-                    }
-                }
-            }
         }
     }
 
@@ -2632,73 +2529,6 @@ impl Parser {
     }
 
     /// CDATA section processor — resumes interrupted CDATA section parsing
-    /// Corresponds to C cdataSectionProcessor()
-    #[allow(dead_code)]
-    fn cdata_section_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            if self.is_final {
-                self.error_code = XmlError::UnclosedCdataSection;
-            }
-            return;
-        }
-        let have_more = !self.is_final;
-        let enc = xmltok::Utf8Encoding;
-
-        let (error, next_pos) = self.do_cdata_section(&enc, &data, 0, data.len(), have_more);
-
-        if error != XmlError::None {
-            self.error_code = error;
-            return;
-        }
-
-        // CDATA section completed — switch back to content processor
-        self.processor = Processor::Content;
-
-        // Process remaining data as content
-        if next_pos < data.len() {
-            self.buffer = data[next_pos..].to_vec();
-            self.content_processor();
-        } else if have_more {
-            // All data consumed, more coming
-        } else if self.is_final {
-            // Final and no more data — check if we're properly closed
-            // (The content processor will handle this)
-        }
-    }
-
-    /// Content processor — corresponds to C contentProcessor()
-    /// Uses do_content with the tokenizer for content parsing.
-    #[allow(dead_code)]
-    fn content_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            if self.is_final && !self.seen_root && self.content_start_tag_level == 0 {
-                self.error_code = XmlError::NoElements;
-            }
-            return;
-        }
-        let have_more = !self.is_final;
-        let enc = xmltok::Utf8Encoding;
-        let stl = self.content_start_tag_level;
-
-        let (error, next_pos) = self.do_content(stl, &enc, &data, 0, data.len(), have_more, false);
-
-        // Set event_pos for successful completion too (for position query after parse)
-        if error == XmlError::None {
-            self.event_pos = next_pos;
-        }
-
-        if error != XmlError::None {
-            self.error_code = error;
-        }
-
-        // Keep unprocessed data for next parse call
-        if next_pos < data.len() && error == XmlError::None {
-            self.buffer = data[next_pos..].to_vec();
-        }
-    }
-
     /// Check if the data starting from err_pos is part of a partial UTF-8 sequence
     /// This checks if err_pos points to the start of a multi-byte UTF-8 lead byte that's incomplete,
     /// or if it's part of an incomplete sequence starting earlier
@@ -4343,8 +4173,9 @@ impl Parser {
                                     }
                                 }
                             } else {
-                                // Entity not found — not a well-formedness error
-                                // C: dtd->keepProcessing = dtd->standalone
+                                // Entity not found — not a well-formedness error per
+                                // XML 1.0 WFC: Entity Declared (only applies when
+                                // standalone="yes" or no parameter entity refs seen)
                                 let standalone = self.dtd.borrow().standalone;
                                 self.dtd.borrow_mut().keep_processing = standalone;
                                 break; // C: goto endEntityValue
@@ -4431,8 +4262,9 @@ impl Parser {
                 attrs.remove(i);
                 continue;
             } else if let Some(prefix) = name.strip_prefix("xmlns:") {
-                // Prefixed namespace declaration
-                // Empty URI is only valid for default namespace
+                // Prefixed namespace declaration.
+                // Empty URI is only valid for default namespace per XML Namespaces
+                // 1.0 (not 1.1); undeclaring a prefixed namespace is an error.
                 if value.is_empty() && !prefix.is_empty() {
                     return Err(XmlError::UndeclaringPrefix);
                 }
@@ -4453,7 +4285,16 @@ impl Parser {
                 if value == "http://www.w3.org/2000/xmlns/" {
                     return Err(XmlError::ReservedNamespaceUri);
                 }
-                // Check if namespace separator appears in URI (security check)
+                // Security: Reject namespace URIs containing the application-chosen
+                // namespace separator character, but only if the separator is a
+                // non-URI character per RFC 3986. This prevents an attacker from
+                // injecting extra separator characters into namespace declarations,
+                // which would create ambiguity when the application splits expanded
+                // element names ("{uri}local{sep}prefix") back into components.
+                //
+                // We don't reject URI-valid separators (like ':') because some
+                // widespread applications have used them for >20 years despite the
+                // XML_ParserCreateNS docs advising against it.
                 if self.ns_separator != '\0' && !is_rfc3986_uri_char(self.ns_separator) {
                     for ch in value.chars() {
                         if ch == self.ns_separator {

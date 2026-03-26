@@ -1,3 +1,16 @@
+// Rust port of expat's asciitab.h, iasciitab.h, utf8tab.h, latin1tab.h
+//
+// Original C code:
+//   Copyright (c) 1997-2000 Thai Open Source Software Center Ltd
+//   Copyright (c) 2000      Clark Cooper <coopercc@users.sourceforge.net>
+//   Copyright (c) 2002      Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
+//   Copyright (c) 2017      Sebastian Pipping <sebastian@pipping.org>
+//
+// Rust port:
+//   Copyright (c) 2026 Rob Ennals <rob@ennals.org>
+//
+// Licensed under the MIT license (see LICENSE file).
+
 //! Character classification tables for XML tokenization.
 //!
 //! Generated from expat's C header files (`asciitab.h`, `iasciitab.h`, `utf8tab.h`,
