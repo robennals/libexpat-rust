@@ -494,21 +494,6 @@ fn is_nmstrt_char(bt: ByteType) -> bool {
     matches!(bt, ByteType::NMSTRT | ByteType::HEX)
 }
 
-/// Check if byte type could be a multi-byte UTF-8 lead byte
-fn is_lead_byte(bt: ByteType) -> bool {
-    matches!(bt, ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4)
-}
-
-/// Check if byte type is valid for name start OR is a multi-byte lead
-fn is_nmstrt_char_or_lead(bt: ByteType) -> bool {
-    is_nmstrt_char(bt) || is_lead_byte(bt)
-}
-
-/// Check if byte type is valid for name continuation OR is a multi-byte lead
-fn is_name_char_or_lead(bt: ByteType) -> bool {
-    is_name_char(bt) || is_lead_byte(bt)
-}
-
 /// Check if a multi-byte UTF-8 sequence at pos is a valid XML name-start character.
 /// Uses the existing infrastructure from the top of the file.
 /// Returns the number of bytes consumed if valid, or 0 if invalid/incomplete.
@@ -2299,7 +2284,10 @@ pub fn prolog_tok<E: Encoding>(
         let first_bt = enc.byte_type(data, first_pos);
         if matches!(first_bt, ByteType::NMSTRT | ByteType::HEX) {
             true
-        } else if matches!(first_bt, ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) {
+        } else if matches!(
+            first_bt,
+            ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4
+        ) {
             check_lead_nmstrt(data, first_pos, end, lead_byte_len(first_bt)).unwrap_or(false)
         } else {
             false

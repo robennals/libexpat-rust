@@ -4750,7 +4750,7 @@ impl Parser {
                     // Unknown encoding — try the unknown encoding handler first
                     let mut handled = false;
                     if let Some(handler) = &mut self.unknown_encoding_handler {
-                        handled = handler(&enc);
+                        handled = handler(enc);
                     }
                     if handled {
                         // Handler set up custom_encoding_map — transcode through it
