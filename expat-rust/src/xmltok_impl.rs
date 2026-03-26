@@ -252,11 +252,13 @@ pub trait Encoding {
     fn byte_to_ascii(&self, data: &[u8], pos: usize) -> u8;
 
     /// Check if position has at least count characters
+    #[inline]
     fn has_chars(&self, _data: &[u8], pos: usize, end: usize, count: usize) -> bool {
         pos <= end && (end - pos) >= (count * self.min_bytes_per_char())
     }
 
     /// Check if position has at least 1 character
+    #[inline]
     fn has_char(&self, data: &[u8], pos: usize, end: usize) -> bool {
         self.has_chars(data, pos, end, 1)
     }
