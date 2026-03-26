@@ -911,8 +911,10 @@ impl Parser {
 
             // If processor changed, re-dispatch with remaining data
             // Skip re-dispatch when suspended — resume() will handle it
-            if self.processor != prev_processor && next_pos < end
-                && self.parsing_state == ParsingState::Parsing {
+            if self.processor != prev_processor
+                && next_pos < end
+                && self.parsing_state == ParsingState::Parsing
+            {
                 // If transitioning from Prolog and need to transcode, do it now
                 let mut transcoded_data = None;
 
@@ -945,7 +947,15 @@ impl Parser {
                             let have_more = !self.is_final;
                             let enc = xmltok::Utf8Encoding;
                             let stl = self.content_start_tag_level;
-                            self.do_content(stl, &enc, &new_data, 0, new_data.len(), have_more, false)
+                            self.do_content(
+                                stl,
+                                &enc,
+                                &new_data,
+                                0,
+                                new_data.len(),
+                                have_more,
+                                false,
+                            )
                         }
                         _ => (XmlError::None, 0),
                     };
@@ -2804,7 +2814,6 @@ impl Parser {
                 )
             };
 
-
             // Restore event_pos so position queries reference the outer document
             // (matches C where m_eventPtr is never modified during entity text processing)
             self.event_pos = entity_ref_event_pos;
@@ -2989,6 +2998,7 @@ impl Parser {
     /// entity replacement text. Prevents updating self.event_pos (which should
     /// stay pointing at the entity reference in the outer document). Matches C's
     /// eventPP indirection pattern.
+    #[allow(clippy::too_many_arguments)]
     fn do_content<E: Encoding>(
         &mut self,
         start_tag_level: u32,
@@ -3152,9 +3162,8 @@ impl Parser {
                                 self.entity_reference_context = Some(data[pos..next].to_vec());
                                 let entity_name = name.to_string();
                                 let entity_bytes = value.as_bytes().to_vec();
-                                let result = self.process_entity(
-                                    &entity_name, &entity_bytes, false,
-                                );
+                                let result =
+                                    self.process_entity(&entity_name, &entity_bytes, false);
                                 if result != XmlError::None {
                                     return (result, pos);
                                 }
@@ -4276,7 +4285,9 @@ impl Parser {
                                     // C: processEntity(parser, entity, XML_FALSE, ENTITY_VALUE)
                                     // Must mark entity as open during processing to detect recursion
                                     let inner_value = value.clone();
-                                    if let Some(e) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                                    if let Some(e) =
+                                        self.dtd.borrow_mut().param_entities.get_mut(&name)
+                                    {
                                         e.open = true;
                                     }
                                     // Recursively process the inner value to resolve nested PE refs
@@ -4285,13 +4296,17 @@ impl Parser {
                                             result.extend_from_slice(resolved.as_bytes());
                                         }
                                         Err(e) => {
-                                            if let Some(pe) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                                            if let Some(pe) =
+                                                self.dtd.borrow_mut().param_entities.get_mut(&name)
+                                            {
                                                 pe.open = false;
                                             }
                                             return Err(e);
                                         }
                                     }
-                                    if let Some(e) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                                    if let Some(e) =
+                                        self.dtd.borrow_mut().param_entities.get_mut(&name)
+                                    {
                                         e.open = false;
                                     }
                                 }
@@ -4911,27 +4926,6 @@ impl Parser {
         XmlStatus::Ok
     }
 
-    /// Advance position tracking for a single byte
-    fn advance_pos(&mut self, b: u8) {
-        if b == b'\n' {
-            self.line_number += 1;
-            self.column_number = 0;
-        } else if b == b'\r' {
-            // \r handled as newline (like \n); if \r\n, the \n will reset again
-            self.line_number += 1;
-            self.column_number = 0;
-        } else {
-            self.column_number += 1;
-        }
-    }
-
-    /// Advance position tracking for a slice of bytes
-    fn advance_pos_slice(&mut self, data: &[u8]) {
-        for &b in data {
-            self.advance_pos(b);
-        }
-    }
-
     /// Check if the input starts with a UTF-16 BOM and transcode if needed.
     /// Returns the (possibly transcoded) data and the detected encoding name.
     fn detect_and_transcode(&mut self, data: &[u8]) -> Result<Vec<u8>, XmlError> {
@@ -5335,12 +5329,13 @@ impl Parser {
 
             // Post-processing: update position tracking
             {
-                let calc_end =
-                    if self.error_code != XmlError::None && self.event_pos < self.parse_data.len() {
-                        self.event_pos
-                    } else {
-                        self.parse_data.len()
-                    };
+                let calc_end = if self.error_code != XmlError::None
+                    && self.event_pos < self.parse_data.len()
+                {
+                    self.event_pos
+                } else {
+                    self.parse_data.len()
+                };
                 if self.position_pos < calc_end {
                     let enc = xmltok::Utf8Encoding;
                     let pos = xmltok_impl::update_position(
