@@ -35,72 +35,68 @@ fn is_utf8_follow(b: u8) -> bool {
     (b & 0xC0) == 0x80
 }
 
-/// Check if a 2-byte UTF-8 sequence is a name-start character.
-/// Matches C's utf8_isNmstrt2 / UTF8_GET_NAMING2(nmstrtPages, byte).
+/// Generic check if a 2-byte UTF-8 sequence belongs to a character class.
+/// `pages` is the page table (e.g. `NMSTRT_PAGES` or `NAME_PAGES`).
+/// Matches C's UTF8_GET_NAMING2(pages, byte).
 #[inline]
-fn utf8_is_nmstrt2(data: &[u8], pos: usize) -> bool {
+fn utf8_is_in_class_2(data: &[u8], pos: usize, pages: &[u8]) -> bool {
     let b0 = data[pos] as usize;
     let b1 = data[pos + 1] as usize;
     let page_idx = (b0 >> 2) & 7;
-    let page = NMSTRT_PAGES[page_idx] as usize;
+    let page = pages[page_idx] as usize;
     let bitmap_idx = (page << 3) + ((b0 & 3) << 1) + ((b1 >> 5) & 1);
     if bitmap_idx >= NAMING_BITMAP.len() {
         return false;
     }
     (NAMING_BITMAP[bitmap_idx] & (1u32 << (b1 & 0x1F))) != 0
+}
+
+/// Generic check if a 3-byte UTF-8 sequence belongs to a character class.
+/// `pages` is the page table (e.g. `NMSTRT_PAGES` or `NAME_PAGES`).
+/// Matches C's UTF8_GET_NAMING3(pages, byte).
+#[inline]
+fn utf8_is_in_class_3(data: &[u8], pos: usize, pages: &[u8]) -> bool {
+    let b0 = data[pos] as usize;
+    let b1 = data[pos + 1] as usize;
+    let b2 = data[pos + 2] as usize;
+    let page_idx = ((b0 & 0xF) << 4) + ((b1 >> 2) & 0xF);
+    if page_idx >= pages.len() {
+        return false;
+    }
+    let page = pages[page_idx] as usize;
+    let bitmap_idx = (page << 3) + ((b1 & 3) << 1) + ((b2 >> 5) & 1);
+    if bitmap_idx >= NAMING_BITMAP.len() {
+        return false;
+    }
+    (NAMING_BITMAP[bitmap_idx] & (1u32 << (b2 & 0x1F))) != 0
+}
+
+/// Check if a 2-byte UTF-8 sequence is a name-start character.
+/// Matches C's utf8_isNmstrt2 / UTF8_GET_NAMING2(nmstrtPages, byte).
+#[inline]
+fn utf8_is_nmstrt2(data: &[u8], pos: usize) -> bool {
+    utf8_is_in_class_2(data, pos, NMSTRT_PAGES)
 }
 
 /// Check if a 3-byte UTF-8 sequence is a name-start character.
 /// Matches C's utf8_isNmstrt3 / UTF8_GET_NAMING3(nmstrtPages, byte).
 #[inline]
 fn utf8_is_nmstrt3(data: &[u8], pos: usize) -> bool {
-    let b0 = data[pos] as usize;
-    let b1 = data[pos + 1] as usize;
-    let b2 = data[pos + 2] as usize;
-    let page_idx = ((b0 & 0xF) << 4) + ((b1 >> 2) & 0xF);
-    if page_idx >= NMSTRT_PAGES.len() {
-        return false;
-    }
-    let page = NMSTRT_PAGES[page_idx] as usize;
-    let bitmap_idx = (page << 3) + ((b1 & 3) << 1) + ((b2 >> 5) & 1);
-    if bitmap_idx >= NAMING_BITMAP.len() {
-        return false;
-    }
-    (NAMING_BITMAP[bitmap_idx] & (1u32 << (b2 & 0x1F))) != 0
+    utf8_is_in_class_3(data, pos, NMSTRT_PAGES)
 }
 
 /// Check if a 2-byte UTF-8 sequence is a name character (not necessarily name-start).
 /// Matches C's utf8_isName2 / UTF8_GET_NAMING2(namePages, byte).
 #[inline]
 fn utf8_is_name2(data: &[u8], pos: usize) -> bool {
-    let b0 = data[pos] as usize;
-    let b1 = data[pos + 1] as usize;
-    let page_idx = (b0 >> 2) & 7;
-    let page = NAME_PAGES[page_idx] as usize;
-    let bitmap_idx = (page << 3) + ((b0 & 3) << 1) + ((b1 >> 5) & 1);
-    if bitmap_idx >= NAMING_BITMAP.len() {
-        return false;
-    }
-    (NAMING_BITMAP[bitmap_idx] & (1u32 << (b1 & 0x1F))) != 0
+    utf8_is_in_class_2(data, pos, NAME_PAGES)
 }
 
 /// Check if a 3-byte UTF-8 sequence is a name character (not necessarily name-start).
 /// Matches C's utf8_isName3 / UTF8_GET_NAMING3(namePages, byte).
 #[inline]
 fn utf8_is_name3(data: &[u8], pos: usize) -> bool {
-    let b0 = data[pos] as usize;
-    let b1 = data[pos + 1] as usize;
-    let b2 = data[pos + 2] as usize;
-    let page_idx = ((b0 & 0xF) << 4) + ((b1 >> 2) & 0xF);
-    if page_idx >= NAME_PAGES.len() {
-        return false;
-    }
-    let page = NAME_PAGES[page_idx] as usize;
-    let bitmap_idx = (page << 3) + ((b1 & 3) << 1) + ((b2 >> 5) & 1);
-    if bitmap_idx >= NAMING_BITMAP.len() {
-        return false;
-    }
-    (NAMING_BITMAP[bitmap_idx] & (1u32 << (b2 & 0x1F))) != 0
+    utf8_is_in_class_3(data, pos, NAME_PAGES)
 }
 
 /// Check if a multi-byte UTF-8 sequence has valid continuation bytes.
@@ -114,10 +110,18 @@ fn is_valid_utf8_multibyte(data: &[u8], pos: usize, byte_len: usize) -> bool {
     true
 }
 
-/// Check if a multi-byte UTF-8 sequence at `pos` is a valid name-start character.
-/// Returns `Ok(true)` if valid name-start, `Ok(false)` if invalid or not name-start.
+/// Generic check if a multi-byte UTF-8 sequence at `pos` belongs to a character class.
+/// `check2` and `check3` are the 2-byte and 3-byte class-check functions respectively.
+/// Returns `Ok(true)` if the character belongs to the class, `Ok(false)` if invalid or not in class.
 /// Returns `Err(())` if not enough bytes (partial character).
-fn check_lead_nmstrt(data: &[u8], pos: usize, end: usize, byte_len: usize) -> Result<bool, ()> {
+fn check_lead_char(
+    data: &[u8],
+    pos: usize,
+    end: usize,
+    byte_len: usize,
+    check2: fn(&[u8], usize) -> bool,
+    check3: fn(&[u8], usize) -> bool,
+) -> Result<bool, ()> {
     if end - pos < byte_len {
         return Err(()); // partial character
     }
@@ -126,30 +130,24 @@ fn check_lead_nmstrt(data: &[u8], pos: usize, end: usize, byte_len: usize) -> Re
         return Ok(false); // invalid UTF-8 → not a valid character
     }
     let valid = match byte_len {
-        2 => utf8_is_nmstrt2(data, pos),
-        3 => utf8_is_nmstrt3(data, pos),
-        4 => false, // 4-byte UTF-8 = U+10000+, never valid XML name-start
+        2 => check2(data, pos),
+        3 => check3(data, pos),
+        4 => false, // 4-byte UTF-8 = U+10000+, never valid XML name/name-start
         _ => false,
     };
     Ok(valid)
 }
 
+/// Check if a multi-byte UTF-8 sequence at `pos` is a valid name-start character.
+/// Returns `Ok(true)` if valid name-start, `Ok(false)` if invalid or not name-start.
+/// Returns `Err(())` if not enough bytes (partial character).
+fn check_lead_nmstrt(data: &[u8], pos: usize, end: usize, byte_len: usize) -> Result<bool, ()> {
+    check_lead_char(data, pos, end, byte_len, utf8_is_nmstrt2, utf8_is_nmstrt3)
+}
+
 /// Check if a multi-byte UTF-8 sequence at `pos` is a valid name character (continuation).
 fn check_lead_name(data: &[u8], pos: usize, end: usize, byte_len: usize) -> Result<bool, ()> {
-    if end - pos < byte_len {
-        return Err(()); // partial character
-    }
-    // Check for valid UTF-8 continuation bytes (C's IS_INVALID_CHAR)
-    if !is_valid_utf8_multibyte(data, pos, byte_len) {
-        return Ok(false); // invalid UTF-8 → not a valid character
-    }
-    let valid = match byte_len {
-        2 => utf8_is_name2(data, pos),
-        3 => utf8_is_name3(data, pos),
-        4 => false, // 4-byte UTF-8 = U+10000+, never valid XML name char
-        _ => false,
-    };
-    Ok(valid)
+    check_lead_char(data, pos, end, byte_len, utf8_is_name2, utf8_is_name3)
 }
 
 /// Byte length for a LEAD byte type
