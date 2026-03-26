@@ -4006,7 +4006,11 @@ impl Parser {
                     &mut attr_buf[i].1,
                 );
             } else {
-                let value = Self::normalize_attribute_value(raw_value, &dtd.internal_entities, skip_unknown);
+                let value = Self::normalize_attribute_value(
+                    raw_value,
+                    &dtd.internal_entities,
+                    skip_unknown,
+                );
                 attr_buf.push((name_str.to_string(), value));
             }
             if attr_buf[i].1.contains('\x00') {

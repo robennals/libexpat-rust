@@ -3295,8 +3295,8 @@ mod tests {
         let enc = Utf8Encoding;
         let data = b"ns:tag>";
         let len = name_length(&enc, data, 0);
-        // Colon stops the name, so just "ns"
-        assert_eq!(len, 2);
+        // Colon is a valid name character, so full "ns:tag"
+        assert_eq!(len, 6);
     }
 
     #[test]

@@ -41,9 +41,7 @@ fn collect_rust_events(xml: &[u8]) -> (u32, u32, Vec<String>) {
 
     let ev4 = ev;
     parser.set_processing_instruction_handler(Some(Box::new(move |target, data| unsafe {
-        (*ev4)
-            .borrow_mut()
-            .push(format!("PI:{}:{}", target, data));
+        (*ev4).borrow_mut().push(format!("PI:{}:{}", target, data));
     })));
 
     let ev5 = ev;
