@@ -213,7 +213,8 @@ fn set_top_level(state: &mut XmlRoleState) {
 
 fn common(state: &mut XmlRoleState, _tok: Token) -> Role {
     if !state.document_entity && _tok == Token::ParamEntityRef {
-        state.state = PrologState::Error;
+        // C's common() does NOT change state here — the role machine continues
+        // from its previous state, allowing subsequent tokens to be processed.
         return Role::InnerParamEntityRef;
     }
 
