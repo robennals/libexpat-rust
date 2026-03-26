@@ -20,23 +20,7 @@ These test C implementation details that have no equivalent in Rust:
 
 ## Remaining Fixable Failures (11)
 
-### ~~Category A: Position Tracking~~ — FIXED (PR #16)
-
-Both tests now pass via eventPP indirection pattern matching C.
-
-### ~~Category B: PE Expansion in Entity Values~~ — FIXED (PR #16)
-
-PE recursion detection now works via recursive `store_entity_value` with open/close tracking.
-
-### ~~Category C: Suspend/Resume in Internal GE~~ — FIXED (PR #16)
-
-GE expansion now uses `process_entity` pipeline matching C's `processEntity` at xmlparse.c:3450.
-
-### ~~Category D: External Entity Sub-parser Edge Cases~~ — FIXED (PR #16)
-
-PE entity_decl_handler now fires for PE declarations matching C.
-
-### Category E: Encoding (4 tests) — remaining
+### Category A: Encoding (4 tests)
 
 | Test | What's Needed |
 |------|--------------|
@@ -45,20 +29,20 @@ PE entity_decl_handler now fires for PE declarations matching C.
 | `test_utf16_pe` | PE names using Thai characters in UTF-16. Requires UTF-16 transcoding for PE name extraction. |
 | `test_invalid_character_entity_3` | Character entity in UTF-16LE context. |
 
-### Category F: Other (2 tests) — remaining
+### Category B: Other (2 tests)
 
 | Test | What's Needed |
 |------|--------------|
 | `test_bad_doctype` | Invalid bytes in DOCTYPE. Requires unknown encoding handler infrastructure. |
 | `test_pool_integrity_with_unfinished_attr` | ATTLIST with PE refs in enumeration values. |
 
-### Category G: Position Tracking (1 test) — remaining
+### Category C: Position Tracking (1 test)
 
 | Test | What's Needed |
 |------|--------------|
 | `test_misc_deny_internal_entity_closing_doctype_issue_317` (suspend variant) | Position tracking across suspend/resume in PE entity expansion. |
 
-## Recommended Fix Order (remaining)
+## Recommended Fix Order
 
 ### Tier 3 — Encoding infrastructure (4 tests, ~+4 pass)
 
