@@ -2212,8 +2212,20 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
 
                 // Also store on the Rust Parser so the transcoding logic can use it
                 ffi_handle.parser.custom_encoding_map = Some(enc.map);
-                ffi_handle.parser.custom_encoding_converter = enc.convert;
-                ffi_handle.parser.custom_encoding_data = enc.data;
+                // Wrap the unsafe C converter in a safe closure for the Rust parser
+                if let Some(conv_fn) = enc.convert {
+                    let conv_data = enc.data;
+                    ffi_handle.parser.custom_encoding_converter = Some(std::rc::Rc::new(
+                        move |bytes: &[u8]| -> i32 {
+                            let mut buf = [0u8; 4];
+                            let len = bytes.len().min(4);
+                            buf[..len].copy_from_slice(&bytes[..len]);
+                            unsafe { conv_fn(conv_data, buf.as_ptr() as *const c_char) }
+                        },
+                    ));
+                } else {
+                    ffi_handle.parser.custom_encoding_converter = None;
+                }
 
                 true
             })));

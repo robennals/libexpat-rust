@@ -14,6 +14,10 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+/// Custom encoding converter: maps multi-byte sequences to Unicode codepoints.
+/// Returns negative on error.
+type CustomEncodingConverter = Rc<dyn Fn(&[u8]) -> i32>;
+
 /// DTD state — shared between parent and child DTD parsers via Rc<RefCell<>>.
 /// Matches C's `DTD` struct which is shared via `m_dtd` pointer.
 /// Parameter entity record
@@ -501,12 +505,9 @@ pub struct Parser {
     unknown_encoding_handler: Option<UnknownEncodingHandler>,
     /// Custom encoding map from unknown encoding handler (for transcode of non-UTF-8 content)
     pub custom_encoding_map: Option<[i32; 256]>,
-    /// Custom encoding converter function pointer
-    pub custom_encoding_converter: Option<
-        unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_char) -> std::ffi::c_int,
-    >,
-    /// User data for custom encoding converter
-    pub custom_encoding_data: *mut std::ffi::c_void,
+    /// Custom encoding converter set by the FFI layer when a C unknown-encoding
+    /// handler provides a `convert` callback.
+    pub custom_encoding_converter: Option<CustomEncodingConverter>,
 }
 
 impl Parser {
@@ -617,7 +618,6 @@ impl Parser {
             unknown_encoding_handler: None,
             custom_encoding_map: None,
             custom_encoding_converter: None,
-            custom_encoding_data: std::ptr::null_mut(),
         })
     }
 
@@ -733,7 +733,6 @@ impl Parser {
             unknown_encoding_handler: None,
             custom_encoding_map: None,
             custom_encoding_converter: None,
-            custom_encoding_data: std::ptr::null_mut(),
         })
     }
 
@@ -817,7 +816,6 @@ impl Parser {
         self.unknown_encoding_handler = None;
         self.custom_encoding_map = None;
         self.custom_encoding_converter = None;
-        self.custom_encoding_data = std::ptr::null_mut();
         true
     }
 
@@ -5255,17 +5253,8 @@ impl Parser {
                         return Ok(result);
                     }
 
-                    if let Some(conv_fn) = self.custom_encoding_converter {
-                        // Build a buffer for the converter
-                        let mut conv_buf = [0u8; 4];
-                        conv_buf[..n_bytes].copy_from_slice(&data[i..i + n_bytes]);
-
-                        let codepoint = unsafe {
-                            conv_fn(
-                                self.custom_encoding_data,
-                                conv_buf.as_ptr() as *const std::ffi::c_char,
-                            )
-                        };
+                    if let Some(ref conv_fn) = self.custom_encoding_converter {
+                        let codepoint = conv_fn(&data[i..i + n_bytes]);
 
                         if codepoint < 0 {
                             // Converter failed
