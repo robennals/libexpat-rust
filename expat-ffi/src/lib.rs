@@ -20,7 +20,7 @@
 
 #![allow(non_camel_case_types, non_snake_case, dead_code, private_interfaces)]
 
-use expat_rust::xmlparse::{self, ParamEntityParsing, Parser, ParsingState, XmlError, XmlStatus};
+use expat_rust::xmlparse::{ParamEntityParsing, Parser, ParsingState, XmlError, XmlStatus};
 use std::ffi::{c_char, c_int, c_long, c_ulong, c_void, CStr};
 use std::ptr;
 
@@ -305,6 +305,8 @@ fn new_handle(parser: Parser) -> XML_Parser {
 // ============================================================================
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_ParserCreate(encoding: *const XML_Char) -> XML_Parser {
     let enc = if encoding.is_null() {
         None
@@ -318,6 +320,8 @@ pub unsafe extern "C" fn XML_ParserCreate(encoding: *const XML_Char) -> XML_Pars
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_ParserCreateNS(
     encoding: *const XML_Char,
     separator: XML_Char,
@@ -334,6 +338,8 @@ pub unsafe extern "C" fn XML_ParserCreateNS(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_ParserReset(
     parser: XML_Parser,
     encoding: *const XML_Char,
@@ -358,6 +364,8 @@ pub unsafe extern "C" fn XML_ParserReset(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_ParserFree(parser: XML_Parser) {
     if !parser.is_null() {
         drop(Box::from_raw(parser));
@@ -380,7 +388,7 @@ fn transcode_custom_encoding(
     let mut i = 0;
 
     while i < data.len() {
-        let byte = data[i] as u8;
+        let byte = data[i];
         let map_val = map[byte as usize];
 
         if map_val == -1 {
@@ -421,15 +429,13 @@ fn transcode_custom_encoding(
             if let Some(conv_fn) = converter {
                 // Build a buffer for the converter: first byte + remaining bytes
                 let mut conv_buf = [0u8; 4];
-                for j in 0..n_bytes {
-                    conv_buf[j] = data[i + j];
-                }
+                conv_buf[..n_bytes].copy_from_slice(&data[i..i + n_bytes]);
 
                 let codepoint = unsafe { conv_fn(conv_data, conv_buf.as_ptr() as *const c_char) };
 
                 if codepoint < 0 {
                     // Converter failed
-                    return Err(codepoint as i32);
+                    return Err(codepoint);
                 }
 
                 // Encode codepoint to UTF-8
@@ -461,6 +467,8 @@ fn transcode_custom_encoding(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_Parse(
     parser: XML_Parser,
     s: *const c_char,
@@ -510,13 +518,15 @@ pub unsafe extern "C" fn XML_Parse(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetBuffer(parser: XML_Parser, len: c_int) -> *mut c_void {
     if parser.is_null() || len < 0 {
         return ptr::null_mut();
     }
     // Reject excessively large buffers (matches C overflow detection)
     // C allows up to INT_MAX/2 + (INT_MAX & 1) which rounds up to (INT_MAX+1)/2
-    if len as usize > ((i32::MAX as usize) + 1) / 2 {
+    if len as usize > (i32::MAX as usize).div_ceil(2) {
         return ptr::null_mut();
     }
     let handle = &mut *parser;
@@ -527,6 +537,8 @@ pub unsafe extern "C" fn XML_GetBuffer(parser: XML_Parser, len: c_int) -> *mut c
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_ParseBuffer(
     parser: XML_Parser,
     len: c_int,
@@ -544,6 +556,8 @@ pub unsafe extern "C" fn XML_ParseBuffer(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_StopParser(parser: XML_Parser, resumable: XML_Bool) -> XML_Status_t {
     if parser.is_null() {
         return XML_STATUS_ERROR;
@@ -553,6 +567,8 @@ pub unsafe extern "C" fn XML_StopParser(parser: XML_Parser, resumable: XML_Bool)
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_ResumeParser(parser: XML_Parser) -> XML_Status_t {
     if parser.is_null() {
         return XML_STATUS_ERROR;
@@ -566,6 +582,8 @@ pub unsafe extern "C" fn XML_ResumeParser(parser: XML_Parser) -> XML_Status_t {
 // ============================================================================
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetErrorCode(parser: XML_Parser) -> XML_Error_t {
     if parser.is_null() {
         return 0;
@@ -575,57 +593,58 @@ pub unsafe extern "C" fn XML_GetErrorCode(parser: XML_Parser) -> XML_Error_t {
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_ErrorString(code: XML_Error_t) -> *const XML_Char {
     // Return null-terminated C string for each error code
     // Can't use error_string() directly since Rust &str isn't null-terminated
     match code {
-        0 => b"no error\0".as_ptr() as *const XML_Char,
-        1 => b"out of memory\0".as_ptr() as *const XML_Char,
-        2 => b"syntax error\0".as_ptr() as *const XML_Char,
-        3 => b"no element found\0".as_ptr() as *const XML_Char,
-        4 => b"not well-formed (invalid token)\0".as_ptr() as *const XML_Char,
-        5 => b"unclosed token\0".as_ptr() as *const XML_Char,
-        6 => b"partial character\0".as_ptr() as *const XML_Char,
-        7 => b"mismatched tag\0".as_ptr() as *const XML_Char,
-        8 => b"duplicate attribute\0".as_ptr() as *const XML_Char,
-        9 => b"junk after document element\0".as_ptr() as *const XML_Char,
-        10 => b"illegal parameter entity reference\0".as_ptr() as *const XML_Char,
-        11 => b"undefined entity\0".as_ptr() as *const XML_Char,
-        12 => b"recursive entity reference\0".as_ptr() as *const XML_Char,
-        13 => b"asynchronous entity\0".as_ptr() as *const XML_Char,
-        14 => b"reference to invalid character number\0".as_ptr() as *const XML_Char,
-        15 => b"reference to binary entity\0".as_ptr() as *const XML_Char,
-        16 => b"reference to external entity in attribute\0".as_ptr() as *const XML_Char,
-        17 => b"XML or text declaration not at start of entity\0".as_ptr() as *const XML_Char,
-        18 => b"unknown encoding\0".as_ptr() as *const XML_Char,
-        19 => b"encoding specified in XML declaration is incorrect\0".as_ptr() as *const XML_Char,
-        20 => b"unclosed CDATA section\0".as_ptr() as *const XML_Char,
-        21 => b"error in processing external entity reference\0".as_ptr() as *const XML_Char,
-        22 => b"document is not standalone\0".as_ptr() as *const XML_Char,
-        23 => b"unexpected parser state - please send a bug report\0".as_ptr() as *const XML_Char,
-        24 => b"entity declared in parameter entity\0".as_ptr() as *const XML_Char,
-        25 => b"requested feature requires XML_DTD support in Expat\0".as_ptr() as *const XML_Char,
-        26 => b"cannot change setting once parsing has begun\0".as_ptr() as *const XML_Char,
-        27 => b"unbound prefix\0".as_ptr() as *const XML_Char,
-        28 => b"must not undeclare prefix\0".as_ptr() as *const XML_Char,
-        29 => b"incomplete markup in parameter entity\0".as_ptr() as *const XML_Char,
-        30 => b"XML declaration not well-formed\0".as_ptr() as *const XML_Char,
-        31 => b"text declaration not well-formed\0".as_ptr() as *const XML_Char,
-        32 => b"illegal character(s) in public id\0".as_ptr() as *const XML_Char,
-        33 => b"parser suspended\0".as_ptr() as *const XML_Char,
-        34 => b"parser not suspended\0".as_ptr() as *const XML_Char,
-        35 => b"parsing aborted\0".as_ptr() as *const XML_Char,
-        36 => b"parsing finished\0".as_ptr() as *const XML_Char,
-        37 => b"cannot suspend in external parameter entity\0".as_ptr() as *const XML_Char,
-        38 => b"reserved prefix (xml) must not be undeclared or bound to another namespace name\0"
-            .as_ptr() as *const XML_Char,
-        39 => b"reserved prefix (xmlns) must not be declared or undeclared\0".as_ptr()
-            as *const XML_Char,
-        40 => b"reserved namespace URI must not be used\0".as_ptr() as *const XML_Char,
-        41 => b"invalid argument\0".as_ptr() as *const XML_Char,
-        42 => b"no buffer\0".as_ptr() as *const XML_Char,
-        43 => b"amplification limit breach\0".as_ptr() as *const XML_Char,
-        44 => b"parser not started\0".as_ptr() as *const XML_Char,
+        0 => c"no error".as_ptr(),
+        1 => c"out of memory".as_ptr(),
+        2 => c"syntax error".as_ptr(),
+        3 => c"no element found".as_ptr(),
+        4 => c"not well-formed (invalid token)".as_ptr(),
+        5 => c"unclosed token".as_ptr(),
+        6 => c"partial character".as_ptr(),
+        7 => c"mismatched tag".as_ptr(),
+        8 => c"duplicate attribute".as_ptr(),
+        9 => c"junk after document element".as_ptr(),
+        10 => c"illegal parameter entity reference".as_ptr(),
+        11 => c"undefined entity".as_ptr(),
+        12 => c"recursive entity reference".as_ptr(),
+        13 => c"asynchronous entity".as_ptr(),
+        14 => c"reference to invalid character number".as_ptr(),
+        15 => c"reference to binary entity".as_ptr(),
+        16 => c"reference to external entity in attribute".as_ptr(),
+        17 => c"XML or text declaration not at start of entity".as_ptr(),
+        18 => c"unknown encoding".as_ptr(),
+        19 => c"encoding specified in XML declaration is incorrect".as_ptr(),
+        20 => c"unclosed CDATA section".as_ptr(),
+        21 => c"error in processing external entity reference".as_ptr(),
+        22 => c"document is not standalone".as_ptr(),
+        23 => c"unexpected parser state - please send a bug report".as_ptr(),
+        24 => c"entity declared in parameter entity".as_ptr(),
+        25 => c"requested feature requires XML_DTD support in Expat".as_ptr(),
+        26 => c"cannot change setting once parsing has begun".as_ptr(),
+        27 => c"unbound prefix".as_ptr(),
+        28 => c"must not undeclare prefix".as_ptr(),
+        29 => c"incomplete markup in parameter entity".as_ptr(),
+        30 => c"XML declaration not well-formed".as_ptr(),
+        31 => c"text declaration not well-formed".as_ptr(),
+        32 => c"illegal character(s) in public id".as_ptr(),
+        33 => c"parser suspended".as_ptr(),
+        34 => c"parser not suspended".as_ptr(),
+        35 => c"parsing aborted".as_ptr(),
+        36 => c"parsing finished".as_ptr(),
+        37 => c"cannot suspend in external parameter entity".as_ptr(),
+        38 => c"reserved prefix (xml) must not be undeclared or bound to another namespace name"
+            .as_ptr(),
+        39 => c"reserved prefix (xmlns) must not be declared or undeclared".as_ptr(),
+        40 => c"reserved namespace URI must not be used".as_ptr(),
+        41 => c"invalid argument".as_ptr(),
+        42 => c"no buffer".as_ptr(),
+        43 => c"amplification limit breach".as_ptr(),
+        44 => c"parser not started".as_ptr(),
         _ => ptr::null(),
     }
 }
@@ -635,6 +654,8 @@ pub unsafe extern "C" fn XML_ErrorString(code: XML_Error_t) -> *const XML_Char {
 // ============================================================================
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetCurrentLineNumber(parser: XML_Parser) -> c_ulong {
     if parser.is_null() {
         return 0;
@@ -644,6 +665,8 @@ pub unsafe extern "C" fn XML_GetCurrentLineNumber(parser: XML_Parser) -> c_ulong
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetCurrentColumnNumber(parser: XML_Parser) -> c_ulong {
     if parser.is_null() {
         return 0;
@@ -653,6 +676,8 @@ pub unsafe extern "C" fn XML_GetCurrentColumnNumber(parser: XML_Parser) -> c_ulo
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetCurrentByteIndex(parser: XML_Parser) -> c_long {
     if parser.is_null() {
         return -1;
@@ -662,6 +687,8 @@ pub unsafe extern "C" fn XML_GetCurrentByteIndex(parser: XML_Parser) -> c_long {
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetCurrentByteCount(parser: XML_Parser) -> c_int {
     if parser.is_null() {
         return 0;
@@ -675,6 +702,8 @@ pub unsafe extern "C" fn XML_GetCurrentByteCount(parser: XML_Parser) -> c_int {
 // ============================================================================
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetParsingStatus(parser: XML_Parser, status: *mut XML_ParsingStatus) {
     if parser.is_null() || status.is_null() {
         return;
@@ -696,6 +725,8 @@ pub unsafe extern "C" fn XML_GetParsingStatus(parser: XML_Parser, status: *mut X
 // ============================================================================
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetEncoding(
     parser: XML_Parser,
     encoding: *const XML_Char,
@@ -717,6 +748,8 @@ pub unsafe extern "C" fn XML_SetEncoding(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetBase(parser: XML_Parser, base: *const XML_Char) -> XML_Status_t {
     if parser.is_null() {
         return XML_STATUS_ERROR;
@@ -739,6 +772,8 @@ pub unsafe extern "C" fn XML_SetBase(parser: XML_Parser, base: *const XML_Char) 
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetBase(parser: XML_Parser) -> *const XML_Char {
     if parser.is_null() {
         return ptr::null();
@@ -751,12 +786,14 @@ pub unsafe extern "C" fn XML_GetBase(parser: XML_Parser) -> *const XML_Char {
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetHashSalt(parser: XML_Parser, salt: c_ulong) -> c_int {
     if parser.is_null() {
         return 0;
     }
     let handle = &mut *parser;
-    if handle.parser.set_hash_salt(salt as u64) {
+    if handle.parser.set_hash_salt(salt) {
         1
     } else {
         0
@@ -764,6 +801,8 @@ pub unsafe extern "C" fn XML_SetHashSalt(parser: XML_Parser, salt: c_ulong) -> c
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetParamEntityParsing(
     parser: XML_Parser,
     parsing: XML_ParamEntityParsing,
@@ -786,6 +825,8 @@ pub unsafe extern "C" fn XML_SetParamEntityParsing(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_UseForeignDTD(parser: XML_Parser, use_dtd: XML_Bool) -> XML_Error_t {
     if parser.is_null() {
         return error_to_c(XmlError::InvalidArgument);
@@ -802,6 +843,8 @@ pub unsafe extern "C" fn XML_UseForeignDTD(parser: XML_Parser, use_dtd: XML_Bool
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetReturnNSTriplet(parser: XML_Parser, do_nst: c_int) {
     if parser.is_null() {
         return;
@@ -811,6 +854,8 @@ pub unsafe extern "C" fn XML_SetReturnNSTriplet(parser: XML_Parser, do_nst: c_in
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetReparseDeferralEnabled(
     parser: XML_Parser,
     enabled: XML_Bool,
@@ -827,6 +872,8 @@ pub unsafe extern "C" fn XML_SetReparseDeferralEnabled(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_UseParserAsHandlerArg(parser: XML_Parser) {
     if parser.is_null() {
         return;
@@ -840,6 +887,8 @@ pub unsafe extern "C" fn XML_UseParserAsHandlerArg(parser: XML_Parser) {
 // ============================================================================
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetUserData(parser: XML_Parser, user_data: *mut c_void) {
     if parser.is_null() {
         return;
@@ -853,6 +902,8 @@ pub unsafe extern "C" fn XML_SetUserData(parser: XML_Parser, user_data: *mut c_v
 // ============================================================================
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetElementHandler(
     parser: XML_Parser,
     start: XML_StartElementHandler,
@@ -867,6 +918,8 @@ pub unsafe extern "C" fn XML_SetElementHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetStartElementHandler(
     parser: XML_Parser,
     handler: XML_StartElementHandler,
@@ -915,6 +968,8 @@ pub unsafe extern "C" fn XML_SetStartElementHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetEndElementHandler(
     parser: XML_Parser,
     handler: XML_EndElementHandler,
@@ -945,6 +1000,8 @@ pub unsafe extern "C" fn XML_SetEndElementHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetCharacterDataHandler(
     parser: XML_Parser,
     handler: XML_CharacterDataHandler,
@@ -977,6 +1034,8 @@ pub unsafe extern "C" fn XML_SetCharacterDataHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetProcessingInstructionHandler(
     parser: XML_Parser,
     handler: XML_ProcessingInstructionHandler,
@@ -1013,6 +1072,8 @@ pub unsafe extern "C" fn XML_SetProcessingInstructionHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetCommentHandler(parser: XML_Parser, handler: XML_CommentHandler) {
     if parser.is_null() {
         return;
@@ -1040,6 +1101,8 @@ pub unsafe extern "C" fn XML_SetCommentHandler(parser: XML_Parser, handler: XML_
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetCdataSectionHandler(
     parser: XML_Parser,
     start: XML_StartCdataSectionHandler,
@@ -1053,6 +1116,8 @@ pub unsafe extern "C" fn XML_SetCdataSectionHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetStartCdataSectionHandler(
     parser: XML_Parser,
     handler: XML_StartCdataSectionHandler,
@@ -1081,6 +1146,8 @@ pub unsafe extern "C" fn XML_SetStartCdataSectionHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetEndCdataSectionHandler(
     parser: XML_Parser,
     handler: XML_EndCdataSectionHandler,
@@ -1109,6 +1176,8 @@ pub unsafe extern "C" fn XML_SetEndCdataSectionHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetDefaultHandler(parser: XML_Parser, handler: XML_DefaultHandler) {
     if parser.is_null() {
         return;
@@ -1138,6 +1207,8 @@ pub unsafe extern "C" fn XML_SetDefaultHandler(parser: XML_Parser, handler: XML_
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetDefaultHandlerExpand(
     parser: XML_Parser,
     handler: XML_DefaultHandler,
@@ -1169,6 +1240,8 @@ pub unsafe extern "C" fn XML_SetDefaultHandlerExpand(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetDoctypeDeclHandler(
     parser: XML_Parser,
     start: XML_StartDoctypeDeclHandler,
@@ -1182,6 +1255,8 @@ pub unsafe extern "C" fn XML_SetDoctypeDeclHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetStartDoctypeDeclHandler(
     parser: XML_Parser,
     handler: XML_StartDoctypeDeclHandler,
@@ -1238,6 +1313,8 @@ pub unsafe extern "C" fn XML_SetStartDoctypeDeclHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetEndDoctypeDeclHandler(
     parser: XML_Parser,
     handler: XML_EndDoctypeDeclHandler,
@@ -1266,6 +1343,8 @@ pub unsafe extern "C" fn XML_SetEndDoctypeDeclHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetXmlDeclHandler(parser: XML_Parser, handler: XML_XmlDeclHandler) {
     if parser.is_null() {
         return;
@@ -1297,10 +1376,7 @@ pub unsafe extern "C" fn XML_SetXmlDeclHandler(parser: XML_Parser, handler: XML_
                     .map_or(ptr::null(), |b| b.as_ptr() as *const XML_Char);
 
                 // standalone: Some(1) = yes, Some(0) = no, None = -1
-                let standalone_int = match standalone {
-                    Some(val) => val,
-                    None => -1,
-                };
+                let standalone_int = standalone.unwrap_or(-1);
 
                 let handler_arg = if (*parser_ptr).use_parser_as_handler_arg {
                     parser_ptr as *mut c_void
@@ -1316,6 +1392,8 @@ pub unsafe extern "C" fn XML_SetXmlDeclHandler(parser: XML_Parser, handler: XML_
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetExternalEntityRefHandler(
     parser: XML_Parser,
     handler: XML_ExternalEntityRefHandler,
@@ -1402,6 +1480,8 @@ pub unsafe extern "C" fn XML_SetExternalEntityRefHandler(
 // ============================================================================
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetSpecifiedAttributeCount(parser: XML_Parser) -> c_int {
     if parser.is_null() {
         return -1;
@@ -1418,6 +1498,8 @@ pub unsafe extern "C" fn XML_GetSpecifiedAttributeCount(parser: XML_Parser) -> c
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetIdAttributeIndex(parser: XML_Parser) -> c_int {
     if parser.is_null() {
         return -1;
@@ -1437,6 +1519,8 @@ pub unsafe extern "C" fn XML_GetIdAttributeIndex(parser: XML_Parser) -> c_int {
 // ============================================================================
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
     parser: XML_Parser,
     context: *const XML_Char,
@@ -1573,6 +1657,8 @@ pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
 // ============================================================================
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetBillionLaughsAttackProtectionMaximumAmplification(
     parser: XML_Parser,
     maximum_amplification_factor: f32,
@@ -1595,6 +1681,8 @@ pub unsafe extern "C" fn XML_SetBillionLaughsAttackProtectionMaximumAmplificatio
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetBillionLaughsAttackProtectionActivationThreshold(
     parser: XML_Parser,
     activation_threshold_bytes: c_ulong,
@@ -1606,9 +1694,7 @@ pub unsafe extern "C" fn XML_SetBillionLaughsAttackProtectionActivationThreshold
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         handle
             .parser
-            .set_billion_laughs_attack_protection_activation_threshold(
-                activation_threshold_bytes as u64,
-            )
+            .set_billion_laughs_attack_protection_activation_threshold(activation_threshold_bytes)
     }));
     match result {
         Ok(true) => XML_TRUE,
@@ -1623,11 +1709,15 @@ pub unsafe extern "C" fn XML_SetBillionLaughsAttackProtectionActivationThreshold
 static VERSION_STRING: &[u8] = b"expat_2.7.5\0";
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_ExpatVersion() -> *const XML_Char {
     VERSION_STRING.as_ptr() as *const XML_Char
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_ExpatVersionInfo() -> XML_Expat_Version {
     XML_Expat_Version {
         major: 2,
@@ -1699,6 +1789,8 @@ static FEATURES: [XML_Feature; 9] = [
 ];
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetFeatureList() -> *const XML_Feature {
     FEATURES.as_ptr()
 }
@@ -1708,6 +1800,8 @@ pub unsafe extern "C" fn XML_GetFeatureList() -> *const XML_Feature {
 // ============================================================================
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetUserData(parser: XML_Parser) -> *mut c_void {
     if parser.is_null() {
         return ptr::null_mut();
@@ -1716,6 +1810,8 @@ pub unsafe extern "C" fn XML_GetUserData(parser: XML_Parser) -> *mut c_void {
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetExternalEntityRefHandlerArg(parser: XML_Parser, arg: *mut c_void) {
     if parser.is_null() {
         return;
@@ -1724,6 +1820,8 @@ pub unsafe extern "C" fn XML_SetExternalEntityRefHandlerArg(parser: XML_Parser, 
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetNotStandaloneHandler(
     parser: XML_Parser,
     handler: XML_NotStandaloneHandler,
@@ -1747,6 +1845,8 @@ pub unsafe extern "C" fn XML_SetNotStandaloneHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetSkippedEntityHandler(
     parser: XML_Parser,
     handler: XML_SkippedEntityHandler,
@@ -1781,6 +1881,8 @@ pub unsafe extern "C" fn XML_SetSkippedEntityHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetElementDeclHandler(
     parser: XML_Parser,
     handler: XML_ElementDeclHandler,
@@ -1795,7 +1897,7 @@ pub unsafe extern "C" fn XML_SetElementDeclHandler(
         handle
             .parser
             .set_element_decl_handler(Some(Box::new(move |name: &str, _model: &str| {
-                let h = unsafe { &mut *(parser_ptr as *mut ParserHandle) };
+                let h = unsafe { &mut *parser_ptr };
                 let mut nb: Vec<u8> = name.as_bytes().to_vec();
                 nb.push(0);
 
@@ -1819,7 +1921,7 @@ pub unsafe extern "C" fn XML_SetElementDeclHandler(
 
                         // Now build the array with stable name pointers
                         let mut array: Vec<XML_Content> = Vec::with_capacity(rust_model.len());
-                        for (idx, (type_u, quant_u, name_bytes, numchildren)) in
+                        for (idx, (type_u, quant_u, _name_bytes, _numchildren)) in
                             rust_model.iter().enumerate()
                         {
                             let name_ptr = if !h.last_content_model_names[idx].is_empty() {
@@ -1877,6 +1979,8 @@ pub unsafe extern "C" fn XML_SetElementDeclHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetAttlistDeclHandler(
     parser: XML_Parser,
     handler: XML_AttlistDeclHandler,
@@ -1923,6 +2027,8 @@ pub unsafe extern "C" fn XML_SetAttlistDeclHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetEntityDeclHandler(
     parser: XML_Parser,
     handler: XML_EntityDeclHandler,
@@ -1978,6 +2084,8 @@ pub unsafe extern "C" fn XML_SetEntityDeclHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetUnparsedEntityDeclHandler(
     parser: XML_Parser,
     handler: XML_UnparsedEntityDeclHandler,
@@ -2023,6 +2131,8 @@ pub unsafe extern "C" fn XML_SetUnparsedEntityDeclHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetNotationDeclHandler(
     parser: XML_Parser,
     handler: XML_NotationDeclHandler,
@@ -2066,6 +2176,8 @@ pub unsafe extern "C" fn XML_SetNotationDeclHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetNamespaceDeclHandler(
     parser: XML_Parser,
     start: XML_StartNamespaceDeclHandler,
@@ -2079,6 +2191,8 @@ pub unsafe extern "C" fn XML_SetNamespaceDeclHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetStartNamespaceDeclHandler(
     parser: XML_Parser,
     handler: XML_StartNamespaceDeclHandler,
@@ -2120,6 +2234,8 @@ pub unsafe extern "C" fn XML_SetStartNamespaceDeclHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetEndNamespaceDeclHandler(
     parser: XML_Parser,
     handler: XML_EndNamespaceDeclHandler,
@@ -2153,6 +2269,8 @@ pub unsafe extern "C" fn XML_SetEndNamespaceDeclHandler(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
     parser: XML_Parser,
     handler: XML_UnknownEncodingHandler,
@@ -2205,7 +2323,7 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
                     }
                 }
                 // Store the encoding map and converter on the ParserHandle and Rust Parser
-                let ffi_handle = &mut *(parser_ptr as *mut ParserHandle);
+                let ffi_handle = &mut *parser_ptr;
                 ffi_handle.custom_encoding_map = Some(Box::new(enc.map));
                 ffi_handle.custom_encoding_converter = enc.convert;
                 ffi_handle.custom_encoding_data = enc.data;
@@ -2215,14 +2333,13 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
                 // Wrap the unsafe C converter in a safe closure for the Rust parser
                 if let Some(conv_fn) = enc.convert {
                     let conv_data = enc.data;
-                    ffi_handle.parser.custom_encoding_converter = Some(std::rc::Rc::new(
-                        move |bytes: &[u8]| -> i32 {
+                    ffi_handle.parser.custom_encoding_converter =
+                        Some(std::rc::Rc::new(move |bytes: &[u8]| -> i32 {
                             let mut buf = [0u8; 4];
                             let len = bytes.len().min(4);
                             buf[..len].copy_from_slice(&bytes[..len]);
                             unsafe { conv_fn(conv_data, buf.as_ptr() as *const c_char) }
-                        },
-                    ));
+                        }));
                 } else {
                     ffi_handle.parser.custom_encoding_converter = None;
                 }
@@ -2239,6 +2356,8 @@ pub unsafe extern "C" fn XML_SetUnknownEncodingHandler(
 // ============================================================================
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_DefaultCurrent(parser: XML_Parser) {
     if parser.is_null() {
         return;
@@ -2247,16 +2366,20 @@ pub unsafe extern "C" fn XML_DefaultCurrent(parser: XML_Parser) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn XML_FreeContentModel(parser: XML_Parser, model: *mut XML_Content) {
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
+pub unsafe extern "C" fn XML_FreeContentModel(parser: XML_Parser, _model: *mut XML_Content) {
     let _ = parser;
     // Model pointer may be NULL (our shim doesn't build XML_Content trees yet)
     // When non-null, it was heap-allocated and should be freed
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_ParserCreate_MM(
     encoding: *const XML_Char,
-    memsuite: *const XML_Memory_Handling_Suite,
+    _memsuite: *const XML_Memory_Handling_Suite,
     ns_separator: *const XML_Char,
 ) -> XML_Parser {
     let enc = if encoding.is_null() {
@@ -2277,6 +2400,8 @@ pub unsafe extern "C" fn XML_ParserCreate_MM(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_GetInputContext(
     parser: XML_Parser,
     offset: *mut c_int,
@@ -2300,11 +2425,15 @@ pub unsafe extern "C" fn XML_GetInputContext(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_MemMalloc(_parser: XML_Parser, size: usize) -> *mut c_void {
     libc_malloc(size)
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_MemRealloc(
     _parser: XML_Parser,
     ptr: *mut c_void,
@@ -2314,6 +2443,8 @@ pub unsafe extern "C" fn XML_MemRealloc(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_MemFree(_parser: XML_Parser, ptr: *mut c_void) {
     libc_free(ptr)
 }
@@ -2336,6 +2467,8 @@ unsafe fn libc_free(p: *mut c_void) {
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetAllocTrackerMaximumAmplification(
     parser: XML_Parser,
     factor: f32,
@@ -2354,6 +2487,8 @@ pub unsafe extern "C" fn XML_SetAllocTrackerMaximumAmplification(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn XML_SetAllocTrackerActivationThreshold(
     parser: XML_Parser,
     threshold: c_ulong,
@@ -2363,7 +2498,7 @@ pub unsafe extern "C" fn XML_SetAllocTrackerActivationThreshold(
     }
     if (*parser)
         .parser
-        .set_alloc_tracker_activation_threshold(threshold as u64)
+        .set_alloc_tracker_activation_threshold(threshold)
     {
         XML_TRUE
     } else {
@@ -2382,6 +2517,8 @@ pub static mut g_bytesScanned: c_int = 0;
 pub static mut g_reparseDeferralEnabledDefault: XML_Bool = 1; // XML_TRUE
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn _INTERNAL_trim_to_complete_utf8_characters(
     from: *const c_char,
     from_lim_ref: *mut *const c_char,
@@ -2401,42 +2538,52 @@ pub unsafe extern "C" fn _INTERNAL_trim_to_complete_utf8_characters(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn testingAccountingGetCountBytesDirect(_parser: XML_Parser) -> c_ulong {
     0
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn testingAccountingGetCountBytesIndirect(_parser: XML_Parser) -> c_ulong {
     0
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn unsignedCharToPrintable(c: u8) -> *const c_char {
     static mut BUF: [u8; 8] = [0u8; 8];
     match c {
-        0 => return b"\\0\0".as_ptr() as *const c_char,
-        9 => return b"\\t\0".as_ptr() as *const c_char,
-        10 => return b"\\n\0".as_ptr() as *const c_char,
-        13 => return b"\\r\0".as_ptr() as *const c_char,
-        b'\\' => return b"\\\\\0".as_ptr() as *const c_char,
-        b'"' => return b"\\\"\0".as_ptr() as *const c_char,
+        0 => return c"\\0".as_ptr(),
+        9 => return c"\\t".as_ptr(),
+        10 => return c"\\n".as_ptr(),
+        13 => return c"\\r".as_ptr(),
+        b'\\' => return c"\\\\".as_ptr(),
+        b'"' => return c"\\\"".as_ptr(),
         0x20..=0x7e => {
-            BUF[0] = c;
-            BUF[1] = 0;
+            let buf = &mut *std::ptr::addr_of_mut!(BUF);
+            buf[0] = c;
+            buf[1] = 0;
         }
         _ => {
             let hex = b"0123456789ABCDEF";
-            BUF[0] = b'\\';
-            BUF[1] = b'x';
-            BUF[2] = hex[(c >> 4) as usize];
-            BUF[3] = hex[(c & 0xf) as usize];
-            BUF[4] = 0;
+            let buf = &mut *std::ptr::addr_of_mut!(BUF);
+            buf[0] = b'\\';
+            buf[1] = b'x';
+            buf[2] = hex[(c >> 4) as usize];
+            buf[3] = hex[(c & 0xf) as usize];
+            buf[4] = 0;
         }
     }
-    BUF.as_ptr() as *const c_char
+    std::ptr::addr_of!(BUF) as *const u8 as *const c_char
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn expat_malloc(
     _parser: XML_Parser,
     size: usize,
@@ -2446,6 +2593,8 @@ pub unsafe extern "C" fn expat_malloc(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn expat_realloc(
     _parser: XML_Parser,
     ptr: *mut c_void,
@@ -2456,6 +2605,8 @@ pub unsafe extern "C" fn expat_realloc(
 }
 
 #[no_mangle]
+/// # Safety
+/// Caller must pass valid pointers obtained from the expat API.
 pub unsafe extern "C" fn expat_free(_parser: XML_Parser, ptr: *mut c_void, _line: c_int) {
     free(ptr)
 }
