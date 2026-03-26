@@ -49,16 +49,13 @@ The 1.2-1.6x gap on element-heavy documents is a deliberate design choice. Repla
 
 For most real-world applications, the Rust parser processes 100 MB of XML in under half a second. In streaming mode (how expat is designed to be used), Rust is within 24% of C.
 
-### Optimizations applied
+### Future optimization opportunities
 
-The following optimizations bring Rust close to C performance while maintaining zero `unsafe` in the core parser:
+If the remaining gap needs to be closed further:
 
-- **Lazy event data**: Token byte data for `XML_DefaultCurrent` is captured by position only; the copy is deferred until actually needed
-- **Fast-path attribute normalization**: Attribute values without special characters (`&`, `\r`, `\n`, `\t`) skip the normalization allocator entirely
-- **Zero-copy tag names**: In the common non-namespace path, tag names borrow directly from the input buffer instead of allocating `String`s
-- **Reusable attribute buffers**: The attribute `Vec` and its `String` entries are reused across elements, preserving heap capacity
-- **Consolidated DTD borrows**: A single `RefCell` borrow per element replaces multiple borrows for ATTLIST defaults, type normalization, and ID attribute lookup
-- **LTO and codegen-units=1**: Link-time optimization enables cross-crate inlining of the tokenizer hot path
+- **Arena allocator**: A safe arena crate (e.g., `bumpalo`) could replace individual `String` allocations for attribute values, eliminating the remaining per-element allocation overhead
+- **String interning**: Commonly-repeated element/attribute names could be interned in a hash map, avoiding repeated allocation of the same strings
+- **Eliminate `parse_data` clone**: The `parse_data = buffer.clone()` in `parse()` copies the entire input for position tracking; a lazy or shared approach could eliminate this copy for one-shot parsing of large documents
 
 ---
 
