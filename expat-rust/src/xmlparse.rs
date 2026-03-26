@@ -2370,8 +2370,11 @@ impl Parser {
                 if let (Some(ref elem), Some(ref attr)) =
                     (&self.current_attlist_element, &self.current_attlist_attr)
                 {
-                    let entities = self.dtd.borrow().internal_entities.clone();
-                    let value = Self::normalize_attribute_value(tok_text, &entities);
+                    let dtd_ref = self.dtd.borrow();
+                    let entities = dtd_ref.internal_entities.clone();
+                    let skip_unknown = dtd_ref.has_param_entity_refs && !dtd_ref.standalone;
+                    drop(dtd_ref);
+                    let value = Self::normalize_attribute_value(tok_text, &entities, skip_unknown);
                     {
                         let mut dtd = self.dtd.borrow_mut();
                         let defaults = dtd.attlist_defaults.entry(elem.clone()).or_default();
@@ -2402,8 +2405,11 @@ impl Parser {
                 if let (Some(ref elem), Some(ref attr)) =
                     (&self.current_attlist_element, &self.current_attlist_attr)
                 {
-                    let entities = self.dtd.borrow().internal_entities.clone();
-                    let value = Self::normalize_attribute_value(tok_text, &entities);
+                    let dtd_ref = self.dtd.borrow();
+                    let entities = dtd_ref.internal_entities.clone();
+                    let skip_unknown = dtd_ref.has_param_entity_refs && !dtd_ref.standalone;
+                    drop(dtd_ref);
+                    let value = Self::normalize_attribute_value(tok_text, &entities, skip_unknown);
                     {
                         let mut dtd = self.dtd.borrow_mut();
                         let defaults = dtd.attlist_defaults.entry(elem.clone()).or_default();
@@ -3747,14 +3753,14 @@ impl Parser {
                     return (XmlError::UnclosedCdataSection, pos);
                 }
                 XmlTok::TrailingRsqb => {
-                    // Trailing ]] — need more data to determine if ]]>
+                    // Trailing ] or ]] — need more data to determine if ]]>
                     if have_more {
                         return (XmlError::None, pos);
                     }
-                    // Final buffer — deliver the ]] as character data
-                    if let Some(handler) = &mut self.character_data_handler {
-                        handler(&data[pos..next]);
-                    }
+                    // Final buffer — C expat does NOT deliver trailing ] in
+                    // CDATA sections (no case for XML_TOK_TRAILING_RSQB in
+                    // doCdataSection). The next iteration will return
+                    // XmlTok::None and report UnclosedCdataSection.
                 }
                 _ => {}
             }
@@ -3985,8 +3991,12 @@ impl Parser {
                 .to_string();
             let raw_value = &data[attr.value_ptr..attr.value_end];
             // Always normalize: expand refs, normalize \t \n \r → space
+            let dtd = self.dtd.borrow();
+            // C expat skips unknown entities when has_param_entity_refs is true
+            // and standalone is false (i.e., an external subset may define them)
+            let skip_unknown = dtd.has_param_entity_refs && !dtd.standalone;
             let value =
-                Self::normalize_attribute_value(raw_value, &self.dtd.borrow().internal_entities);
+                Self::normalize_attribute_value(raw_value, &dtd.internal_entities, skip_unknown);
             if value.contains('\x00') {
                 return Err(XmlError::RecursiveEntityRef);
             }
@@ -4050,6 +4060,7 @@ impl Parser {
     fn normalize_attribute_value(
         raw: &[u8],
         entities: &std::collections::HashMap<String, String>,
+        skip_unknown_entities: bool,
     ) -> String {
         let mut result = Vec::with_capacity(raw.len());
         let mut i = 0;
@@ -4105,12 +4116,16 @@ impl Parser {
                                         let expanded = Self::normalize_attribute_value(
                                             value.as_bytes(),
                                             entities,
+                                            skip_unknown_entities,
                                         );
                                         result.extend_from_slice(expanded.as_bytes());
-                                    } else {
-                                        // Unknown entity — keep as-is
+                                    } else if !skip_unknown_entities {
+                                        // Unknown entity — keep as-is (no external subset)
                                         result.extend_from_slice(&raw[i..i + 2 + semi_offset]);
                                     }
+                                    // When skip_unknown_entities is true, silently
+                                    // drop the reference (C expat behavior when an
+                                    // external subset may define the entity)
                                 }
                             }
                         }

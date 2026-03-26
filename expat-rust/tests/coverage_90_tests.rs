@@ -11,16 +11,8 @@ use std::ffi::{c_char, c_int, c_void, CStr};
 // ============================================================================
 
 fn compare(xml: &[u8], desc: &str) {
-    let mut r = Parser::new(None).unwrap();
-    let rs = r.parse(xml, true) as u32;
-    let re = r.error_code() as u32;
-    let c = CParser::new(None).unwrap();
-    let (cs, ce) = c.parse(xml, true);
-    assert!(
-        rs == cs && re == ce,
-        "MISMATCH {desc}: R s={rs} e={re}, C s={cs} e={ce}, input={:?}",
-        std::str::from_utf8(xml).unwrap_or("<bin>")
-    );
+    // Full SAX event comparison (not just status codes)
+    compare_events(xml, desc);
 }
 
 fn compare_incr(xml: &[u8], desc: &str) {

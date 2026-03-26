@@ -14,23 +14,12 @@ use std::ffi::{c_char, c_int, c_void, CStr};
 // Comparison helpers
 // ============================================================================
 
-/// Compare parse result (status + error code) between Rust and C
+/// Compare full SAX events + status between Rust and C (delegates to compare_events)
 fn compare(xml: &[u8], desc: &str) {
-    let mut r_parser = Parser::new(None).unwrap();
-    let r_status = r_parser.parse(xml, true) as u32;
-    let r_error = r_parser.error_code() as u32;
-
-    let c_parser = CParser::new(None).unwrap();
-    let (c_status, c_error) = c_parser.parse(xml, true);
-
-    assert!(
-        r_status == c_status && r_error == c_error,
-        "MISMATCH {desc}: Rust status={r_status} err={r_error}, C status={c_status} err={c_error}, input={:?}",
-        std::str::from_utf8(xml).unwrap_or("<binary>")
-    );
+    compare_events(xml, desc);
 }
 
-/// Compare incremental parsing: split input at every byte position
+/// Compare incremental parsing: full SAX on single-shot, then split at every byte position
 fn compare_incremental(xml: &[u8], desc: &str) {
     compare(xml, desc);
     for split in 1..xml.len() {

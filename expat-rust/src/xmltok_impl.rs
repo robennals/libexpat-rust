@@ -2720,7 +2720,8 @@ pub fn name_length<E: Encoding>(enc: &E, data: &[u8], mut ptr: usize) -> usize {
             | ByteType::HEX
             | ByteType::DIGIT
             | ByteType::NAME
-            | ByteType::MINUS => {
+            | ByteType::MINUS
+            | ByteType::COLON => {
                 ptr += minbpc;
             }
             _ => {
