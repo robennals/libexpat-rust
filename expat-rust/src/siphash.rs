@@ -1,3 +1,15 @@
+// Rust port of expat's siphash.h
+//
+// Original C code by William Ahern, derived from the reference
+// implementation by Jean-Philippe Aumasson and Daniel J. Bernstein.
+// Minimal changes by Sebastian Pipping and Victor Stinner.
+// Licensed under the CC0 Public Domain Dedication.
+//
+// Rust port:
+//   Copyright (c) 2026 Rob Ennals <rob@ennals.org>
+//
+// Licensed under the MIT license (see LICENSE file).
+
 //! SipHash-2-4 implementation for hash-table randomization.
 //!
 //! Ported from expat's `siphash.h` (original C by William Ahern, derived from

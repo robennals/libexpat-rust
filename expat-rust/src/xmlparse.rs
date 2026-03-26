@@ -1,3 +1,51 @@
+// Rust port of expat's xmlparse.c
+//
+// Original C code:
+//   Copyright (c) 1997-2000 Thai Open Source Software Center Ltd
+//   Copyright (c) 2000      Clark Cooper <coopercc@users.sourceforge.net>
+//   Copyright (c) 2000-2006 Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
+//   Copyright (c) 2001-2002 Greg Stein <gstein@users.sourceforge.net>
+//   Copyright (c) 2002-2016 Karl Waclawek <karl@waclawek.net>
+//   Copyright (c) 2005-2009 Steven Solie <steven@solie.ca>
+//   Copyright (c) 2016      Eric Rahm <erahm@mozilla.com>
+//   Copyright (c) 2016-2026 Sebastian Pipping <sebastian@pipping.org>
+//   Copyright (c) 2016      Gaurav <g.gupta@samsung.com>
+//   Copyright (c) 2016      Thomas Beutlich <tc@tbeu.de>
+//   Copyright (c) 2016      Gustavo Grieco <gustavo.grieco@imag.fr>
+//   Copyright (c) 2016      Pascal Cuoq <cuoq@trust-in-soft.com>
+//   Copyright (c) 2016      Ed Schouten <ed@nuxi.nl>
+//   Copyright (c) 2017-2022 Rhodri James <rhodri@wildebeest.org.uk>
+//   Copyright (c) 2017      Václav Slavík <vaclav@slavik.io>
+//   Copyright (c) 2017      Viktor Szakats <commit@vsz.me>
+//   Copyright (c) 2017      Chanho Park <chanho61.park@samsung.com>
+//   Copyright (c) 2017      Rolf Eike Beer <eike@sf-mail.de>
+//   Copyright (c) 2017      Hans Wennborg <hans@chromium.org>
+//   Copyright (c) 2018      Anton Maklakov <antmak.pub@gmail.com>
+//   Copyright (c) 2018      Benjamin Peterson <benjamin@python.org>
+//   Copyright (c) 2018      Marco Maggi <marco.maggi-ipsu@poste.it>
+//   Copyright (c) 2018      Mariusz Zaborski <oshogbo@vexillium.org>
+//   Copyright (c) 2019      David Loffredo <loffredo@steptools.com>
+//   Copyright (c) 2019-2020 Ben Wagner <bungeman@chromium.org>
+//   Copyright (c) 2019      Vadim Zeitlin <vadim@zeitlins.org>
+//   Copyright (c) 2021      Donghee Na <donghee.na@python.org>
+//   Copyright (c) 2022      Samanta Navarro <ferivoz@riseup.net>
+//   Copyright (c) 2022      Jeffrey Walton <noloader@gmail.com>
+//   Copyright (c) 2022      Jann Horn <jannh@google.com>
+//   Copyright (c) 2022      Sean McBride <sean@rogue-research.com>
+//   Copyright (c) 2023      Owain Davies <owaind@bath.edu>
+//   Copyright (c) 2023-2024 Sony Corporation / Snild Dolkow <snild@sony.com>
+//   Copyright (c) 2024-2025 Berkay Eren Ürün <berkay.ueruen@siemens.com>
+//   Copyright (c) 2024      Hanno Böck <hanno@gentoo.org>
+//   Copyright (c) 2025      Matthew Fernandez <matthew.fernandez@gmail.com>
+//   Copyright (c) 2025      Atrem Borovik <polzovatellllk@gmail.com>
+//   Copyright (c) 2025      Alfonso Gregory <gfunni234@gmail.com>
+//   Copyright (c) 2026      Rosen Penev <rosenp@gmail.com>
+//
+// Rust port:
+//   Copyright (c) 2026 Rob Ennals <rob@ennals.org>
+//
+// Licensed under the MIT license (see LICENSE file).
+
 //! Main XML parser module — the public API of expat-rust.
 //!
 //! Ported from expat's `xmlparse.c` with 1:1 function correspondence. Create a

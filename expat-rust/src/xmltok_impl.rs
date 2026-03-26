@@ -1,3 +1,23 @@
+// Rust port of expat's xmltok_impl.c
+//
+// Original C code:
+//   Copyright (c) 1997-2000 Thai Open Source Software Center Ltd
+//   Copyright (c) 2000      Clark Cooper <coopercc@users.sourceforge.net>
+//   Copyright (c) 2002      Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
+//   Copyright (c) 2002-2016 Karl Waclawek <karl@waclawek.net>
+//   Copyright (c) 2016-2022 Sebastian Pipping <sebastian@pipping.org>
+//   Copyright (c) 2017      Rhodri James <rhodri@wildebeest.org.uk>
+//   Copyright (c) 2018      Benjamin Peterson <benjamin@python.org>
+//   Copyright (c) 2018      Anton Maklakov <antmak.pub@gmail.com>
+//   Copyright (c) 2019      David Loffredo <loffredo@steptools.com>
+//   Copyright (c) 2020      Boris Kolpackov <boris@codesynthesis.com>
+//   Copyright (c) 2022      Martin Ettl <ettl.martin78@googlemail.com>
+//
+// Rust port:
+//   Copyright (c) 2026 Rob Ennals <rob@ennals.org>
+//
+// Licensed under the MIT license (see LICENSE file).
+
 //! Core XML tokenizer implementation, ported from expat's `xmltok_impl.c`.
 //!
 //! Provides [`content_tok`] and [`prolog_tok`],
