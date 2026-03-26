@@ -4747,9 +4747,28 @@ impl Parser {
                         }
                     }
                 } else if !is_known_encoding(&enc_upper) {
-                    self.error_code = XmlError::UnknownEncoding;
-                    self.parsing_state = ParsingState::Finished;
-                    return XmlStatus::Error;
+                    // Unknown encoding — try the unknown encoding handler first
+                    let mut handled = false;
+                    if let Some(handler) = &mut self.unknown_encoding_handler {
+                        handled = handler(&enc);
+                    }
+                    if handled {
+                        // Handler set up custom_encoding_map — transcode through it
+                        match self.transcode_custom_encoding(data) {
+                            Ok(transcoded) => {
+                                self.buffer = transcoded;
+                            }
+                            Err(err) => {
+                                self.error_code = err;
+                                self.parsing_state = ParsingState::Finished;
+                                return XmlStatus::Error;
+                            }
+                        }
+                    } else {
+                        self.error_code = XmlError::UnknownEncoding;
+                        self.parsing_state = ParsingState::Finished;
+                        return XmlStatus::Error;
+                    }
                 } else if self.protocol_encoding_set && is_latin1_encoding(Some(&enc_upper)) {
                     // Explicit Latin-1/ISO-8859-x encoding set via XML_SetEncoding —
                     // bypass BOM detection entirely. Bytes like 0xFF 0xFE are Latin-1
