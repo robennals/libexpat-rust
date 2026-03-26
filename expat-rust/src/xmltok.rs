@@ -14,6 +14,7 @@ use crate::xmltok_impl::Encoding;
 pub struct Utf8Encoding;
 
 impl Encoding for Utf8Encoding {
+    #[inline(always)]
     fn byte_type(&self, data: &[u8], pos: usize) -> ByteType {
         if pos >= data.len() {
             return ByteType::NONXML;
@@ -26,6 +27,7 @@ impl Encoding for Utf8Encoding {
         }
     }
 
+    #[inline(always)]
     fn char_matches(&self, data: &[u8], pos: usize, c: u8) -> bool {
         if pos >= data.len() {
             return false;
@@ -33,10 +35,12 @@ impl Encoding for Utf8Encoding {
         data[pos] == c
     }
 
+    #[inline(always)]
     fn min_bytes_per_char(&self) -> usize {
         1
     }
 
+    #[inline(always)]
     fn byte_to_ascii(&self, data: &[u8], pos: usize) -> u8 {
         if pos >= data.len() {
             0

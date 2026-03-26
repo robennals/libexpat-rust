@@ -396,8 +396,14 @@ pub struct Parser {
     byte_offset: u64,
     /// Number of bytes in the current event token (set during handler callbacks)
     event_cur_byte_count: i32,
-    /// Raw bytes of the current event token (for XML_DefaultCurrent)
+    /// Raw bytes of the current event token (for XML_DefaultCurrent).
+    /// Lazily populated: only filled when `default_current()` is called.
     event_cur_data: Vec<u8>,
+    /// Start/end positions of current event token in parse_data, for lazy event_cur_data.
+    event_cur_data_start: usize,
+    event_cur_data_end: usize,
+    /// If true, event_cur_data_start/end refer to parse_data and can be used to lazily populate event_cur_data.
+    event_cur_data_valid: bool,
     /// Pending byte from incomplete UTF-16 code unit across chunk boundaries
     utf16_pending_byte: Option<u8>,
     /// Pending bytes for custom encoding multi-byte sequences split across parse() calls
@@ -412,6 +418,8 @@ pub struct Parser {
     current_attlist_attr: Option<String>,
     /// Set of currently open (being expanded) entities for recursion detection
     open_entities: std::collections::HashSet<String>,
+    /// Reusable buffer for extracted attributes (avoids per-element allocation)
+    attr_buf: Vec<(String, String)>,
     /// During entity expansion, the entity reference text (e.g., "&entity;") for XML_GetInputContext
     entity_reference_context: Option<Vec<u8>>,
     /// Current entity name being declared in DTD (for GeneralEntityName → EntityValue flow)
@@ -553,6 +561,9 @@ impl Parser {
             byte_offset: 0,
             event_cur_byte_count: 0,
             event_cur_data: Vec::new(),
+            event_cur_data_start: 0,
+            event_cur_data_end: 0,
+            event_cur_data_valid: false,
             utf16_pending_byte: None,
             custom_encoding_pending: Vec::new(),
             encoding_needs_transcode: false,
@@ -560,6 +571,7 @@ impl Parser {
             current_attlist_element: None,
             current_attlist_attr: None,
             open_entities: std::collections::HashSet::new(),
+            attr_buf: Vec::new(),
             entity_reference_context: None,
             current_entity_name: None,
             current_is_param_entity: false,
@@ -668,6 +680,9 @@ impl Parser {
             byte_offset: 0,
             event_cur_byte_count: 0,
             event_cur_data: Vec::new(),
+            event_cur_data_start: 0,
+            event_cur_data_end: 0,
+            event_cur_data_valid: false,
             utf16_pending_byte: None,
             custom_encoding_pending: Vec::new(),
             encoding_needs_transcode: false,
@@ -675,6 +690,7 @@ impl Parser {
             current_attlist_element: None,
             current_attlist_attr: None,
             open_entities: std::collections::HashSet::new(),
+            attr_buf: Vec::new(),
             entity_reference_context: None,
             current_entity_name: None,
             current_is_param_entity: false,
@@ -3075,11 +3091,13 @@ impl Parser {
                 }
             };
 
-            // Track byte count and raw data of current token for reportDefault/DefaultCurrent
-            // These are always updated (even for entity text) since reportDefault needs
-            // the current token's bytes.
+            // Track byte count and position of current token for reportDefault/DefaultCurrent.
+            // Lazy: we only record positions; event_cur_data is populated on demand.
             self.event_cur_byte_count = (next - pos) as i32;
-            self.event_cur_data = data[pos..next].to_vec();
+            self.event_cur_data_start = pos;
+            self.event_cur_data_end = next;
+            self.event_cur_data_valid = true;
+            self.event_cur_data.clear();
 
             // Record the current token position for lazy line/column computation.
             // Only update for main document tokens, not entity text.
@@ -3263,22 +3281,34 @@ impl Parser {
                     self.seen_root = true;
 
                     // Extract attributes (with duplicate detection)
-                    let mut attrs = if tok == XmlTok::StartTagWithAtts {
-                        match self.extract_attrs(enc, data, pos, next) {
-                            Ok(a) => a,
-                            Err(e) => return (e, pos),
+                    // Take attr_buf from self to reuse its allocation across elements
+                    let mut attrs = std::mem::take(&mut self.attr_buf);
+                    if tok == XmlTok::StartTagWithAtts {
+                        let dtd = self.dtd.borrow();
+                        match Self::extract_attrs_reuse(&mut attrs, enc, data, pos, next, &dtd) {
+                            Ok(()) => {}
+                            Err(e) => {
+                                self.attr_buf = attrs;
+                                return (e, pos);
+                            }
                         }
+                        drop(dtd);
                     } else {
-                        Vec::new()
-                    };
+                        attrs.clear();
+                    }
 
-                    // Apply ATTLIST defaults BEFORE namespace processing
-                    // (so xmlns:prefix defaults are picked up)
+                    // Apply ATTLIST defaults, normalize, and find ID attr — single DTD borrow
                     let specified_count = attrs.len() as i32;
-                    if let Some(defaults) = self.dtd.borrow().attlist_defaults.get(tag_name) {
-                        for (dname, dval) in defaults {
-                            if !attrs.iter().any(|(n, _)| n == dname) {
-                                attrs.push((dname.clone(), dval.clone()));
+                    {
+                        let dtd = self.dtd.borrow();
+                        if !dtd.attlist_defaults.is_empty() || !dtd.attlist_types.is_empty() {
+                            // Apply ATTLIST defaults BEFORE namespace processing
+                            if let Some(defaults) = dtd.attlist_defaults.get(tag_name) {
+                                for (dname, dval) in defaults {
+                                    if !attrs.iter().any(|(n, _)| n == dname) {
+                                        attrs.push((dname.clone(), dval.clone()));
+                                    }
+                                }
                             }
                         }
                     }
@@ -3290,48 +3320,55 @@ impl Parser {
                             Err(e) => return (e, pos),
                         }
                     } else {
-                        tag_name.to_string()
+                        String::new() // placeholder, won't be used
+                    };
+                    // Use borrowed &str for the common non-namespace path
+                    let tag_name_ref: &str = if self.ns_enabled {
+                        &effective_tag_name
+                    } else {
+                        tag_name
                     };
 
-                    // Normalize tokenized attribute values per XML spec §3.3.3
-                    // NMTOKENS, IDREFS, ENTITIES types get whitespace collapsed
-                    if let Some(type_map) = self.dtd.borrow().attlist_types.get(tag_name) {
-                        for (attr_name, attr_val) in attrs.iter_mut() {
-                            if let Some(att_type) = type_map.get(attr_name.as_str()) {
-                                if matches!(
-                                    att_type.as_str(),
-                                    "NMTOKENS"
-                                        | "IDREFS"
-                                        | "ENTITIES"
-                                        | "NMTOKEN"
-                                        | "IDREF"
-                                        | "ENTITY"
-                                        | "ID"
-                                        | "NOTATION"
-                                ) {
-                                    // Collapse: strip leading/trailing whitespace, collapse internal runs
-                                    let collapsed: String = attr_val
-                                        .split_whitespace()
-                                        .collect::<Vec<&str>>()
-                                        .join(" ");
-                                    *attr_val = collapsed;
+                    self.n_specified_atts = specified_count * 2; // C counts name+value pairs
+                    self.id_att_index = -1;
+                    {
+                        let dtd = self.dtd.borrow();
+                        if !dtd.attlist_types.is_empty() {
+                            // Normalize tokenized attribute values per XML spec §3.3.3
+                            if let Some(type_map) = dtd.attlist_types.get(tag_name) {
+                                for (attr_name, attr_val) in attrs.iter_mut() {
+                                    if let Some(att_type) = type_map.get(attr_name.as_str()) {
+                                        if matches!(
+                                            att_type.as_str(),
+                                            "NMTOKENS"
+                                                | "IDREFS"
+                                                | "ENTITIES"
+                                                | "NMTOKEN"
+                                                | "IDREF"
+                                                | "ENTITY"
+                                                | "ID"
+                                                | "NOTATION"
+                                        ) {
+                                            let collapsed: String = attr_val
+                                                .split_whitespace()
+                                                .collect::<Vec<&str>>()
+                                                .join(" ");
+                                            *attr_val = collapsed;
+                                        }
+                                    }
+                                }
+                                // Find ID attribute index
+                                for (i, (name, _)) in attrs.iter().enumerate() {
+                                    if type_map.get(name.as_str()).map(|t| t == "ID").unwrap_or(false) {
+                                        self.id_att_index = (i * 2) as i32;
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
-                    self.n_specified_atts = specified_count * 2; // C counts name+value pairs
-                                                                 // Find ID attribute index
-                    self.id_att_index = -1;
-                    if let Some(types) = self.dtd.borrow().attlist_types.get(tag_name) {
-                        for (i, (name, _)) in attrs.iter().enumerate() {
-                            if types.get(name.as_str()).map(|t| t == "ID").unwrap_or(false) {
-                                self.id_att_index = (i * 2) as i32;
-                                break;
-                            }
-                        }
-                    }
 
-                    self.tag_stack.push(effective_tag_name.clone());
+                    self.tag_stack.push(tag_name_ref.to_string());
                     self.tag_triplet_flags.push(self.ns_triplets);
 
                     if let Some(handler) = &mut self.start_element_handler {
@@ -3339,12 +3376,13 @@ impl Parser {
                             .iter()
                             .map(|(k, v)| (k.as_str(), v.as_str()))
                             .collect();
-                        handler(&effective_tag_name, &attr_refs);
+                        handler(tag_name_ref, &attr_refs);
                     } else if self.default_handler.is_some()
                         || self.default_handler_expand.is_some()
                     {
                         self.report_default(enc, data, pos, next);
                     }
+                    self.attr_buf = attrs;
                 }
 
                 XmlTok::EmptyElementNoAtts | XmlTok::EmptyElementWithAtts => {
@@ -3362,21 +3400,32 @@ impl Parser {
 
                     self.seen_root = true;
 
-                    let mut attrs = if tok == XmlTok::EmptyElementWithAtts {
-                        match self.extract_attrs(enc, data, pos, next) {
-                            Ok(a) => a,
-                            Err(e) => return (e, pos),
+                    let mut attrs = std::mem::take(&mut self.attr_buf);
+                    if tok == XmlTok::EmptyElementWithAtts {
+                        let dtd = self.dtd.borrow();
+                        match Self::extract_attrs_reuse(&mut attrs, enc, data, pos, next, &dtd) {
+                            Ok(()) => {}
+                            Err(e) => {
+                                self.attr_buf = attrs;
+                                return (e, pos);
+                            }
                         }
+                        drop(dtd);
                     } else {
-                        Vec::new()
+                        attrs.clear()
                     };
 
-                    // Apply ATTLIST defaults BEFORE namespace processing
+                    // Apply ATTLIST defaults and find ID attr — single DTD borrow
                     let specified_count = attrs.len() as i32;
-                    if let Some(defaults) = self.dtd.borrow().attlist_defaults.get(&tag_name) {
-                        for (dname, dval) in defaults {
-                            if !attrs.iter().any(|(n, _)| n == dname) {
-                                attrs.push((dname.clone(), dval.clone()));
+                    {
+                        let dtd = self.dtd.borrow();
+                        if !dtd.attlist_defaults.is_empty() {
+                            if let Some(defaults) = dtd.attlist_defaults.get(&*tag_name) {
+                                for (dname, dval) in defaults {
+                                    if !attrs.iter().any(|(n, _)| n == dname) {
+                                        attrs.push((dname.clone(), dval.clone()));
+                                    }
+                                }
                             }
                         }
                     }
@@ -3393,15 +3442,25 @@ impl Parser {
                             Err(e) => return (e, pos),
                         }
                     } else {
-                        tag_name.clone()
+                        String::new() // placeholder
+                    };
+                    let tag_name_ref: &str = if self.ns_enabled {
+                        &effective_tag_name
+                    } else {
+                        &tag_name
                     };
                     self.n_specified_atts = specified_count * 2;
                     self.id_att_index = -1;
-                    if let Some(types) = self.dtd.borrow().attlist_types.get(&tag_name) {
-                        for (i, (name, _)) in attrs.iter().enumerate() {
-                            if types.get(name.as_str()).map(|t| t == "ID").unwrap_or(false) {
-                                self.id_att_index = (i * 2) as i32;
-                                break;
+                    {
+                        let dtd = self.dtd.borrow();
+                        if !dtd.attlist_types.is_empty() {
+                            if let Some(types) = dtd.attlist_types.get(&*tag_name) {
+                                for (i, (name, _)) in attrs.iter().enumerate() {
+                                    if types.get(name.as_str()).map(|t| t == "ID").unwrap_or(false) {
+                                        self.id_att_index = (i * 2) as i32;
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -3414,7 +3473,7 @@ impl Parser {
                             .iter()
                             .map(|(k, v)| (k.as_str(), v.as_str()))
                             .collect();
-                        handler(&effective_tag_name, &attr_refs);
+                        handler(tag_name_ref, &attr_refs);
                         no_elm_handlers = false;
                     }
                     if let Some(handler) = &mut self.end_element_handler {
@@ -3422,7 +3481,7 @@ impl Parser {
                         if self.start_element_handler.is_some() {
                             self.event_pos = next;
                         }
-                        handler(&effective_tag_name);
+                        handler(tag_name_ref);
                         no_elm_handlers = false;
                     }
                     if no_elm_handlers
@@ -3436,6 +3495,9 @@ impl Parser {
                         self.pop_ns_bindings(self.tag_level);
                         self.tag_level = self.tag_level.saturating_sub(1);
                     }
+
+                    // Return attr buffer for reuse
+                    self.attr_buf = attrs;
 
                     // Check if root element closed (empty root element)
                     if self.tag_level == 0 && self.parsing_state != ParsingState::Finished {
@@ -3472,60 +3534,73 @@ impl Parser {
                             .unwrap_or("");
 
                     // Expand tag name if namespace processing is enabled
-                    let effective_tag_name = if self.ns_enabled {
-                        match self.expand_name(tag_name, true) {
+                    if self.ns_enabled {
+                        let effective_tag_name = match self.expand_name(tag_name, true) {
                             Ok(name) => name,
                             Err(e) => return (e, raw_name_start),
-                        }
-                    } else {
-                        tag_name.to_string()
-                    };
+                        };
 
-                    // Check tag mismatch — set event position to rawName
-                    // (matches C: *eventPP = rawName)
-                    // Compare the canonical form (without triplet suffix) to handle ns_triplets changes
-                    if let Some(expected) = self.tag_stack.last() {
-                        let expected_canonical = self.strip_triplet(expected);
-                        let actual_canonical = self.strip_triplet(&effective_tag_name);
-                        if expected_canonical != actual_canonical {
+                        // Check tag mismatch
+                        if let Some(expected) = self.tag_stack.last() {
+                            let expected_canonical = self.strip_triplet(expected);
+                            let actual_canonical = self.strip_triplet(&effective_tag_name);
+                            if expected_canonical != actual_canonical {
+                                self.event_pos = raw_name_start;
+                                return (XmlError::TagMismatch, raw_name_start);
+                            }
+                        } else {
                             self.event_pos = raw_name_start;
                             return (XmlError::TagMismatch, raw_name_start);
                         }
-                    } else {
-                        self.event_pos = raw_name_start;
-                        return (XmlError::TagMismatch, raw_name_start);
-                    }
 
-                    self.tag_stack.pop();
-                    let was_triplet = self.tag_triplet_flags.pop().unwrap_or(false);
-                    self.tag_level = self.tag_level.saturating_sub(1);
+                        self.tag_stack.pop();
+                        let was_triplet = self.tag_triplet_flags.pop().unwrap_or(false);
+                        self.tag_level = self.tag_level.saturating_sub(1);
 
-                    // If the element was opened with ns_triplets=true, we should call the handler
-                    // with the triplet format, even if ns_triplets is now false
-                    let handler_name =
-                        if was_triplet && !self.ns_triplets && self.ns_separator != '\0' {
-                            // Need to add the prefix back
-                            // The effective_tag_name is in format "uri + sep + local"
-                            // We need to find the prefix from the raw tag name
-                            if let Some(colon_pos) = tag_name.find(':') {
-                                let prefix = &tag_name[..colon_pos];
-                                format!("{}{}{}", effective_tag_name, self.ns_separator, prefix)
+                        let handler_name =
+                            if was_triplet && !self.ns_triplets && self.ns_separator != '\0' {
+                                if let Some(colon_pos) = tag_name.find(':') {
+                                    let prefix = &tag_name[..colon_pos];
+                                    format!("{}{}{}", effective_tag_name, self.ns_separator, prefix)
+                                } else {
+                                    effective_tag_name.clone()
+                                }
+                            } else if !was_triplet && self.ns_triplets && self.ns_separator != '\0' {
+                                self.strip_triplet(&effective_tag_name)
                             } else {
-                                effective_tag_name.clone()
-                            }
-                        } else if !was_triplet && self.ns_triplets && self.ns_separator != '\0' {
-                            // Need to remove the prefix
-                            self.strip_triplet(&effective_tag_name)
-                        } else {
-                            effective_tag_name.clone()
-                        };
+                                effective_tag_name
+                            };
 
-                    if let Some(handler) = &mut self.end_element_handler {
-                        handler(&handler_name);
-                    } else if self.default_handler.is_some()
-                        || self.default_handler_expand.is_some()
-                    {
-                        self.report_default(enc, data, pos, next);
+                        if let Some(handler) = &mut self.end_element_handler {
+                            handler(&handler_name);
+                        } else if self.default_handler.is_some()
+                            || self.default_handler_expand.is_some()
+                        {
+                            self.report_default(enc, data, pos, next);
+                        }
+                    } else {
+                        // Non-namespace fast path: no String allocation needed
+                        if let Some(expected) = self.tag_stack.last() {
+                            if expected != tag_name {
+                                self.event_pos = raw_name_start;
+                                return (XmlError::TagMismatch, raw_name_start);
+                            }
+                        } else {
+                            self.event_pos = raw_name_start;
+                            return (XmlError::TagMismatch, raw_name_start);
+                        }
+
+                        self.tag_stack.pop();
+                        self.tag_triplet_flags.pop();
+                        self.tag_level = self.tag_level.saturating_sub(1);
+
+                        if let Some(handler) = &mut self.end_element_handler {
+                            handler(tag_name);
+                        } else if self.default_handler.is_some()
+                            || self.default_handler_expand.is_some()
+                        {
+                            self.report_default(enc, data, pos, next);
+                        }
                     }
 
                     // Pop namespace bindings (tag_level already decremented)
@@ -3696,7 +3771,10 @@ impl Parser {
             // Track event position and byte count for handler callbacks
             self.event_pos = pos;
             self.event_cur_byte_count = (next - pos) as i32;
-            self.event_cur_data = data[pos..next].to_vec();
+            self.event_cur_data_start = pos;
+            self.event_cur_data_end = next;
+            self.event_cur_data_valid = true;
+            self.event_cur_data.clear();
 
             match tok {
                 XmlTok::CdataSectClose => {
@@ -3968,34 +4046,46 @@ impl Parser {
     /// - Expand predefined entity references (&amp; &lt; &gt; &apos; &quot;)
     /// - Expand internal general entity references
     /// - Normalize whitespace (\t, \n, \r, \r\n → space)
-    fn extract_attrs<E: Encoding>(
-        &self,
+    fn extract_attrs_reuse<E: Encoding>(
+        attr_buf: &mut Vec<(String, String)>,
         enc: &E,
         data: &[u8],
         start: usize,
         _end: usize,
-    ) -> Result<Vec<(String, String)>, XmlError> {
-        let max_atts = 64; // reasonable upper bound
+        dtd: &DtdState,
+    ) -> Result<(), XmlError> {
+        let max_atts = 64;
         let (_, atts) = xmltok_impl::get_atts(enc, data, start, max_atts);
-        let mut result = Vec::with_capacity(atts.len());
-        let mut seen = std::collections::HashSet::new();
-        for attr in &atts {
-            let name = std::str::from_utf8(&data[attr.name..attr.name_end])
-                .unwrap_or("")
-                .to_string();
+        let attr_count = atts.len();
+        // Reuse existing String allocations where possible
+        for (i, attr) in atts.iter().enumerate() {
+            let name_str = std::str::from_utf8(&data[attr.name..attr.name_end])
+                .unwrap_or("");
             let raw_value = &data[attr.value_ptr..attr.value_end];
-            // Always normalize: expand refs, normalize \t \n \r → space
-            let value =
-                Self::normalize_attribute_value(raw_value, &self.dtd.borrow().internal_entities);
-            if value.contains('\x00') {
+            // Check for duplicates against already-processed attrs
+            for j in 0..i {
+                if attr_buf[j].0 == name_str {
+                    attr_buf.truncate(attr_count);
+                    return Err(XmlError::DuplicateAttribute);
+                }
+            }
+            if i < attr_buf.len() {
+                // Reuse existing String capacity
+                attr_buf[i].0.clear();
+                attr_buf[i].0.push_str(name_str);
+                Self::normalize_attribute_value_into(raw_value, &dtd.internal_entities, &mut attr_buf[i].1);
+            } else {
+                let value = Self::normalize_attribute_value(raw_value, &dtd.internal_entities);
+                attr_buf.push((name_str.to_string(), value));
+            }
+            if attr_buf[i].1.contains('\x00') {
+                attr_buf.truncate(attr_count);
                 return Err(XmlError::RecursiveEntityRef);
             }
-            if !seen.insert(name.clone()) {
-                return Err(XmlError::DuplicateAttribute);
-            }
-            result.push((name, value));
         }
-        Ok(result)
+        // Truncate excess entries from previous use (keep capacity)
+        attr_buf.truncate(attr_count);
+        Ok(())
     }
 
     /// Check if an entity value contains a cycle (recursive entity references)
@@ -4051,6 +4141,10 @@ impl Parser {
         raw: &[u8],
         entities: &std::collections::HashMap<String, String>,
     ) -> String {
+        // Fast path: if no special characters, just return as-is (avoids allocation)
+        if !raw.iter().any(|&b| b == b'&' || b == b'\r' || b == b'\n' || b == b'\t') {
+            return std::str::from_utf8(raw).unwrap_or_default().to_string();
+        }
         let mut result = Vec::with_capacity(raw.len());
         let mut i = 0;
         while i < raw.len() {
@@ -4139,6 +4233,25 @@ impl Parser {
             }
         }
         String::from_utf8(result).unwrap_or_default()
+    }
+
+    /// Like normalize_attribute_value but writes into an existing String, reusing its capacity.
+    fn normalize_attribute_value_into(
+        raw: &[u8],
+        entities: &std::collections::HashMap<String, String>,
+        out: &mut String,
+    ) {
+        out.clear();
+        // Fast path: if no special characters, just copy as-is
+        if !raw.iter().any(|&b| b == b'&' || b == b'\r' || b == b'\n' || b == b'\t') {
+            if let Ok(s) = std::str::from_utf8(raw) {
+                out.push_str(s);
+            }
+            return;
+        }
+        // Slow path: delegate to the allocating version and swap
+        let result = Self::normalize_attribute_value(raw, entities);
+        out.push_str(&result);
     }
 
     /// Report a processing instruction — corresponds to C reportProcessingInstruction()
@@ -4894,6 +5007,7 @@ impl Parser {
         // Reset event byte count and data (only valid during handler callbacks)
         self.event_cur_byte_count = 0;
         self.event_cur_data.clear();
+        self.event_cur_data_valid = false;
 
         // If the parser was suspended during a handler callback, update position
         // tracking only up to the event point (not beyond), save remaining data,
@@ -5899,7 +6013,14 @@ impl Parser {
 
     /// Default current markup to the default handler
     pub fn default_current(&mut self) {
-        // Forward the current event's raw bytes to the default handler
+        // Lazily populate event_cur_data from parse_data if needed
+        if self.event_cur_data.is_empty() && self.event_cur_data_valid {
+            let start = self.event_cur_data_start;
+            let end = self.event_cur_data_end;
+            if end > start && end <= self.parse_data.len() {
+                self.event_cur_data = self.parse_data[start..end].to_vec();
+            }
+        }
         if !self.event_cur_data.is_empty() {
             let data = self.event_cur_data.clone();
             if let Some(handler) = &mut self.default_handler_expand {

@@ -168,22 +168,22 @@ For a complete example of C code using the library, see [`expat-ffi/examples/bas
 
 ## Performance
 
-Benchmarks comparing `expat-rust` against C libexpat 2.7.5 (Apple M-series, `cargo bench`):
+Benchmarks comparing `expat-rust` against C libexpat 2.7.5 (Apple M-series, `cargo bench` with LTO). Criterion.rs runs 100 samples per benchmark, each containing thousands of auto-calibrated iterations — sub-microsecond timings are the median of hundreds of thousands of runs.
 
 | Scenario | expat-rust | libexpat (C) | Ratio |
 |----------|-----------|-------------|-------|
-| Small document (44 B) | 871 ns | 1.04 us | **0.84x (Rust faster)** |
-| Medium document (~10 KB) | 268 us | 80 us | 3.4x |
-| 100 KB document | 2.67 ms | 898 us | 3.0x |
-| 100 MB document | 847 ms | 282 ms | 3.0x |
-| 100 MB streamed (8 KB chunks) | 835 ms | 347 ms | 2.4x |
-| Deep nesting (100 levels) | 23.6 us | 20.7 us | 1.1x |
-| Many attributes (25/elem) | 40.4 us | 18.2 us | 2.2x |
-| Error detection | 731 ns | 998 ns | **0.73x (Rust faster)** |
+| Small document (44 B) | 498 ns | 1.04 us | **0.48x (Rust 2x faster)** |
+| Medium document (~10 KB) | 134 us | 81 us | 1.65x |
+| 100 KB document | 1.38 ms | 904 us | 1.53x |
+| 100 MB document | 438 ms | 278 ms | 1.58x |
+| 100 MB streamed (8 KB chunks) | 428 ms | 345 ms | 1.24x |
+| Deep nesting (100 levels) | 7.9 us | 21.0 us | **0.38x (Rust 2.7x faster)** |
+| Many attributes (25/elem) | 23.1 us | 17.9 us | 1.29x |
+| Error detection | 445 ns | 1.01 us | **0.44x (Rust 2.3x faster)** |
 
-**Summary**: Rust is faster for small documents and error detection. C is 2-3x faster on larger documents with many elements and attributes. The gap is due to Rust's use of standard `String`/`Vec`/`HashMap` (with per-element allocation) versus C's pooled arena allocator. This is a deliberate trade-off: we chose memory safety and idiomatic Rust data structures over matching C's allocation performance. The ratio stays constant as document size scales — Rust processes 100 MB in under a second.
+**Summary**: Rust is significantly faster for small documents, deep nesting, and error detection. C is 1.2-1.6x faster on larger element-heavy documents. The gap comes from Rust's use of standard `String`/`Vec`/`HashMap` (with per-element allocation) versus C's pooled arena allocator. This is a deliberate trade-off: we chose memory safety and idiomatic Rust data structures over matching C's allocation strategy. In streaming mode (how expat is designed to be used), Rust is within 24% of C.
 
-**Memory**: Both parsers stream with O(1) memory. In chunked mode (8 KB chunks), both use ~35 KB regardless of total document size (memory does scale with nesting depth, but not with document length). See [docs/benchmarks.md](docs/benchmarks.md) for full memory analysis.
+**Memory**: Both parsers stream with O(1) memory. In chunked mode (8 KB chunks), both use ~33 KB regardless of total document size (memory does scale with nesting depth, but not with document length). Rust is within 7% of C in streaming memory usage. See [docs/benchmarks.md](docs/benchmarks.md) for full memory analysis.
 
 Run benchmarks yourself:
 
