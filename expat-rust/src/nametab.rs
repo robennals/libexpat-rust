@@ -1,3 +1,14 @@
+// Rust port of expat's nametab.h
+//
+// Original C code:
+//   Copyright (c) 2000 Clark Cooper <coopercc@users.sourceforge.net>
+//   Copyright (c) 2017 Sebastian Pipping <sebastian@pipping.org>
+//
+// Rust port:
+//   Copyright (c) 2026 Rob Ennals <rob@ennals.org>
+//
+// Licensed under the MIT license (see LICENSE file).
+
 //! Name-character lookup tables, ported from expat's `nametab.h`.
 //!
 //! Contains a bitmap ([`NAMING_BITMAP`]) and page-index arrays ([`NMSTRT_PAGES`],

@@ -1,3 +1,51 @@
+// Rust port of expat's xmlparse.c
+//
+// Original C code:
+//   Copyright (c) 1997-2000 Thai Open Source Software Center Ltd
+//   Copyright (c) 2000      Clark Cooper <coopercc@users.sourceforge.net>
+//   Copyright (c) 2000-2006 Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
+//   Copyright (c) 2001-2002 Greg Stein <gstein@users.sourceforge.net>
+//   Copyright (c) 2002-2016 Karl Waclawek <karl@waclawek.net>
+//   Copyright (c) 2005-2009 Steven Solie <steven@solie.ca>
+//   Copyright (c) 2016      Eric Rahm <erahm@mozilla.com>
+//   Copyright (c) 2016-2026 Sebastian Pipping <sebastian@pipping.org>
+//   Copyright (c) 2016      Gaurav <g.gupta@samsung.com>
+//   Copyright (c) 2016      Thomas Beutlich <tc@tbeu.de>
+//   Copyright (c) 2016      Gustavo Grieco <gustavo.grieco@imag.fr>
+//   Copyright (c) 2016      Pascal Cuoq <cuoq@trust-in-soft.com>
+//   Copyright (c) 2016      Ed Schouten <ed@nuxi.nl>
+//   Copyright (c) 2017-2022 Rhodri James <rhodri@wildebeest.org.uk>
+//   Copyright (c) 2017      Václav Slavík <vaclav@slavik.io>
+//   Copyright (c) 2017      Viktor Szakats <commit@vsz.me>
+//   Copyright (c) 2017      Chanho Park <chanho61.park@samsung.com>
+//   Copyright (c) 2017      Rolf Eike Beer <eike@sf-mail.de>
+//   Copyright (c) 2017      Hans Wennborg <hans@chromium.org>
+//   Copyright (c) 2018      Anton Maklakov <antmak.pub@gmail.com>
+//   Copyright (c) 2018      Benjamin Peterson <benjamin@python.org>
+//   Copyright (c) 2018      Marco Maggi <marco.maggi-ipsu@poste.it>
+//   Copyright (c) 2018      Mariusz Zaborski <oshogbo@vexillium.org>
+//   Copyright (c) 2019      David Loffredo <loffredo@steptools.com>
+//   Copyright (c) 2019-2020 Ben Wagner <bungeman@chromium.org>
+//   Copyright (c) 2019      Vadim Zeitlin <vadim@zeitlins.org>
+//   Copyright (c) 2021      Donghee Na <donghee.na@python.org>
+//   Copyright (c) 2022      Samanta Navarro <ferivoz@riseup.net>
+//   Copyright (c) 2022      Jeffrey Walton <noloader@gmail.com>
+//   Copyright (c) 2022      Jann Horn <jannh@google.com>
+//   Copyright (c) 2022      Sean McBride <sean@rogue-research.com>
+//   Copyright (c) 2023      Owain Davies <owaind@bath.edu>
+//   Copyright (c) 2023-2024 Sony Corporation / Snild Dolkow <snild@sony.com>
+//   Copyright (c) 2024-2025 Berkay Eren Ürün <berkay.ueruen@siemens.com>
+//   Copyright (c) 2024      Hanno Böck <hanno@gentoo.org>
+//   Copyright (c) 2025      Matthew Fernandez <matthew.fernandez@gmail.com>
+//   Copyright (c) 2025      Atrem Borovik <polzovatellllk@gmail.com>
+//   Copyright (c) 2025      Alfonso Gregory <gfunni234@gmail.com>
+//   Copyright (c) 2026      Rosen Penev <rosenp@gmail.com>
+//
+// Rust port:
+//   Copyright (c) 2026 Rob Ennals <rob@ennals.org>
+//
+// Licensed under the MIT license (see LICENSE file).
+
 //! Main XML parser module — the public API of expat-rust.
 //!
 //! Ported from expat's `xmlparse.c` with 1:1 function correspondence. Create a
@@ -14,9 +62,100 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+// UTF-8 encoding constants
+const UTF8_2BYTE_MIN: u8 = 0xC0;
+const UTF8_3BYTE_MIN: u8 = 0xE0;
+const UTF8_4BYTE_MIN: u8 = 0xF0;
+const UTF8_MAX_LEAD: u8 = 0xF8;
+const UTF8_CONTINUATION_MASK: u8 = 0xC0;
+const UTF8_CONTINUATION_VALUE: u8 = 0x80;
+
+/// Byte Order Mark sequences
+const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+const UTF16_BE_BOM: [u8; 2] = [0xFE, 0xFF];
+const UTF16_LE_BOM: [u8; 2] = [0xFF, 0xFE];
+
+// XML whitespace / control character constants
+const XML_TAB: u8 = 0x09;
+const XML_NEWLINE: u8 = 0x0A;
+const XML_CARRIAGE_RETURN: u8 = 0x0D;
+const XML_SPACE: u8 = 0x20;
+
 /// Custom encoding converter: maps multi-byte sequences to Unicode codepoints.
 /// Returns negative on error.
 type CustomEncodingConverter = Rc<dyn Fn(&[u8]) -> i32>;
+
+/// Amplification tracking — shared between parent and child parsers via Rc<RefCell<>>.
+/// Matches C's `ACCOUNTING` struct. The root parser creates this; child parsers
+/// created via `create_external_entity_parser` share the same instance so that
+/// byte counts accumulate across the entire parse tree.
+///
+/// This is the core of billion laughs attack protection: it tracks the ratio of
+/// bytes produced (entity expansion output) to bytes consumed (direct input).
+/// When the ratio exceeds `maximum_amplification_factor` and total output exceeds
+/// `activation_threshold_bytes`, parsing is aborted with `AmplificationLimitBreach`.
+#[derive(Debug, Clone)]
+pub struct Accounting {
+    /// Bytes of direct (original document) input processed
+    pub count_bytes_direct: u64,
+    /// Bytes of indirect (entity expansion) output produced
+    pub count_bytes_indirect: u64,
+    /// Maximum allowed amplification factor (default 100.0)
+    pub maximum_amplification_factor: f32,
+    /// Amplification limits only activate after this many bytes of output (default 8MB)
+    pub activation_threshold_bytes: u64,
+}
+
+impl Default for Accounting {
+    fn default() -> Self {
+        Accounting {
+            count_bytes_direct: 0,
+            count_bytes_indirect: 0,
+            maximum_amplification_factor: 100.0, // C: EXPAT_BILLION_LAUGHS_ATTACK_PROTECTION_MAXIMUM_AMPLIFICATION_DEFAULT
+            activation_threshold_bytes: 8_388_608, // C: 8 MiB, 2^23
+        }
+    }
+}
+
+impl Accounting {
+    /// Compute the current amplification factor.
+    /// Matches C's `accountingGetCurrentAmplification`.
+    fn get_current_amplification(&self) -> f32 {
+        // Length of shortest possible entity include: <!ENTITY a SYSTEM 'b'>
+        const LEN_OF_SHORTEST_INCLUDE: u64 = 22;
+        let count_bytes_output = self.count_bytes_direct + self.count_bytes_indirect;
+        if self.count_bytes_direct > 0 {
+            count_bytes_output as f32 / self.count_bytes_direct as f32
+        } else {
+            (LEN_OF_SHORTEST_INCLUDE + self.count_bytes_indirect) as f32
+                / LEN_OF_SHORTEST_INCLUDE as f32
+        }
+    }
+
+    /// Record bytes and check if the amplification is tolerable.
+    /// Matches C's `accountingDiffTolerated`.
+    /// `is_direct`: true for direct input on the root parser, false for entity expansion.
+    /// Returns true if tolerated, false if amplification limit breached.
+    fn diff_tolerated(&mut self, bytes_more: u64, is_direct: bool) -> bool {
+        let target = if is_direct {
+            &mut self.count_bytes_direct
+        } else {
+            &mut self.count_bytes_indirect
+        };
+
+        // Detect and avoid integer overflow
+        if *target > u64::MAX - bytes_more {
+            return false;
+        }
+        *target += bytes_more;
+
+        let count_bytes_output = self.count_bytes_direct + self.count_bytes_indirect;
+        let amplification_factor = self.get_current_amplification();
+
+        (count_bytes_output < self.activation_threshold_bytes)
+            || (amplification_factor <= self.maximum_amplification_factor)
+    }
+}
 
 /// DTD state — shared between parent and child DTD parsers via Rc<RefCell<>>.
 /// Matches C's `DTD` struct which is shared via `m_dtd` pointer.
@@ -314,6 +453,34 @@ pub struct AttrInfo {
     pub value_end: i64,
 }
 
+/// SAX-style callback handlers registered by the user.
+#[derive(Default)]
+struct Handlers {
+    start_element: Option<StartElementHandler>,
+    end_element: Option<EndElementHandler>,
+    character_data: Option<CharacterDataHandler>,
+    processing_instruction: Option<ProcessingInstructionHandler>,
+    comment: Option<CommentHandler>,
+    start_cdata_section: Option<CdataSectionHandler>,
+    end_cdata_section: Option<CdataSectionHandler>,
+    default: Option<DefaultHandler>,
+    default_expand: Option<DefaultHandler>,
+    start_doctype_decl: Option<StartDoctypeDeclHandler>,
+    end_doctype_decl: Option<EndDoctypeDeclHandler>,
+    element_decl: Option<ElementDeclHandler>,
+    attlist_decl: Option<AttlistDeclHandler>,
+    xml_decl: Option<XmlDeclHandler>,
+    entity_decl: Option<EntityDeclHandler>,
+    unparsed_entity_decl: Option<UnparsedEntityDeclHandler>,
+    notation_decl: Option<NotationDeclHandler>,
+    start_namespace_decl: Option<NamespaceDeclHandler>,
+    end_namespace_decl: Option<NamespaceDeclEndHandler>,
+    not_standalone: Option<NotStandaloneHandler>,
+    external_entity_ref: Option<ExternalEntityRefHandler>,
+    skipped_entity: Option<SkippedEntityHandler>,
+    unknown_encoding: Option<UnknownEncodingHandler>,
+}
+
 /// A streaming XML parser with SAX-style callback handlers.
 ///
 /// Create with [`Parser::new`] (or [`Parser::new_ns`] for namespace support),
@@ -355,10 +522,8 @@ pub struct Parser {
     /// If true, conflicts with XML declaration encoding are ignored
     protocol_encoding_set: bool,
     /// Enable namespace processing
-    #[allow(dead_code)]
     ns_enabled: bool,
     /// Namespace separator character
-    #[allow(dead_code)]
     ns_separator: char,
     /// Element nesting depth
     tag_level: u32,
@@ -396,8 +561,14 @@ pub struct Parser {
     byte_offset: u64,
     /// Number of bytes in the current event token (set during handler callbacks)
     event_cur_byte_count: i32,
-    /// Raw bytes of the current event token (for XML_DefaultCurrent)
+    /// Raw bytes of the current event token (for XML_DefaultCurrent).
+    /// Lazily populated: only filled when `default_current()` is called.
     event_cur_data: Vec<u8>,
+    /// Start/end positions of current event token in parse_data, for lazy event_cur_data.
+    event_cur_data_start: usize,
+    event_cur_data_end: usize,
+    /// If true, event_cur_data_start/end refer to parse_data and can be used to lazily populate event_cur_data.
+    event_cur_data_valid: bool,
     /// Pending byte from incomplete UTF-16 code unit across chunk boundaries
     utf16_pending_byte: Option<u8>,
     /// Pending bytes for custom encoding multi-byte sequences split across parse() calls
@@ -412,6 +583,8 @@ pub struct Parser {
     current_attlist_attr: Option<String>,
     /// Set of currently open (being expanded) entities for recursion detection
     open_entities: std::collections::HashSet<String>,
+    /// Reusable buffer for extracted attributes (avoids per-element allocation)
+    attr_buf: Vec<(String, String)>,
     /// During entity expansion, the entity reference text (e.g., "&entity;") for XML_GetInputContext
     entity_reference_context: Option<Vec<u8>>,
     /// Current entity name being declared in DTD (for GeneralEntityName → EntityValue flow)
@@ -436,7 +609,7 @@ pub struct Parser {
     /// Number of explicitly specified attributes in the most recent start element
     n_specified_atts: i32,
     /// Index of the ID-type attribute in the most recent start element (-1 if none)
-    id_att_index: i32,
+    id_att_index: Option<usize>,
     /// Current ATTLIST attribute type being processed
     current_attlist_type: Option<String>,
     /// Whether to call external entity handler even without DOCTYPE
@@ -447,10 +620,9 @@ pub struct Parser {
     is_param_entity: bool,
     /// Whether this parser is a subordinate (child) parser — cannot be reset
     pub is_subordinate: bool,
-    /// Billion laughs: maximum amplification factor (0.0 = use default)
-    billion_laughs_max_amplification: f32,
-    /// Billion laughs: activation threshold in bytes (0 = use default)
-    billion_laughs_activation_threshold: u64,
+    /// Amplification tracking — shared between parent and child parsers.
+    /// The root parser creates this; children inherit the same Rc.
+    accounting: Rc<RefCell<Accounting>>,
     /// XML role state machine for prolog parsing
     prolog_state: XmlRoleState,
     /// Current element declaration name being processed
@@ -479,30 +651,8 @@ pub struct Parser {
     /// Matches C's m_reenter / triggerReenter mechanism.
     reenter: bool,
 
-    // Handler fields
-    start_element_handler: Option<StartElementHandler>,
-    end_element_handler: Option<EndElementHandler>,
-    character_data_handler: Option<CharacterDataHandler>,
-    processing_instruction_handler: Option<ProcessingInstructionHandler>,
-    comment_handler: Option<CommentHandler>,
-    start_cdata_section_handler: Option<CdataSectionHandler>,
-    end_cdata_section_handler: Option<CdataSectionHandler>,
-    default_handler: Option<DefaultHandler>,
-    default_handler_expand: Option<DefaultHandler>,
-    start_doctype_decl_handler: Option<StartDoctypeDeclHandler>,
-    end_doctype_decl_handler: Option<EndDoctypeDeclHandler>,
-    element_decl_handler: Option<ElementDeclHandler>,
-    attlist_decl_handler: Option<AttlistDeclHandler>,
-    xml_decl_handler: Option<XmlDeclHandler>,
-    entity_decl_handler: Option<EntityDeclHandler>,
-    unparsed_entity_decl_handler: Option<UnparsedEntityDeclHandler>,
-    notation_decl_handler: Option<NotationDeclHandler>,
-    start_namespace_decl_handler: Option<NamespaceDeclHandler>,
-    end_namespace_decl_handler: Option<NamespaceDeclEndHandler>,
-    not_standalone_handler: Option<NotStandaloneHandler>,
-    external_entity_ref_handler: Option<ExternalEntityRefHandler>,
-    skipped_entity_handler: Option<SkippedEntityHandler>,
-    unknown_encoding_handler: Option<UnknownEncodingHandler>,
+    /// SAX-style callback handlers
+    handlers: Handlers,
     /// Custom encoding map from unknown encoding handler (for transcode of non-UTF-8 content)
     pub custom_encoding_map: Option<[i32; 256]>,
     /// Custom encoding converter set by the FFI layer when a C unknown-encoding
@@ -510,14 +660,9 @@ pub struct Parser {
     pub custom_encoding_converter: Option<CustomEncodingConverter>,
 }
 
-impl Parser {
-    /// Create a new XML parser, optionally specifying the document encoding.
-    ///
-    /// Pass `None` to auto-detect encoding from the XML declaration or BOM.
-    /// Returns `None` only if the encoding name is unsupported.
-    /// Equivalent to `XML_ParserCreate` in the C API.
-    pub fn new(encoding: Option<&str>) -> Option<Parser> {
-        Some(Parser {
+impl Default for Parser {
+    fn default() -> Self {
+        Parser {
             buffer: Vec::new(),
             get_buffer_data: Vec::new(),
             suspended_data: Vec::new(),
@@ -531,7 +676,7 @@ impl Parser {
             position_pos: 0,
             event_pos: 0,
             is_final: false,
-            encoding_name: encoding.map(|s| s.to_string()),
+            encoding_name: None,
             protocol_encoding_set: false,
             ns_enabled: false,
             ns_separator: '\0',
@@ -553,6 +698,9 @@ impl Parser {
             byte_offset: 0,
             event_cur_byte_count: 0,
             event_cur_data: Vec::new(),
+            event_cur_data_start: 0,
+            event_cur_data_end: 0,
+            event_cur_data_valid: false,
             utf16_pending_byte: None,
             custom_encoding_pending: Vec::new(),
             encoding_needs_transcode: false,
@@ -560,6 +708,7 @@ impl Parser {
             current_attlist_element: None,
             current_attlist_attr: None,
             open_entities: std::collections::HashSet::new(),
+            attr_buf: Vec::new(),
             entity_reference_context: None,
             current_entity_name: None,
             current_is_param_entity: false,
@@ -574,14 +723,13 @@ impl Parser {
             current_notation_system_id: None,
             current_notation_public_id: None,
             n_specified_atts: 0,
-            id_att_index: -1,
+            id_att_index: None,
             current_attlist_type: None,
             foreign_dtd: false,
             parsing_foreign_dtd: false,
             is_param_entity: false,
             is_subordinate: false,
-            billion_laughs_max_amplification: 0.0,
-            billion_laughs_activation_threshold: 0,
+            accounting: Rc::new(RefCell::new(Accounting::default())),
             prolog_state: XmlRoleState::new(),
             current_element_decl_name: None,
             content_model_stack: Vec::new(),
@@ -593,147 +741,39 @@ impl Parser {
             content_start_tag_level: 0,
             open_internal_entities: Vec::new(),
             reenter: false,
-            start_element_handler: None,
-            end_element_handler: None,
-            character_data_handler: None,
-            processing_instruction_handler: None,
-            comment_handler: None,
-            start_cdata_section_handler: None,
-            end_cdata_section_handler: None,
-            default_handler: None,
-            default_handler_expand: None,
-            start_doctype_decl_handler: None,
-            end_doctype_decl_handler: None,
-            element_decl_handler: None,
-            attlist_decl_handler: None,
-            xml_decl_handler: None,
-            entity_decl_handler: None,
-            unparsed_entity_decl_handler: None,
-            notation_decl_handler: None,
-            start_namespace_decl_handler: None,
-            end_namespace_decl_handler: None,
-            not_standalone_handler: None,
-            external_entity_ref_handler: None,
-            skipped_entity_handler: None,
-            unknown_encoding_handler: None,
+            handlers: Handlers::default(),
             custom_encoding_map: None,
             custom_encoding_converter: None,
-        })
+        }
+    }
+}
+
+impl Parser {
+    /// Create a new XML parser, optionally specifying the document encoding.
+    ///
+    /// Pass `None` to auto-detect encoding from the XML declaration or BOM.
+    /// Returns `None` only if the encoding name is unsupported.
+    /// Equivalent to `XML_ParserCreate` in the C API.
+    pub fn new(encoding: Option<&str>) -> Option<Parser> {
+        let mut p = Parser::default();
+        p.encoding_name = encoding.map(|s| s.to_string());
+        Some(p)
     }
 
     /// Create a new parser with namespace processing
     ///
     /// Equivalent to XML_ParserCreateNS(encoding, sep) in C
     pub fn new_ns(encoding: Option<&str>, separator: char) -> Option<Parser> {
-        let mut ns_map = HashMap::new();
+        let mut p = Parser::default();
+        p.encoding_name = encoding.map(|s| s.to_string());
+        p.ns_enabled = true;
+        p.ns_separator = separator;
         // "xml" prefix is implicitly bound to the XML namespace
-        ns_map.insert(
+        p.ns_map.insert(
             "xml".to_string(),
             "http://www.w3.org/XML/1998/namespace".to_string(),
         );
-
-        Some(Parser {
-            buffer: Vec::new(),
-            get_buffer_data: Vec::new(),
-            suspended_data: Vec::new(),
-            suspended_is_final: false,
-            error_code: XmlError::None,
-            parsing_state: ParsingState::Initialized,
-            processor: Processor::PrologInit,
-            line_number: 1,
-            column_number: 0,
-            parse_data: Vec::new(),
-            position_pos: 0,
-            event_pos: 0,
-            is_final: false,
-            encoding_name: encoding.map(|s| s.to_string()),
-            protocol_encoding_set: false,
-            ns_enabled: true,
-            ns_separator: separator,
-            tag_level: 0,
-            hash_salt: 0,
-            base_uri: None,
-            param_entity_parsing: ParamEntityParsing::Never,
-            reparse_deferral_enabled: false,
-            tag_stack: Vec::new(),
-            tag_triplet_flags: Vec::new(),
-            seen_root: false,
-            root_closed: false,
-            seen_xml_decl: false,
-            detected_encoding: None,
-            dtd: Rc::new(RefCell::new(DtdState::default())),
-            original_bytes_before_chunk: 0,
-            original_chunk: Vec::new(),
-            original_chunk_bom_len: 0,
-            byte_offset: 0,
-            event_cur_byte_count: 0,
-            event_cur_data: Vec::new(),
-            utf16_pending_byte: None,
-            custom_encoding_pending: Vec::new(),
-            encoding_needs_transcode: false,
-            encoding_detection_buf: Vec::new(),
-            current_attlist_element: None,
-            current_attlist_attr: None,
-            open_entities: std::collections::HashSet::new(),
-            entity_reference_context: None,
-            current_entity_name: None,
-            current_is_param_entity: false,
-            current_entity_system_id: None,
-            current_entity_public_id: None,
-            current_entity_notation: None,
-            doctype_name: None,
-            doctype_system_id: None,
-            doctype_public_id: None,
-            doctype_handler_called: false,
-            current_notation_name: None,
-            current_notation_system_id: None,
-            current_notation_public_id: None,
-            n_specified_atts: 0,
-            id_att_index: -1,
-            current_attlist_type: None,
-            foreign_dtd: false,
-            parsing_foreign_dtd: false,
-            is_param_entity: false,
-            is_subordinate: false,
-            billion_laughs_max_amplification: 0.0,
-            billion_laughs_activation_threshold: 0,
-            prolog_state: XmlRoleState::new(),
-            current_element_decl_name: None,
-            content_model_stack: Vec::new(),
-            last_content_model: None,
-            group_connectors: Vec::new(),
-            ns_bindings: Vec::new(),
-            ns_map,
-            ns_triplets: false,
-            content_start_tag_level: 0,
-            open_internal_entities: Vec::new(),
-            reenter: false,
-            start_element_handler: None,
-            end_element_handler: None,
-            character_data_handler: None,
-            processing_instruction_handler: None,
-            comment_handler: None,
-            start_cdata_section_handler: None,
-            end_cdata_section_handler: None,
-            default_handler: None,
-            default_handler_expand: None,
-            start_doctype_decl_handler: None,
-            end_doctype_decl_handler: None,
-            element_decl_handler: None,
-            attlist_decl_handler: None,
-            xml_decl_handler: None,
-            entity_decl_handler: None,
-            unparsed_entity_decl_handler: None,
-            notation_decl_handler: None,
-            start_namespace_decl_handler: None,
-            end_namespace_decl_handler: None,
-            not_standalone_handler: None,
-            external_entity_ref_handler: None,
-            skipped_entity_handler: None,
-            unknown_encoding_handler: None,
-            custom_encoding_map: None,
-            custom_encoding_converter: None,
-        })
+        Some(p)
     }
 
     /// Reset the parser for reuse
@@ -791,29 +831,7 @@ impl Parser {
         self.ns_triplets = false;
         self.content_start_tag_level = 0;
         // Clear all handlers (matches C parserInit behavior)
-        self.start_element_handler = None;
-        self.end_element_handler = None;
-        self.character_data_handler = None;
-        self.processing_instruction_handler = None;
-        self.comment_handler = None;
-        self.start_cdata_section_handler = None;
-        self.end_cdata_section_handler = None;
-        self.default_handler = None;
-        self.default_handler_expand = None;
-        self.start_doctype_decl_handler = None;
-        self.end_doctype_decl_handler = None;
-        self.element_decl_handler = None;
-        self.attlist_decl_handler = None;
-        self.xml_decl_handler = None;
-        self.entity_decl_handler = None;
-        self.unparsed_entity_decl_handler = None;
-        self.notation_decl_handler = None;
-        self.start_namespace_decl_handler = None;
-        self.end_namespace_decl_handler = None;
-        self.not_standalone_handler = None;
-        self.external_entity_ref_handler = None;
-        self.skipped_entity_handler = None;
-        self.unknown_encoding_handler = None;
+        self.handlers = Handlers::default();
         self.custom_encoding_map = None;
         self.custom_encoding_converter = None;
         true
@@ -1068,7 +1086,7 @@ impl Parser {
                                         self.detected_encoding = Some(upper);
                                     } else if !is_known_encoding(&upper) {
                                         let mut handled = false;
-                                        if let Some(handler) = &mut self.unknown_encoding_handler {
+                                        if let Some(handler) = &mut self.handlers.unknown_encoding {
                                             handled = handler(enc_name);
                                         }
                                         if !handled {
@@ -1079,7 +1097,7 @@ impl Parser {
                             }
 
                             // Call xml_decl_handler if set
-                            if let Some(handler) = &mut self.xml_decl_handler {
+                            if let Some(handler) = &mut self.handlers.xml_decl {
                                 let version_str = if info.version_end > info.version_start {
                                     std::str::from_utf8(
                                         &decl_data[info.version_start..info.version_end],
@@ -1190,80 +1208,6 @@ impl Parser {
         self.do_prolog(&enc, data, s, end, have_more, false)
     }
 
-    /// Initial prolog processor — detects encoding and transitions to prolog processor
-    #[allow(dead_code)]
-    fn prolog_init_processor(&mut self) {
-        // For now, skip encoding detection and go straight to prolog
-        // In a full implementation, this would call initializeEncoding()
-        self.processor = Processor::Prolog;
-        self.prolog_processor();
-    }
-
-    /// External entity init processor — port of C externalEntityInitProcessor3.
-    /// Uses content tokenizer to detect text declaration. On text decl, processes it
-    /// via prolog. On any other token, sets tag_level=1 and delegates to content.
-    /// On Partial/None, buffers and waits for more data.
-    #[allow(dead_code)]
-    fn external_entity_init_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            return;
-        }
-
-        let enc = xmltok::Utf8Encoding;
-        let tok_result = xmltok_impl::content_tok(&enc, &data, 0, data.len());
-
-        match tok_result {
-            Ok(TokenResult { token, next_pos }) => match token {
-                XmlTok::XmlDecl => {
-                    // Text declaration found — process via prolog then content
-                    // C: processXmlDecl(parser, 1, start, next)
-                    // Use prolog processor to handle the text declaration
-                    self.processor = Processor::Prolog;
-                    self.buffer = data;
-                    self.prolog_processor();
-                }
-                XmlTok::Partial | XmlTok::PartialChar => {
-                    if !self.is_final {
-                        // Need more data — stay in init processor
-                        self.buffer = data;
-                    } else {
-                        self.error_code = if token == XmlTok::Partial {
-                            XmlError::UnclosedToken
-                        } else {
-                            XmlError::PartialChar
-                        };
-                    }
-                }
-                XmlTok::Bom => {
-                    // Skip BOM, stay in init processor for next token
-                    if next_pos < data.len() {
-                        self.buffer = data[next_pos..].to_vec();
-                    }
-                    // Stay in ExternalEntity processor
-                }
-                _ => {
-                    // Not a text declaration — transition to content mode
-                    // C: parser->m_processor = externalEntityContentProcessor;
-                    //    parser->m_tagLevel = 1;
-                    //    return externalEntityContentProcessor(parser, start, end, endPtr);
-                    self.processor = Processor::Content;
-                    // tag_level already set at parser creation time
-                    // Pass ALL data to content processor (it will re-tokenize from start)
-                    self.buffer = data;
-                    self.content_processor();
-                }
-            },
-            Err(_err_pos) => {
-                if !self.is_final {
-                    self.buffer = data;
-                } else {
-                    self.error_code = XmlError::InvalidToken;
-                }
-            }
-        }
-    }
-
     /// Convert XmlTok to xmlrole::Token
     fn xmltok_to_role_token(tok: XmlTok) -> xmlrole::Token {
         match tok {
@@ -1298,81 +1242,6 @@ impl Parser {
             XmlTok::CloseParenPlus => xmlrole::Token::CloseParenPlus,
             // All other tokens map to None
             _ => xmlrole::Token::None,
-        }
-    }
-
-    /// Prolog processor — corresponds to C prologProcessor()
-    /// Uses do_prolog with the tokenizer+role architecture to parse the XML prolog
-    #[allow(dead_code)]
-    fn prolog_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            if self.is_final && !self.seen_root && !self.parsing_foreign_dtd {
-                self.error_code = XmlError::NoElements;
-            }
-            // For foreign DTD parsing, check not_standalone when DTD parsing is complete
-            // even if buffer is empty (already consumed) but is_final is true
-            if self.is_final
-                && self.parsing_foreign_dtd
-                && self.dtd.borrow().has_param_entity_refs
-                && !self.dtd.borrow().standalone
-            {
-                if let Some(handler) = &mut self.not_standalone_handler {
-                    if !handler() {
-                        self.error_code = XmlError::NotStandalone;
-                    }
-                }
-            }
-            return;
-        }
-        let have_more = !self.is_final;
-        let enc = xmltok::Utf8Encoding;
-
-        let (error, next_pos) = self.do_prolog(&enc, &data, 0, data.len(), have_more, false);
-
-        if error != XmlError::None {
-            self.error_code = error;
-            return;
-        }
-
-        // If processor switched to Content, process remaining data as content
-        if self.processor == Processor::Content && next_pos < data.len() {
-            let remaining = &data[next_pos..];
-            // If Latin-1 encoding was detected, transcode remaining bytes
-            self.buffer = if is_latin1_encoding(self.detected_encoding.as_deref()) {
-                transcode_latin1_to_utf8(remaining)
-            } else {
-                remaining.to_vec()
-            };
-            self.content_processor();
-            return;
-        }
-
-        // Keep unprocessed data for next parse call
-        if next_pos < data.len() {
-            let remaining = &data[next_pos..];
-            self.buffer = if is_latin1_encoding(self.detected_encoding.as_deref()) {
-                transcode_latin1_to_utf8(remaining)
-            } else {
-                remaining.to_vec()
-            };
-        } else if self.is_final {
-            if self.processor != Processor::Content && !self.seen_root && !self.parsing_foreign_dtd
-            {
-                // All prolog data consumed, is_final, but no root element seen
-                self.error_code = XmlError::NoElements;
-            }
-            // For foreign DTD parsing, check not_standalone when DTD parsing is complete
-            if self.parsing_foreign_dtd
-                && self.dtd.borrow().has_param_entity_refs
-                && !self.dtd.borrow().standalone
-            {
-                if let Some(handler) = &mut self.not_standalone_handler {
-                    if !handler() {
-                        self.error_code = XmlError::NotStandalone;
-                    }
-                }
-            }
         }
     }
 
@@ -1521,7 +1390,8 @@ impl Parser {
                         }
                         // Report the entire ignore section to the default handler
                         // The section runs from 'pos' (start of <![) to 'ignore_end' (after ]]>)
-                        if self.default_handler.is_some() || self.default_handler_expand.is_some() {
+                        if self.handlers.default.is_some() || self.handlers.default_expand.is_some()
+                        {
                             self.report_default(&xmltok::Utf8Encoding, data, pos, ignore_end);
                         }
                         pos = ignore_end;
@@ -1549,7 +1419,7 @@ impl Parser {
                     // In C libexpat, reportDefault() is called for prolog tokens
                     // ONLY when no specific handler consumed them.
                     // Must happen BEFORE InternalEntity check (C does this before reenter return).
-                    if (self.default_handler.is_some() || self.default_handler_expand.is_some())
+                    if (self.handlers.default.is_some() || self.handlers.default_expand.is_some())
                         && !suppress_default
                     {
                         self.report_default(&xmltok::Utf8Encoding, data, pos, next);
@@ -1630,111 +1500,7 @@ impl Parser {
         tok_text: &[u8],
     ) -> (XmlError, bool) {
         match role {
-            Role::XmlDecl => {
-                // Process XML declaration — matches C processXmlDecl()
-                if self.seen_xml_decl || self.seen_root {
-                    return (XmlError::MisplacedXmlPi, false);
-                }
-                self.seen_xml_decl = true;
-
-                let decl_data = &data[pos..next];
-                // For external entities (non-document), parse as text declaration
-                // For document entities, parse as full XML declaration
-                let is_text_decl = !self.prolog_state.document_entity;
-
-                // If parsing fails as a declaration, try accepting it for text declarations
-                let parse_result = xmltok::parse_xml_decl(decl_data, is_text_decl);
-                let parse_result = if parse_result.is_err() && is_text_decl {
-                    // Text declarations are more lenient - try parsing as XML decl then ignore version requirement
-                    xmltok::parse_xml_decl(decl_data, false)
-                } else {
-                    parse_result
-                };
-
-                match parse_result {
-                    Ok(info) => {
-                        // Extract version string
-                        let version_str = if info.version_end > info.version_start {
-                            Some(
-                                std::str::from_utf8(
-                                    &decl_data[info.version_start..info.version_end],
-                                )
-                                .unwrap_or("")
-                                .to_string(),
-                            )
-                        } else {
-                            None
-                        };
-
-                        // Extract encoding string
-                        let encoding_str = if info.encoding_end > info.encoding_start {
-                            Some(
-                                std::str::from_utf8(
-                                    &decl_data[info.encoding_start..info.encoding_end],
-                                )
-                                .unwrap_or("")
-                                .to_string(),
-                            )
-                        } else {
-                            None
-                        };
-
-                        // Handle standalone (C sets parser->m_dtd->standalone)
-                        if info.standalone == Some(true) {
-                            self.dtd.borrow_mut().standalone = true;
-                        }
-
-                        // Call xml_decl_handler if set — suppress default only if handler IS called
-                        let handler_called = self.xml_decl_handler.is_some();
-                        if let Some(handler) = &mut self.xml_decl_handler {
-                            handler(
-                                version_str.as_deref(),
-                                encoding_str.as_deref(),
-                                info.standalone.map(|s| if s { 1 } else { 0 }),
-                            );
-                        }
-
-                        // Check encoding — matches C processXmlDecl logic
-                        // If protocol_encoding_set (XML_SetEncoding was called), skip encoding conflict checks
-                        // The C code skips these checks entirely if m_protocolEncodingName is set
-                        if !self.protocol_encoding_set {
-                            if let Some(ref enc_name) = encoding_str {
-                                let upper = enc_name.to_uppercase();
-                                if upper == "UTF-16" || upper == "UTF-16LE" || upper == "UTF-16BE" {
-                                    // UTF-16 declared in what we're parsing as UTF-8 → error
-                                    if self.detected_encoding.is_none() {
-                                        self.event_pos = pos;
-                                        return (XmlError::IncorrectEncoding, false);
-                                    }
-                                } else if upper == "ISO-8859-1"
-                                    || upper == "LATIN1"
-                                    || upper.starts_with("ISO-8859-")
-                                    || upper == "WINDOWS-1252"
-                                {
-                                    // Latin-1 or similar single-byte encoding
-                                    // Set detected_encoding so parse() transcodes subsequent data
-                                    self.detected_encoding = Some(upper.clone());
-                                } else if !is_known_encoding(&upper) {
-                                    // Unknown encoding — try handler
-                                    let mut handled = false;
-                                    if let Some(handler) = &mut self.unknown_encoding_handler {
-                                        handled = handler(enc_name);
-                                    }
-                                    if !handled {
-                                        self.event_pos = pos;
-                                        return (XmlError::UnknownEncoding, false);
-                                    }
-                                }
-                            }
-                        }
-                        (XmlError::None, handler_called)
-                    }
-                    Err(_err_pos) => {
-                        self.event_pos = pos;
-                        (XmlError::XmlDecl, false)
-                    }
-                }
-            }
+            Role::XmlDecl => self.handle_role_xml_decl(data, pos, next),
             Role::DoctypeName => {
                 // Store DOCTYPE name for subsequent roles
                 let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
@@ -1742,37 +1508,17 @@ impl Parser {
                 self.doctype_system_id = None;
                 self.doctype_public_id = None;
                 self.doctype_handler_called = false;
-                (XmlError::None, self.start_doctype_decl_handler.is_some())
+                (XmlError::None, self.handlers.start_doctype_decl.is_some())
             }
             Role::DoctypePublicId | Role::EntityPublicId | Role::NotationPublicId => {
-                // Validate public ID characters (matches C normalizePublicId)
-                // tok_text has quotes stripped
-                if !is_valid_public_id(tok_text) {
-                    self.event_pos = pos;
-                    return (XmlError::Publicid, false);
-                }
-                let suppress = if matches!(role, Role::DoctypePublicId) {
-                    self.dtd.borrow_mut().has_param_entity_refs = true;
-                    let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
-                    self.doctype_public_id = Some(pubid);
-                    self.start_doctype_decl_handler.is_some()
-                } else if matches!(role, Role::EntityPublicId) {
-                    let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
-                    self.current_entity_public_id = Some(pubid);
-                    self.entity_decl_handler.is_some()
-                } else {
-                    let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
-                    self.current_notation_public_id = Some(pubid);
-                    self.notation_decl_handler.is_some()
-                };
-                (XmlError::None, suppress)
+                self.handle_role_public_id(role, tok_text, pos)
             }
             Role::DoctypeSystemId => {
                 // DOCTYPE SYSTEM — implies external subset
                 self.dtd.borrow_mut().has_param_entity_refs = true;
                 let sysid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.doctype_system_id = Some(sysid);
-                (XmlError::None, self.start_doctype_decl_handler.is_some())
+                (XmlError::None, self.handlers.start_doctype_decl.is_some())
             }
             Role::EntitySystemId => {
                 // Entity SYSTEM ID — store for current entity
@@ -1781,158 +1527,11 @@ impl Parser {
                 // Mark that we have external entity references (for not_standalone check)
                 // This applies to both parameter entities and general entities with external references
                 self.dtd.borrow_mut().has_param_entity_refs = true;
-                (XmlError::None, self.entity_decl_handler.is_some())
+                (XmlError::None, self.handlers.entity_decl.is_some())
             }
-            Role::DoctypeInternalSubset => {
-                // Internal subset — call start_doctype_decl_handler with has_internal=true
-                let handler_called = self.start_doctype_decl_handler.is_some();
-                if !self.doctype_handler_called {
-                    if let Some(handler) = &mut self.start_doctype_decl_handler {
-                        let name = self.doctype_name.clone().unwrap_or_default();
-                        let sysid = self.doctype_system_id.clone();
-                        let pubid = self.doctype_public_id.clone();
-                        handler(&name, sysid.as_deref(), pubid.as_deref(), true);
-                    }
-                    self.doctype_handler_called = true;
-                }
-                (XmlError::None, handler_called)
-            }
-            Role::DoctypeClose => {
-                // C issue #317: reject ]> inside entity expansion
-                // Entity content cannot close the DOCTYPE declaration
-                if !self.open_internal_entities.is_empty() {
-                    return (XmlError::InvalidToken, false);
-                }
-                // Fire start handler if not already called (DOCTYPE without internal subset)
-                let mut handler_called = false;
-                if !self.doctype_handler_called {
-                    if let Some(handler) = &mut self.start_doctype_decl_handler {
-                        let name = self.doctype_name.clone().unwrap_or_default();
-                        let sysid = self.doctype_system_id.clone();
-                        let pubid = self.doctype_public_id.clone();
-                        handler(&name, sysid.as_deref(), pubid.as_deref(), false);
-                        handler_called = true;
-                    }
-                    self.doctype_handler_called = true;
-                }
-
-                // Load external DTD subset if system ID is present
-                // Matches C: if (parser->m_doctypeSysid || parser->m_useForeignDTD)
-                if self.doctype_system_id.is_some() || self.foreign_dtd {
-                    let had_param_entity_refs = self.dtd.borrow().has_param_entity_refs;
-                    self.dtd.borrow_mut().has_param_entity_refs = true;
-                    // C: if (parser->m_paramEntityParsing && parser->m_externalEntityRefHandler)
-                    // UnlessStandalone with standalone=yes → don't call handler
-                    let should_parse = match self.param_entity_parsing {
-                        ParamEntityParsing::Never => false,
-                        ParamEntityParsing::Always => true,
-                        ParamEntityParsing::UnlessStandalone => !self.dtd.borrow().standalone,
-                    };
-                    if should_parse {
-                        if let Some(handler) = &mut self.external_entity_ref_handler {
-                            let base = self.base_uri.clone();
-                            let sys_id = self.doctype_system_id.clone();
-                            let pub_id = self.doctype_public_id.clone();
-                            self.dtd.borrow_mut().param_entity_read = false;
-                            let ok =
-                                handler("", base.as_deref(), sys_id.as_deref(), pub_id.as_deref());
-                            if !ok {
-                                return (XmlError::ExternalEntityHandling, false);
-                            }
-                            if self.dtd.borrow().param_entity_read {
-                                if !self.dtd.borrow().standalone {
-                                    if let Some(handler) = &mut self.not_standalone_handler {
-                                        if !handler() {
-                                            return (XmlError::NotStandalone, false);
-                                        }
-                                    }
-                                }
-                            } else if self.doctype_system_id.is_none() {
-                                // Foreign DTD but nothing was read — restore
-                                self.dtd.borrow_mut().has_param_entity_refs = had_param_entity_refs;
-                            }
-                        }
-                    }
-                    self.foreign_dtd = false;
-                    // If we didn't load the external DTD (no handler or parsing disabled),
-                    // still need to check not-standalone for docs with external subset
-                    if (self.param_entity_parsing == ParamEntityParsing::Never
-                        || self.external_entity_ref_handler.is_none())
-                        && !self.dtd.borrow().standalone
-                    {
-                        if let Some(handler) = &mut self.not_standalone_handler {
-                            if !handler() {
-                                return (XmlError::NotStandalone, false);
-                            }
-                        }
-                    }
-                } else {
-                    // No external subset — check not-standalone
-                    if self.dtd.borrow().has_param_entity_refs && !self.dtd.borrow().standalone {
-                        if let Some(handler) = &mut self.not_standalone_handler {
-                            if !handler() {
-                                return (XmlError::NotStandalone, false);
-                            }
-                        }
-                    }
-                }
-
-                // End of DOCTYPE
-                if let Some(handler) = &mut self.end_doctype_decl_handler {
-                    handler();
-                    handler_called = true;
-                }
-                // Clear DOCTYPE state
-                self.doctype_name = None;
-                self.doctype_system_id = None;
-                self.doctype_public_id = None;
-                let suppress = handler_called
-                    || self.start_doctype_decl_handler.is_some()
-                    || self.end_doctype_decl_handler.is_some();
-                (XmlError::None, suppress)
-            }
-            Role::InstanceStart => {
-                // If foreign DTD is enabled, call external entity ref handler
-                // with empty context before processing the root element
-                let mut handler_called = false;
-                if self.foreign_dtd {
-                    self.foreign_dtd = false; // Only trigger once
-                    if let Some(handler) = &mut self.external_entity_ref_handler {
-                        let base = self.base_uri.clone();
-                        let ok = handler("", base.as_deref(), None, None);
-                        handler_called = true;
-                        if !ok {
-                            return (XmlError::ExternalEntityHandling, false);
-                        }
-                    }
-                    // C: saves hadParamEntityRefs, sets it true, calls handler.
-                    // After handler, if paramEntityRead is true → keep hasParamEntityRefs.
-                    // If paramEntityRead is false → restore original value.
-                    // We track this via param_entity_read flag set by child parsers.
-                    let had_param_entity_refs = self.dtd.borrow().has_param_entity_refs;
-                    self.dtd.borrow_mut().has_param_entity_refs = true;
-                    // Handler was already called above (line 1505) and may have set param_entity_read
-                    // Check BEFORE clearing it
-                    if self.dtd.borrow().param_entity_read {
-                        // DTD was actually read — keep has_param_entity_refs = true
-                    } else {
-                        // DTD was not read — restore has_param_entity_refs
-                        self.dtd.borrow_mut().has_param_entity_refs = had_param_entity_refs;
-                    }
-                    self.dtd.borrow_mut().param_entity_read = false;
-                    // Check not-standalone after foreign DTD processing
-                    if !self.dtd.borrow().standalone {
-                        if let Some(handler) = &mut self.not_standalone_handler {
-                            if !handler() {
-                                return (XmlError::NotStandalone, false);
-                            }
-                        }
-                    }
-                }
-                // Start of XML instance (root element)
-                self.processor = Processor::Content;
-                (XmlError::None, handler_called)
-            }
+            Role::DoctypeInternalSubset => self.handle_role_doctype_internal_subset(),
+            Role::DoctypeClose => self.handle_role_doctype_close(),
+            Role::InstanceStart => self.handle_role_instance_start(),
             Role::GeneralEntityName => {
                 // General entity declaration
                 let name = std::str::from_utf8(&data[pos..next])
@@ -1940,218 +1539,35 @@ impl Parser {
                     .to_string();
                 self.current_entity_name = Some(name);
                 self.current_is_param_entity = false;
-                (XmlError::None, self.entity_decl_handler.is_some())
+                (XmlError::None, self.handlers.entity_decl.is_some())
             }
-            Role::ParamEntityName => {
-                // PE declaration — store name and mark as param entity
-                let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
-                // C: if entity already exists (duplicate declaration), m_declEntity=NULL
-                let is_new = !self.dtd.borrow().param_entities.contains_key(&name);
-                // Create entry in param_entities (will be updated with value/system_id later)
-                self.dtd
-                    .borrow_mut()
-                    .param_entities
-                    .entry(name.clone())
-                    .or_insert_with(|| ParamEntity {
-                        system_id: None,
-                        public_id: None,
-                        value: None,
-                        is_internal: false,
-                        open: false,
-                    });
-                if is_new {
-                    self.current_entity_name = Some(name);
-                } else {
-                    // Duplicate declaration — set to None (C: m_declEntity=NULL)
-                    self.current_entity_name = None;
-                }
-                self.current_is_param_entity = true;
-                (XmlError::None, self.entity_decl_handler.is_some())
-            }
-            Role::EntityValue => {
-                // Entity value — validate and store
-                // C: doProlog case XML_ROLE_ENTITY_VALUE (xmlparse.c:5625-5670)
-                let mut handler_called = false;
-                // Clone name to avoid borrow conflict with &mut self in store_entity_value
-                let name = self.current_entity_name.clone();
-                let is_pe = self.current_is_param_entity;
-                if let Some(name) = name {
-                    if is_pe {
-                        // PE value → store in param_entities (not internal_entities)
-                        // C: callStoreEntityValue for param entities, then call entityDeclHandler
-                        match self.store_entity_value(tok_text) {
-                            Ok(value) => {
-                                if let Some(pe) =
-                                    self.dtd.borrow_mut().param_entities.get_mut(&name)
-                                {
-                                    pe.value = Some(value.clone());
-                                }
-                                // Call entity declaration handler for PE (matches C xmlparse.c:5638-5644)
-                                if self.dtd.borrow().keep_processing {
-                                    if let Some(handler) = &mut self.entity_decl_handler {
-                                        let base = self.base_uri.clone();
-                                        handler(&name, true, Some(&value), base.as_deref(), None);
-                                        handler_called = true;
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                // Propagate real errors (ExternalEntityHandling, RecursiveEntityRef)
-                                // but not ParamEntityRef (shouldn't happen for PE in external subset)
-                                if e != XmlError::None {
-                                    return (e, false);
-                                }
-                            }
-                        }
-                        return (XmlError::None, handler_called);
-                    }
-                    // tok_text has quotes already stripped by extract_token_text
-                    match self.store_entity_value(tok_text) {
-                        Ok(value) => {
-                            self.dtd
-                                .borrow_mut()
-                                .internal_entities
-                                .insert(name.clone(), value.clone());
-                            // Call entity declaration handler (matches C)
-                            // Only if DTD processing hasn't been stopped by undefined PEs
-                            if self.dtd.borrow().keep_processing {
-                                if let Some(handler) = &mut self.entity_decl_handler {
-                                    let base = self.base_uri.clone();
-                                    handler(&name, false, Some(&value), base.as_deref(), None);
-                                    handler_called = true;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            self.event_pos = pos;
-                            return (e, false);
-                        }
-                    }
-                }
-                (XmlError::None, handler_called)
-            }
-            Role::EntityComplete => {
-                // End of entity declaration
-                // If entity has a system ID, store as external entity
-                let mut handler_called = false;
-                if let (Some(ref name), Some(_)) =
-                    (&self.current_entity_name, &self.current_entity_system_id)
-                {
-                    // Call entity declaration handler for external entity
-                    // Only if DTD processing hasn't been stopped by undefined PEs
-                    if self.dtd.borrow().keep_processing {
-                        if let Some(handler) = &mut self.entity_decl_handler {
-                            let base = self.base_uri.clone();
-                            let sys_id = self.current_entity_system_id.clone();
-                            handler(name, false, None, base.as_deref(), sys_id.as_deref());
-                            handler_called = true;
-                        }
-                    }
-                    if self.current_is_param_entity {
-                        // Store system_id/public_id on the PE entry
-                        if let Some(pe) = self.dtd.borrow_mut().param_entities.get_mut(name) {
-                            pe.system_id = self.current_entity_system_id.take();
-                            pe.public_id = self.current_entity_public_id.take();
-                        }
-                    } else {
-                        self.dtd.borrow_mut().external_entities.insert(
-                            name.clone(),
-                            (
-                                self.current_entity_system_id.take(),
-                                self.current_entity_public_id.take(),
-                            ),
-                        );
-                    }
-                }
-                self.current_entity_name = None;
-                self.current_entity_system_id = None;
-                self.current_entity_public_id = None;
-                self.current_entity_notation = None;
-                (XmlError::None, handler_called)
-            }
+            Role::ParamEntityName => self.handle_role_param_entity_name(tok_text),
+            Role::EntityValue => self.handle_role_entity_value(tok_text, pos),
+            Role::EntityComplete => self.handle_role_entity_complete(),
             Role::NotationName => {
                 // Notation declaration — save name
                 let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.current_notation_name = Some(name);
                 self.current_notation_system_id = None;
                 self.current_notation_public_id = None;
-                (XmlError::None, self.notation_decl_handler.is_some())
+                (XmlError::None, self.handlers.notation_decl.is_some())
             }
-            Role::NotationSystemId => {
-                // Notation SYSTEM ID
-                let sysid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
-                self.current_notation_system_id = Some(sysid);
-                // Call notation handler
-                let handler_called = self.notation_decl_handler.is_some();
-                if let Some(handler) = &mut self.notation_decl_handler {
-                    let name = self.current_notation_name.clone().unwrap_or_default();
-                    let base = self.base_uri.clone();
-                    let sysid = self.current_notation_system_id.clone().unwrap_or_default();
-                    let pubid = self.current_notation_public_id.clone();
-                    handler(&name, base.as_deref(), &sysid, pubid.as_deref());
-                }
-                (XmlError::None, handler_called)
-            }
-            Role::NotationNoSystemId => {
-                // Notation with PUBLIC but no SYSTEM — call handler
-                let handler_called = self.notation_decl_handler.is_some();
-                if let Some(handler) = &mut self.notation_decl_handler {
-                    let name = self.current_notation_name.clone().unwrap_or_default();
-                    let base = self.base_uri.clone();
-                    let pubid = self.current_notation_public_id.clone();
-                    handler(&name, base.as_deref(), "", pubid.as_deref());
-                }
-                (XmlError::None, handler_called)
-            }
-            Role::EntityNotationName => {
-                // Entity NDATA notation name — store notation and call unparsed entity handler
-                let notation = std::str::from_utf8(tok_text).unwrap_or("").to_string();
-                self.current_entity_notation = Some(notation);
-
-                // Mark this entity as unparsed (has NDATA notation)
-                if let Some(ref name) = self.current_entity_name {
-                    self.dtd.borrow_mut().unparsed_entities.insert(name.clone());
-                }
-
-                // Call unparsed entity handler if set (matches C XML_ROLE_ENTITY_NOTATION_NAME)
-                let mut handler_called = false;
-                if let Some(ref name) = self.current_entity_name {
-                    if self.dtd.borrow().keep_processing {
-                        if let Some(handler) = &mut self.unparsed_entity_decl_handler {
-                            let base = self.base_uri.clone();
-                            let sys_id = self.current_entity_system_id.clone();
-                            let pub_id = self.current_entity_public_id.clone();
-                            handler(
-                                name,
-                                base.as_deref(),
-                                sys_id.as_deref().unwrap_or(""),
-                                pub_id.as_deref(),
-                            );
-                            handler_called = true;
-                        } else if let Some(handler) = &mut self.entity_decl_handler {
-                            // Fallback to entity_decl_handler if unparsed handler not set (matches C)
-                            let base = self.base_uri.clone();
-                            let sys_id = self.current_entity_system_id.clone();
-                            handler(name, false, None, base.as_deref(), sys_id.as_deref());
-                            handler_called = true;
-                        }
-                    }
-                }
-                (XmlError::None, handler_called)
-            }
+            Role::NotationSystemId => self.handle_role_notation_system_id(tok_text),
+            Role::NotationNoSystemId => self.handle_role_notation_no_system_id(),
+            Role::EntityNotationName => self.handle_role_entity_notation_name(tok_text),
             Role::AttlistElementName => {
                 // Start of ATTLIST declaration — remember element name
                 let elem_name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.current_attlist_element = Some(elem_name);
                 self.current_attlist_attr = None;
-                (XmlError::None, self.attlist_decl_handler.is_some())
+                (XmlError::None, self.handlers.attlist_decl.is_some())
             }
             Role::AttributeName => {
                 // Attribute in ATTLIST — remember attribute name
                 let attr_name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.current_attlist_attr = Some(attr_name);
                 self.current_attlist_type = None;
-                (XmlError::None, self.attlist_decl_handler.is_some())
+                (XmlError::None, self.handlers.attlist_decl.is_some())
             }
             Role::AttributeTypeCdata
             | Role::AttributeTypeId
@@ -2160,126 +1576,27 @@ impl Parser {
             | Role::AttributeTypeEntity
             | Role::AttributeTypeEntities
             | Role::AttributeTypeNmtoken
-            | Role::AttributeTypeNmtokens => {
-                // Store the attribute type for ID tracking
-                let type_name = match role {
-                    Role::AttributeTypeCdata => "CDATA",
-                    Role::AttributeTypeId => "ID",
-                    Role::AttributeTypeIdref => "IDREF",
-                    Role::AttributeTypeIdrefs => "IDREFS",
-                    Role::AttributeTypeEntity => "ENTITY",
-                    Role::AttributeTypeEntities => "ENTITIES",
-                    Role::AttributeTypeNmtoken => "NMTOKEN",
-                    Role::AttributeTypeNmtokens => "NMTOKENS",
-                    _ => "CDATA",
-                };
-                self.current_attlist_type = Some(type_name.to_string());
-                if let (Some(ref elem), Some(ref attr)) =
-                    (&self.current_attlist_element, &self.current_attlist_attr)
-                {
-                    self.dtd
-                        .borrow_mut()
-                        .attlist_types
-                        .entry(elem.clone())
-                        .or_default()
-                        .insert(attr.clone(), type_name.to_string());
-                }
-                // Suppress default handler for all attribute type roles — they're part of ATTLIST handling
-                let suppress = self.attlist_decl_handler.is_some();
-                (XmlError::None, suppress)
-            }
-            Role::AttributeEnumValue => {
-                // Enumeration value — append to type string like (one|two|three)
-                let val = std::str::from_utf8(tok_text).unwrap_or("").to_string();
-                if let Some(ref mut type_str) = self.current_attlist_type {
-                    if type_str.ends_with('(') {
-                        type_str.push_str(&val);
-                    } else {
-                        type_str.push('|');
-                        type_str.push_str(&val);
-                    }
-                } else {
-                    self.current_attlist_type = Some(format!("({}", val));
-                }
-                (XmlError::None, self.attlist_decl_handler.is_some())
-            }
-            Role::AttributeNotationValue => {
-                // NOTATION enum value — append to type string like NOTATION(foo|bar)
-                let val = std::str::from_utf8(tok_text).unwrap_or("").to_string();
-                if let Some(ref mut type_str) = self.current_attlist_type {
-                    if type_str.ends_with('(') {
-                        type_str.push_str(&val);
-                    } else {
-                        type_str.push('|');
-                        type_str.push_str(&val);
-                    }
-                } else {
-                    self.current_attlist_type = Some(format!("NOTATION({}", val));
-                }
-                (XmlError::None, self.attlist_decl_handler.is_some())
-            }
-            Role::ImpliedAttributeValue => {
-                // #IMPLIED — no default value, not required
-                let handler_called = self.attlist_decl_handler.is_some();
-                if let Some(handler) = &mut self.attlist_decl_handler {
-                    let elem = self.current_attlist_element.clone().unwrap_or_default();
-                    let attr = self.current_attlist_attr.clone().unwrap_or_default();
-                    let mut type_str = self
-                        .current_attlist_type
-                        .clone()
-                        .unwrap_or_else(|| "CDATA".to_string());
-                    if type_str.contains('(') && !type_str.ends_with(')') {
-                        type_str.push(')');
-                    }
-                    handler(&elem, &attr, &type_str, None, None, false);
-                }
-                (XmlError::None, handler_called)
-            }
-            Role::RequiredAttributeValue => {
-                // #REQUIRED — no default value, is required
-                let handler_called = self.attlist_decl_handler.is_some();
-                if let Some(handler) = &mut self.attlist_decl_handler {
-                    let elem = self.current_attlist_element.clone().unwrap_or_default();
-                    let attr = self.current_attlist_attr.clone().unwrap_or_default();
-                    let mut type_str = self
-                        .current_attlist_type
-                        .clone()
-                        .unwrap_or_else(|| "CDATA".to_string());
-                    if type_str.contains('(') && !type_str.ends_with(')') {
-                        type_str.push(')');
-                    }
-                    handler(&elem, &attr, &type_str, None, None, true);
-                }
-                (XmlError::None, handler_called)
-            }
+            | Role::AttributeTypeNmtokens => self.handle_role_attlist_att_type(role),
+            Role::AttributeEnumValue => self.handle_role_attlist_enum_value(tok_text, false),
+            Role::AttributeNotationValue => self.handle_role_attlist_enum_value(tok_text, true),
+            Role::ImpliedAttributeValue => self.handle_role_implied_attr(),
+            Role::RequiredAttributeValue => self.handle_role_required_attr(),
             Role::ElementName => {
                 // Start of ELEMENT declaration
                 let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
                 self.current_element_decl_name = Some(name);
                 self.content_model_stack.clear();
                 self.group_connectors.clear();
-                (XmlError::None, self.element_decl_handler.is_some())
+                (XmlError::None, self.handlers.element_decl.is_some())
             }
-            Role::ContentEmpty | Role::ContentAny => {
-                // ELEMENT name EMPTY or ANY — call handler immediately
-                let handler_called = self.element_decl_handler.is_some();
-                if let Some(ref name) = self.current_element_decl_name.clone() {
-                    // For EMPTY/ANY, serialize an empty model
-                    self.serialize_content_model();
-                    if let Some(handler) = &mut self.element_decl_handler {
-                        handler(name, "");
-                    }
-                }
-                self.current_element_decl_name = None;
-                (XmlError::None, handler_called)
-            }
+            Role::ContentEmpty | Role::ContentAny => self.handle_role_element_empty_or_any(),
             Role::ContentPcdata => {
                 // C: modifies existing scaffold entry's type to Mixed
                 // (does NOT push a new node — just changes the current group's type)
                 if let Some(node) = self.content_model_stack.last_mut() {
                     node.content_type = ContentType::Mixed;
                 }
-                (XmlError::None, self.element_decl_handler.is_some())
+                (XmlError::None, self.handlers.element_decl.is_some())
             }
             Role::GroupOpen => {
                 self.group_connectors.push(0);
@@ -2289,62 +1606,41 @@ impl Parser {
                     children: Vec::new(),
                     name: None,
                 });
-                (XmlError::None, self.element_decl_handler.is_some())
+                (XmlError::None, self.handlers.element_decl.is_some())
             }
-            Role::GroupSequence => {
-                if let Some(last) = self.group_connectors.last_mut() {
-                    if *last == 2 {
-                        return (XmlError::Syntax, false);
-                    }
-                    *last = 1;
-                }
-                (XmlError::None, self.element_decl_handler.is_some())
-            }
-            Role::GroupChoice => {
-                if let Some(last) = self.group_connectors.last_mut() {
-                    if *last == 1 {
-                        return (XmlError::Syntax, false);
-                    }
-                    *last = 2;
-                }
-                if let Some(node) = self.content_model_stack.last_mut() {
-                    if node.content_type == ContentType::Seq {
-                        node.content_type = ContentType::Choice;
-                    }
-                }
-                (XmlError::None, self.element_decl_handler.is_some())
-            }
+            Role::GroupSequence => self.handle_role_group_sequence(),
+            Role::GroupChoice => self.handle_role_group_choice(),
             Role::ContentElement => {
                 self.add_content_element(tok_text, ContentQuant::None);
-                (XmlError::None, self.element_decl_handler.is_some())
+                (XmlError::None, self.handlers.element_decl.is_some())
             }
             Role::ContentElementOpt => {
                 self.add_content_element(tok_text, ContentQuant::Opt);
-                (XmlError::None, self.element_decl_handler.is_some())
+                (XmlError::None, self.handlers.element_decl.is_some())
             }
             Role::ContentElementRep => {
                 self.add_content_element(tok_text, ContentQuant::Rep);
-                (XmlError::None, self.element_decl_handler.is_some())
+                (XmlError::None, self.handlers.element_decl.is_some())
             }
             Role::ContentElementPlus => {
                 self.add_content_element(tok_text, ContentQuant::Plus);
-                (XmlError::None, self.element_decl_handler.is_some())
+                (XmlError::None, self.handlers.element_decl.is_some())
             }
             Role::GroupClose => {
                 self.close_content_group(ContentQuant::None);
-                (XmlError::None, self.element_decl_handler.is_some())
+                (XmlError::None, self.handlers.element_decl.is_some())
             }
             Role::GroupCloseOpt => {
                 self.close_content_group(ContentQuant::Opt);
-                (XmlError::None, self.element_decl_handler.is_some())
+                (XmlError::None, self.handlers.element_decl.is_some())
             }
             Role::GroupCloseRep => {
                 self.close_content_group(ContentQuant::Rep);
-                (XmlError::None, self.element_decl_handler.is_some())
+                (XmlError::None, self.handlers.element_decl.is_some())
             }
             Role::GroupClosePlus => {
                 self.close_content_group(ContentQuant::Plus);
-                (XmlError::None, self.element_decl_handler.is_some())
+                (XmlError::None, self.handlers.element_decl.is_some())
             }
             Role::Pi => {
                 // Processing instruction — suppress default (report_processing_instruction handles it)
@@ -2360,76 +1656,8 @@ impl Parser {
                 }
                 (XmlError::None, true)
             }
-            Role::DefaultAttributeValue => {
-                // ATTLIST default value — validate and store
-                if let Err(e) = self.validate_attribute_value(tok_text) {
-                    self.event_pos = pos;
-                    return (e, false);
-                }
-                let handler_called = self.attlist_decl_handler.is_some();
-                if let (Some(ref elem), Some(ref attr)) =
-                    (&self.current_attlist_element, &self.current_attlist_attr)
-                {
-                    let dtd_ref = self.dtd.borrow();
-                    let entities = dtd_ref.internal_entities.clone();
-                    let skip_unknown = dtd_ref.has_param_entity_refs && !dtd_ref.standalone;
-                    drop(dtd_ref);
-                    let value = Self::normalize_attribute_value(tok_text, &entities, skip_unknown);
-                    {
-                        let mut dtd = self.dtd.borrow_mut();
-                        let defaults = dtd.attlist_defaults.entry(elem.clone()).or_default();
-                        if !defaults.iter().any(|(n, _)| n == attr) {
-                            defaults.push((attr.clone(), value.clone()));
-                        }
-                    }
-                    if let Some(handler) = &mut self.attlist_decl_handler {
-                        let mut type_str = self
-                            .current_attlist_type
-                            .clone()
-                            .unwrap_or_else(|| "CDATA".to_string());
-                        if type_str.contains('(') && !type_str.ends_with(')') {
-                            type_str.push(')');
-                        }
-                        handler(elem, attr, &type_str, Some(&value), None, false);
-                    }
-                }
-                (XmlError::None, handler_called)
-            }
-            Role::FixedAttributeValue => {
-                // ATTLIST #FIXED value — validate and store
-                if let Err(e) = self.validate_attribute_value(tok_text) {
-                    self.event_pos = pos;
-                    return (e, false);
-                }
-                let handler_called = self.attlist_decl_handler.is_some();
-                if let (Some(ref elem), Some(ref attr)) =
-                    (&self.current_attlist_element, &self.current_attlist_attr)
-                {
-                    let dtd_ref = self.dtd.borrow();
-                    let entities = dtd_ref.internal_entities.clone();
-                    let skip_unknown = dtd_ref.has_param_entity_refs && !dtd_ref.standalone;
-                    drop(dtd_ref);
-                    let value = Self::normalize_attribute_value(tok_text, &entities, skip_unknown);
-                    {
-                        let mut dtd = self.dtd.borrow_mut();
-                        let defaults = dtd.attlist_defaults.entry(elem.clone()).or_default();
-                        if !defaults.iter().any(|(n, _)| n == attr) {
-                            defaults.push((attr.clone(), value.clone()));
-                        }
-                    }
-                    if let Some(handler) = &mut self.attlist_decl_handler {
-                        let mut type_str = self
-                            .current_attlist_type
-                            .clone()
-                            .unwrap_or_else(|| "CDATA".to_string());
-                        if type_str.contains('(') && !type_str.ends_with(')') {
-                            type_str.push(')');
-                        }
-                        handler(elem, attr, &type_str, Some(&value), None, false);
-                    }
-                }
-                (XmlError::None, handler_called)
-            }
+            Role::DefaultAttributeValue => self.handle_role_default_attr_value(tok_text, pos),
+            Role::FixedAttributeValue => self.handle_role_fixed_attr_value(tok_text, pos),
             Role::Error => {
                 // Syntax error from role state machine
                 match tok {
@@ -2442,194 +1670,30 @@ impl Parser {
                 // Ignore section: <![IGNORE[ ... ]]> — suppress default (already called internally)
                 // NOTE: This handler is now unreachable since do_prolog handles IgnoreSect specially
                 // before calling handle_prolog_role. Keeping for safety but should not be reached.
-                if self.default_handler.is_some() || self.default_handler_expand.is_some() {
+                if self.handlers.default.is_some() || self.handlers.default_expand.is_some() {
                     self.report_default(&xmltok::Utf8Encoding, data, pos, next);
                 }
                 let (result, _) = self.do_ignore_section(data, next, data.len());
                 (result, true)
             }
             Role::ParamEntityRef | Role::InnerParamEntityRef => {
-                // PE reference — shared logic matching C's fall-through at lines 5996-6092
-                let is_between_decl = matches!(role, Role::ParamEntityRef);
-                self.dtd.borrow_mut().has_param_entity_refs = true;
-                let mut handler_called = false;
-                // C uses break statements to skip the not_standalone check.
-                // We use this flag to track whether to run it (only when falling through).
-                let mut check_not_standalone = true;
-
-                if self.param_entity_parsing == ParamEntityParsing::Never {
-                    let standalone = self.dtd.borrow().standalone;
-                    self.dtd.borrow_mut().keep_processing = standalone;
-                    // C: falls through to not_standalone check
-                } else {
-                    // Extract entity name from %name; token
-                    let pe_name = if data.len() > pos && data[pos] == b'%' {
-                        data[pos + 1..]
-                            .iter()
-                            .position(|&b| b == b';')
-                            .and_then(|semi| {
-                                std::str::from_utf8(&data[pos + 1..pos + 1 + semi])
-                                    .ok()
-                                    .map(|s| s.to_string())
-                            })
-                    } else {
-                        None
-                    };
-
-                    if let Some(name) = pe_name {
-                        let pe = self.dtd.borrow().param_entities.get(&name).cloned();
-
-                        if let Some(pe) = pe {
-                            // C: entity->open check for recursion
-                            if pe.open {
-                                return (XmlError::RecursiveEntityRef, false);
-                            }
-                            if let Some(ref value) = pe.value {
-                                // Internal PE — call processEntity (C line 6059)
-                                let entity_bytes = value.as_bytes().to_vec();
-                                if let Some(e) = self.dtd.borrow_mut().param_entities.get_mut(&name)
-                                {
-                                    e.open = true;
-                                }
-                                let result = self.process_entity(&name, &entity_bytes, true);
-                                if result != XmlError::None {
-                                    return (result, false);
-                                }
-                                handler_called = true;
-                                check_not_standalone = false; // C: break at line 6063
-                            } else if pe.system_id.is_some() {
-                                // External PE — call handler
-                                if let Some(handler) = self.external_entity_ref_handler.as_mut() {
-                                    self.dtd.borrow_mut().param_entity_read = false;
-                                    if let Some(e) =
-                                        self.dtd.borrow_mut().param_entities.get_mut(&name)
-                                    {
-                                        e.open = true;
-                                    }
-                                    let base = self.base_uri.clone();
-                                    // C passes 0 (NULL) as context for PE refs
-                                    let ok = handler(
-                                        "",
-                                        base.as_deref(),
-                                        pe.system_id.as_deref(),
-                                        pe.public_id.as_deref(),
-                                    );
-                                    if let Some(e) =
-                                        self.dtd.borrow_mut().param_entities.get_mut(&name)
-                                    {
-                                        e.open = false;
-                                    }
-                                    handler_called = true;
-                                    if !ok {
-                                        return (XmlError::ExternalEntityHandling, false);
-                                    }
-                                    if !self.dtd.borrow().param_entity_read {
-                                        let standalone = self.dtd.borrow().standalone;
-                                        self.dtd.borrow_mut().keep_processing = standalone;
-                                        check_not_standalone = false; // C: break at line 6081
-                                    }
-                                    // paramEntityRead=true → falls through to not_standalone check
-                                } else {
-                                    let standalone = self.dtd.borrow().standalone;
-                                    self.dtd.borrow_mut().keep_processing = standalone;
-                                    check_not_standalone = false; // C: break at line 6085
-                                }
-                            }
-                        } else {
-                            // Entity not found
-                            let standalone = self.dtd.borrow().standalone;
-                            self.dtd.borrow_mut().keep_processing = standalone;
-                            if is_between_decl {
-                                if let Some(skipped_handler) = &mut self.skipped_entity_handler {
-                                    skipped_handler(&name, true);
-                                    handler_called = true;
-                                }
-                            }
-                            check_not_standalone = false; // C: break at line 6051
-                        }
-                    }
-                }
-
-                // C line 6089-6091: not_standalone check only when falling through
-                if check_not_standalone && !self.dtd.borrow().standalone {
-                    if let Some(ns_handler) = &mut self.not_standalone_handler {
-                        if !ns_handler() {
-                            return (XmlError::NotStandalone, false);
-                        }
-                    }
-                }
-
-                (XmlError::None, handler_called)
+                self.handle_role_param_entity_ref(role, data, pos)
             }
             Role::DoctypeNone => {
                 // Suppress default only when startDoctypeDeclHandler is set (matches C)
-                (XmlError::None, self.start_doctype_decl_handler.is_some())
+                (XmlError::None, self.handlers.start_doctype_decl.is_some())
             }
             Role::EntityNone => (
                 XmlError::None,
-                self.dtd.borrow().keep_processing && self.entity_decl_handler.is_some(),
+                self.dtd.borrow().keep_processing && self.handlers.entity_decl.is_some(),
             ),
-            Role::NotationNone => (XmlError::None, self.notation_decl_handler.is_some()),
+            Role::NotationNone => (XmlError::None, self.handlers.notation_decl.is_some()),
             Role::AttlistNone => (
                 XmlError::None,
-                self.dtd.borrow().keep_processing && self.attlist_decl_handler.is_some(),
+                self.dtd.borrow().keep_processing && self.handlers.attlist_decl.is_some(),
             ),
-            Role::ElementNone => (XmlError::None, self.element_decl_handler.is_some()),
-            Role::TextDecl => {
-                // Text declaration in external entity — C: processXmlDecl(parser, 1, s, next)
-                // Parse and validate the text declaration (<?xml version='...' encoding='...'?>)
-                let decl_data = &data[pos..next];
-                match xmltok::parse_xml_decl(decl_data, true) {
-                    Ok(info) => {
-                        // Extract encoding
-                        let encoding_str = if info.encoding_end > info.encoding_start {
-                            Some(
-                                std::str::from_utf8(
-                                    &decl_data[info.encoding_start..info.encoding_end],
-                                )
-                                .unwrap_or("")
-                                .to_string(),
-                            )
-                        } else {
-                            None
-                        };
-                        // Call xml_decl_handler if set (C calls it for text declarations too)
-                        let handler_called = self.xml_decl_handler.is_some();
-                        if let Some(handler) = &mut self.xml_decl_handler {
-                            let version_str = if info.version_end > info.version_start {
-                                Some(
-                                    std::str::from_utf8(
-                                        &decl_data[info.version_start..info.version_end],
-                                    )
-                                    .unwrap_or("")
-                                    .to_string(),
-                                )
-                            } else {
-                                None
-                            };
-                            handler(version_str.as_deref(), encoding_str.as_deref(), None);
-                        }
-                        // Handle encoding switch if declared
-                        if !self.protocol_encoding_set {
-                            if let Some(ref enc_name) = encoding_str {
-                                let upper = enc_name.to_uppercase();
-                                if upper == "ISO-8859-1"
-                                    || upper == "LATIN1"
-                                    || upper.starts_with("ISO-8859-")
-                                    || upper == "WINDOWS-1252"
-                                {
-                                    self.detected_encoding = Some(upper.clone());
-                                }
-                            }
-                        }
-                        (XmlError::None, handler_called)
-                    }
-                    Err(_) => {
-                        self.event_pos = pos;
-                        (XmlError::XmlDecl, false)
-                    }
-                }
-            }
+            Role::ElementNone => (XmlError::None, self.handlers.element_decl.is_some()),
+            Role::TextDecl => self.handle_role_text_decl(data, pos, next),
             _ => {
                 // Other roles — ignore for now
                 (XmlError::None, false)
@@ -2637,74 +1701,877 @@ impl Parser {
         }
     }
 
-    /// CDATA section processor — resumes interrupted CDATA section parsing
-    /// Corresponds to C cdataSectionProcessor()
-    #[allow(dead_code)]
-    fn cdata_section_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            if self.is_final {
-                self.error_code = XmlError::UnclosedCdataSection;
+    /// Handle XML declaration role (corresponds to C processXmlDecl)
+    fn handle_role_xml_decl(&mut self, data: &[u8], pos: usize, next: usize) -> (XmlError, bool) {
+        // Process XML declaration — matches C processXmlDecl()
+        if self.seen_xml_decl || self.seen_root {
+            return (XmlError::MisplacedXmlPi, false);
+        }
+        self.seen_xml_decl = true;
+
+        let decl_data = &data[pos..next];
+        // For external entities (non-document), parse as text declaration
+        // For document entities, parse as full XML declaration
+        let is_text_decl = !self.prolog_state.document_entity;
+
+        // If parsing fails as a declaration, try accepting it for text declarations
+        let parse_result = xmltok::parse_xml_decl(decl_data, is_text_decl);
+        let parse_result = if parse_result.is_err() && is_text_decl {
+            // Text declarations are more lenient - try parsing as XML decl then ignore version requirement
+            xmltok::parse_xml_decl(decl_data, false)
+        } else {
+            parse_result
+        };
+
+        match parse_result {
+            Ok(info) => {
+                // Extract version string
+                let version_str = if info.version_end > info.version_start {
+                    Some(
+                        std::str::from_utf8(&decl_data[info.version_start..info.version_end])
+                            .unwrap_or("")
+                            .to_string(),
+                    )
+                } else {
+                    None
+                };
+
+                // Extract encoding string
+                let encoding_str = if info.encoding_end > info.encoding_start {
+                    Some(
+                        std::str::from_utf8(&decl_data[info.encoding_start..info.encoding_end])
+                            .unwrap_or("")
+                            .to_string(),
+                    )
+                } else {
+                    None
+                };
+
+                // Handle standalone (C sets parser->m_dtd->standalone)
+                if info.standalone == Some(true) {
+                    self.dtd.borrow_mut().standalone = true;
+                }
+
+                // Call xml_decl_handler if set — suppress default only if handler IS called
+                let handler_called = self.handlers.xml_decl.is_some();
+                if let Some(handler) = &mut self.handlers.xml_decl {
+                    handler(
+                        version_str.as_deref(),
+                        encoding_str.as_deref(),
+                        info.standalone.map(|s| if s { 1 } else { 0 }),
+                    );
+                }
+
+                // Check encoding — matches C processXmlDecl logic
+                // If protocol_encoding_set (XML_SetEncoding was called), skip encoding conflict checks
+                // The C code skips these checks entirely if m_protocolEncodingName is set
+                if !self.protocol_encoding_set {
+                    if let Some(ref enc_name) = encoding_str {
+                        let upper = enc_name.to_uppercase();
+                        if upper == "UTF-16" || upper == "UTF-16LE" || upper == "UTF-16BE" {
+                            // UTF-16 declared in what we're parsing as UTF-8 → error
+                            if self.detected_encoding.is_none() {
+                                self.event_pos = pos;
+                                return (XmlError::IncorrectEncoding, false);
+                            }
+                        } else if upper == "ISO-8859-1"
+                            || upper == "LATIN1"
+                            || upper.starts_with("ISO-8859-")
+                            || upper == "WINDOWS-1252"
+                        {
+                            // Latin-1 or similar single-byte encoding
+                            // Set detected_encoding so parse() transcodes subsequent data
+                            self.detected_encoding = Some(upper.clone());
+                        } else if !is_known_encoding(&upper) {
+                            // Unknown encoding — try handler
+                            let mut handled = false;
+                            if let Some(handler) = &mut self.handlers.unknown_encoding {
+                                handled = handler(enc_name);
+                            }
+                            if !handled {
+                                self.event_pos = pos;
+                                return (XmlError::UnknownEncoding, false);
+                            }
+                        }
+                    }
+                }
+                (XmlError::None, handler_called)
             }
-            return;
+            Err(_err_pos) => {
+                self.event_pos = pos;
+                (XmlError::XmlDecl, false)
+            }
         }
-        let have_more = !self.is_final;
-        let enc = xmltok::Utf8Encoding;
+    }
 
-        let (error, next_pos) = self.do_cdata_section(&enc, &data, 0, data.len(), have_more);
+    /// Handle public ID validation for DOCTYPE, entity, and notation declarations
+    /// (corresponds to C normalizePublicId validation)
+    fn handle_role_public_id(
+        &mut self,
+        role: xmlrole::Role,
+        tok_text: &[u8],
+        pos: usize,
+    ) -> (XmlError, bool) {
+        // Validate public ID characters (matches C normalizePublicId)
+        // tok_text has quotes stripped
+        if !is_valid_public_id(tok_text) {
+            self.event_pos = pos;
+            return (XmlError::Publicid, false);
+        }
+        let suppress = if matches!(role, Role::DoctypePublicId) {
+            self.dtd.borrow_mut().has_param_entity_refs = true;
+            let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+            self.doctype_public_id = Some(pubid);
+            self.handlers.start_doctype_decl.is_some()
+        } else if matches!(role, Role::EntityPublicId) {
+            let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+            self.current_entity_public_id = Some(pubid);
+            self.handlers.entity_decl.is_some()
+        } else {
+            let pubid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+            self.current_notation_public_id = Some(pubid);
+            self.handlers.notation_decl.is_some()
+        };
+        (XmlError::None, suppress)
+    }
 
-        if error != XmlError::None {
-            self.error_code = error;
-            return;
+    /// Handle DOCTYPE internal subset declaration
+    fn handle_role_doctype_internal_subset(&mut self) -> (XmlError, bool) {
+        // Internal subset — call start_doctype_decl_handler with has_internal=true
+        let handler_called = self.handlers.start_doctype_decl.is_some();
+        if !self.doctype_handler_called {
+            if let Some(handler) = &mut self.handlers.start_doctype_decl {
+                let name = self.doctype_name.clone().unwrap_or_default();
+                let sysid = self.doctype_system_id.clone();
+                let pubid = self.doctype_public_id.clone();
+                handler(&name, sysid.as_deref(), pubid.as_deref(), true);
+            }
+            self.doctype_handler_called = true;
+        }
+        (XmlError::None, handler_called)
+    }
+
+    /// Handle DOCTYPE close — fires handlers, loads external DTD subset, checks standalone
+    /// (corresponds to C doProlog XML_ROLE_DOCTYPE_CLOSE)
+    fn handle_role_doctype_close(&mut self) -> (XmlError, bool) {
+        // C issue #317: reject ]> inside entity expansion
+        // Entity content cannot close the DOCTYPE declaration
+        if !self.open_internal_entities.is_empty() {
+            return (XmlError::InvalidToken, false);
+        }
+        // Fire start handler if not already called (DOCTYPE without internal subset)
+        let mut handler_called = false;
+        if !self.doctype_handler_called {
+            if let Some(handler) = &mut self.handlers.start_doctype_decl {
+                let name = self.doctype_name.clone().unwrap_or_default();
+                let sysid = self.doctype_system_id.clone();
+                let pubid = self.doctype_public_id.clone();
+                handler(&name, sysid.as_deref(), pubid.as_deref(), false);
+                handler_called = true;
+            }
+            self.doctype_handler_called = true;
         }
 
-        // CDATA section completed — switch back to content processor
+        // Load external DTD subset if system ID is present
+        // Matches C: if (parser->m_doctypeSysid || parser->m_useForeignDTD)
+        if self.doctype_system_id.is_some() || self.foreign_dtd {
+            let had_param_entity_refs = self.dtd.borrow().has_param_entity_refs;
+            self.dtd.borrow_mut().has_param_entity_refs = true;
+            // C: if (parser->m_paramEntityParsing && parser->m_externalEntityRefHandler)
+            // UnlessStandalone with standalone=yes → don't call handler
+            let should_parse = match self.param_entity_parsing {
+                ParamEntityParsing::Never => false,
+                ParamEntityParsing::Always => true,
+                ParamEntityParsing::UnlessStandalone => !self.dtd.borrow().standalone,
+            };
+            if should_parse {
+                if let Some(handler) = &mut self.handlers.external_entity_ref {
+                    let base = self.base_uri.clone();
+                    let sys_id = self.doctype_system_id.clone();
+                    let pub_id = self.doctype_public_id.clone();
+                    self.dtd.borrow_mut().param_entity_read = false;
+                    let ok = handler("", base.as_deref(), sys_id.as_deref(), pub_id.as_deref());
+                    if !ok {
+                        return (XmlError::ExternalEntityHandling, false);
+                    }
+                    if self.dtd.borrow().param_entity_read {
+                        if !self.dtd.borrow().standalone {
+                            if let Some(handler) = &mut self.handlers.not_standalone {
+                                if !handler() {
+                                    return (XmlError::NotStandalone, false);
+                                }
+                            }
+                        }
+                    } else if self.doctype_system_id.is_none() {
+                        // Foreign DTD but nothing was read — restore
+                        self.dtd.borrow_mut().has_param_entity_refs = had_param_entity_refs;
+                    }
+                }
+            }
+            self.foreign_dtd = false;
+            // If we didn't load the external DTD (no handler or parsing disabled),
+            // still need to check not-standalone for docs with external subset
+            if (self.param_entity_parsing == ParamEntityParsing::Never
+                || self.handlers.external_entity_ref.is_none())
+                && !self.dtd.borrow().standalone
+            {
+                if let Some(handler) = &mut self.handlers.not_standalone {
+                    if !handler() {
+                        return (XmlError::NotStandalone, false);
+                    }
+                }
+            }
+        } else {
+            // No external subset — check not-standalone
+            if self.dtd.borrow().has_param_entity_refs && !self.dtd.borrow().standalone {
+                if let Some(handler) = &mut self.handlers.not_standalone {
+                    if !handler() {
+                        return (XmlError::NotStandalone, false);
+                    }
+                }
+            }
+        }
+
+        // End of DOCTYPE
+        if let Some(handler) = &mut self.handlers.end_doctype_decl {
+            handler();
+            handler_called = true;
+        }
+        // Clear DOCTYPE state
+        self.doctype_name = None;
+        self.doctype_system_id = None;
+        self.doctype_public_id = None;
+        let suppress = handler_called
+            || self.handlers.start_doctype_decl.is_some()
+            || self.handlers.end_doctype_decl.is_some();
+        (XmlError::None, suppress)
+    }
+
+    /// Handle instance start — processes foreign DTD and transitions to content processor
+    /// (corresponds to C doProlog XML_ROLE_INSTANCE_START)
+    fn handle_role_instance_start(&mut self) -> (XmlError, bool) {
+        // If foreign DTD is enabled, call external entity ref handler
+        // with empty context before processing the root element
+        let mut handler_called = false;
+        if self.foreign_dtd {
+            self.foreign_dtd = false; // Only trigger once
+            if let Some(handler) = &mut self.handlers.external_entity_ref {
+                let base = self.base_uri.clone();
+                let ok = handler("", base.as_deref(), None, None);
+                handler_called = true;
+                if !ok {
+                    return (XmlError::ExternalEntityHandling, false);
+                }
+            }
+            // C: saves hadParamEntityRefs, sets it true, calls handler.
+            // After handler, if paramEntityRead is true → keep hasParamEntityRefs.
+            // If paramEntityRead is false → restore original value.
+            // We track this via param_entity_read flag set by child parsers.
+            let had_param_entity_refs = self.dtd.borrow().has_param_entity_refs;
+            self.dtd.borrow_mut().has_param_entity_refs = true;
+            // Handler was already called above and may have set param_entity_read
+            // Check BEFORE clearing it
+            if self.dtd.borrow().param_entity_read {
+                // DTD was actually read — keep has_param_entity_refs = true
+            } else {
+                // DTD was not read — restore has_param_entity_refs
+                self.dtd.borrow_mut().has_param_entity_refs = had_param_entity_refs;
+            }
+            self.dtd.borrow_mut().param_entity_read = false;
+            // Check not-standalone after foreign DTD processing
+            if !self.dtd.borrow().standalone {
+                if let Some(handler) = &mut self.handlers.not_standalone {
+                    if !handler() {
+                        return (XmlError::NotStandalone, false);
+                    }
+                }
+            }
+        }
+        // Start of XML instance (root element)
         self.processor = Processor::Content;
-
-        // Process remaining data as content
-        if next_pos < data.len() {
-            self.buffer = data[next_pos..].to_vec();
-            self.content_processor();
-        } else if have_more {
-            // All data consumed, more coming
-        } else if self.is_final {
-            // Final and no more data — check if we're properly closed
-            // (The content processor will handle this)
-        }
+        (XmlError::None, handler_called)
     }
 
-    /// Content processor — corresponds to C contentProcessor()
-    /// Uses do_content with the tokenizer for content parsing.
-    #[allow(dead_code)]
-    fn content_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
-        if data.is_empty() {
-            if self.is_final && !self.seen_root && self.content_start_tag_level == 0 {
-                self.error_code = XmlError::NoElements;
+    /// Handle parameter entity name declaration
+    /// (corresponds to C doProlog XML_ROLE_PARAM_ENTITY_NAME)
+    fn handle_role_param_entity_name(&mut self, tok_text: &[u8]) -> (XmlError, bool) {
+        // PE declaration — store name and mark as param entity
+        let name = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+        // C: if entity already exists (duplicate declaration), m_declEntity=NULL
+        let is_new = !self.dtd.borrow().param_entities.contains_key(&name);
+        // Create entry in param_entities (will be updated with value/system_id later)
+        self.dtd
+            .borrow_mut()
+            .param_entities
+            .entry(name.clone())
+            .or_insert_with(|| ParamEntity {
+                system_id: None,
+                public_id: None,
+                value: None,
+                is_internal: false,
+                open: false,
+            });
+        if is_new {
+            self.current_entity_name = Some(name);
+        } else {
+            // Duplicate declaration — set to None (C: m_declEntity=NULL)
+            self.current_entity_name = None;
+        }
+        self.current_is_param_entity = true;
+        (XmlError::None, self.handlers.entity_decl.is_some())
+    }
+
+    /// Handle entity value — validates and stores internal entity values
+    /// (corresponds to C doProlog XML_ROLE_ENTITY_VALUE, xmlparse.c:5625-5670)
+    fn handle_role_entity_value(&mut self, tok_text: &[u8], pos: usize) -> (XmlError, bool) {
+        // Entity value — validate and store
+        let mut handler_called = false;
+        // Clone name to avoid borrow conflict with &mut self in store_entity_value
+        let name = self.current_entity_name.clone();
+        let is_pe = self.current_is_param_entity;
+        if let Some(name) = name {
+            if is_pe {
+                // PE value → store in param_entities (not internal_entities)
+                // C: callStoreEntityValue for param entities, then call entityDeclHandler
+                match self.store_entity_value(tok_text) {
+                    Ok(value) => {
+                        if let Some(pe) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                            pe.value = Some(value.clone());
+                        }
+                        // Call entity declaration handler for PE (matches C xmlparse.c:5638-5644)
+                        if self.dtd.borrow().keep_processing {
+                            if let Some(handler) = &mut self.handlers.entity_decl {
+                                let base = self.base_uri.clone();
+                                handler(&name, true, Some(&value), base.as_deref(), None);
+                                handler_called = true;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Propagate real errors (ExternalEntityHandling, RecursiveEntityRef)
+                        // but not ParamEntityRef (shouldn't happen for PE in external subset)
+                        if e != XmlError::None {
+                            return (e, false);
+                        }
+                    }
+                }
+                return (XmlError::None, handler_called);
             }
-            return;
+            // tok_text has quotes already stripped by extract_token_text
+            match self.store_entity_value(tok_text) {
+                Ok(value) => {
+                    self.dtd
+                        .borrow_mut()
+                        .internal_entities
+                        .insert(name.clone(), value.clone());
+                    // Call entity declaration handler (matches C)
+                    // Only if DTD processing hasn't been stopped by undefined PEs
+                    if self.dtd.borrow().keep_processing {
+                        if let Some(handler) = &mut self.handlers.entity_decl {
+                            let base = self.base_uri.clone();
+                            handler(&name, false, Some(&value), base.as_deref(), None);
+                            handler_called = true;
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.event_pos = pos;
+                    return (e, false);
+                }
+            }
         }
-        let have_more = !self.is_final;
-        let enc = xmltok::Utf8Encoding;
-        let stl = self.content_start_tag_level;
+        (XmlError::None, handler_called)
+    }
 
-        let (error, next_pos) = self.do_content(stl, &enc, &data, 0, data.len(), have_more, false);
+    /// Handle entity complete — stores external entity info and fires handler
+    /// (corresponds to C doProlog XML_ROLE_ENTITY_COMPLETE)
+    fn handle_role_entity_complete(&mut self) -> (XmlError, bool) {
+        // End of entity declaration
+        // If entity has a system ID, store as external entity
+        let mut handler_called = false;
+        if let (Some(ref name), Some(_)) =
+            (&self.current_entity_name, &self.current_entity_system_id)
+        {
+            // Call entity declaration handler for external entity
+            // Only if DTD processing hasn't been stopped by undefined PEs
+            if self.dtd.borrow().keep_processing {
+                if let Some(handler) = &mut self.handlers.entity_decl {
+                    let base = self.base_uri.clone();
+                    let sys_id = self.current_entity_system_id.clone();
+                    handler(name, false, None, base.as_deref(), sys_id.as_deref());
+                    handler_called = true;
+                }
+            }
+            if self.current_is_param_entity {
+                // Store system_id/public_id on the PE entry
+                if let Some(pe) = self.dtd.borrow_mut().param_entities.get_mut(name) {
+                    pe.system_id = self.current_entity_system_id.take();
+                    pe.public_id = self.current_entity_public_id.take();
+                }
+            } else {
+                self.dtd.borrow_mut().external_entities.insert(
+                    name.clone(),
+                    (
+                        self.current_entity_system_id.take(),
+                        self.current_entity_public_id.take(),
+                    ),
+                );
+            }
+        }
+        self.current_entity_name = None;
+        self.current_entity_system_id = None;
+        self.current_entity_public_id = None;
+        self.current_entity_notation = None;
+        (XmlError::None, handler_called)
+    }
 
-        // Set event_pos for successful completion too (for position query after parse)
-        if error == XmlError::None {
-            self.event_pos = next_pos;
+    /// Handle entity NDATA notation name — marks entity as unparsed and fires handler
+    /// (corresponds to C doProlog XML_ROLE_ENTITY_NOTATION_NAME)
+    fn handle_role_entity_notation_name(&mut self, tok_text: &[u8]) -> (XmlError, bool) {
+        // Entity NDATA notation name — store notation and call unparsed entity handler
+        let notation = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+        self.current_entity_notation = Some(notation);
+
+        // Mark this entity as unparsed (has NDATA notation)
+        if let Some(ref name) = self.current_entity_name {
+            self.dtd.borrow_mut().unparsed_entities.insert(name.clone());
         }
 
-        if error != XmlError::None {
-            self.error_code = error;
+        // Call unparsed entity handler if set (matches C XML_ROLE_ENTITY_NOTATION_NAME)
+        let mut handler_called = false;
+        if let Some(ref name) = self.current_entity_name {
+            if self.dtd.borrow().keep_processing {
+                if let Some(handler) = &mut self.handlers.unparsed_entity_decl {
+                    let base = self.base_uri.clone();
+                    let sys_id = self.current_entity_system_id.clone();
+                    let pub_id = self.current_entity_public_id.clone();
+                    handler(
+                        name,
+                        base.as_deref(),
+                        sys_id.as_deref().unwrap_or(""),
+                        pub_id.as_deref(),
+                    );
+                    handler_called = true;
+                } else if let Some(handler) = &mut self.handlers.entity_decl {
+                    // Fallback to entity_decl_handler if unparsed handler not set (matches C)
+                    let base = self.base_uri.clone();
+                    let sys_id = self.current_entity_system_id.clone();
+                    handler(name, false, None, base.as_deref(), sys_id.as_deref());
+                    handler_called = true;
+                }
+            }
+        }
+        (XmlError::None, handler_called)
+    }
+
+    /// Handle notation SYSTEM ID — stores system ID and fires notation handler
+    fn handle_role_notation_system_id(&mut self, tok_text: &[u8]) -> (XmlError, bool) {
+        // Notation SYSTEM ID
+        let sysid = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+        self.current_notation_system_id = Some(sysid);
+        // Call notation handler
+        let handler_called = self.handlers.notation_decl.is_some();
+        if let Some(handler) = &mut self.handlers.notation_decl {
+            let name = self.current_notation_name.clone().unwrap_or_default();
+            let base = self.base_uri.clone();
+            let sysid = self.current_notation_system_id.clone().unwrap_or_default();
+            let pubid = self.current_notation_public_id.clone();
+            handler(&name, base.as_deref(), &sysid, pubid.as_deref());
+        }
+        (XmlError::None, handler_called)
+    }
+
+    /// Handle notation with PUBLIC but no SYSTEM — fires notation handler with empty system ID
+    fn handle_role_notation_no_system_id(&mut self) -> (XmlError, bool) {
+        // Notation with PUBLIC but no SYSTEM — call handler
+        let handler_called = self.handlers.notation_decl.is_some();
+        if let Some(handler) = &mut self.handlers.notation_decl {
+            let name = self.current_notation_name.clone().unwrap_or_default();
+            let base = self.base_uri.clone();
+            let pubid = self.current_notation_public_id.clone();
+            handler(&name, base.as_deref(), "", pubid.as_deref());
+        }
+        (XmlError::None, handler_called)
+    }
+
+    /// Handle ATTLIST attribute type roles (CDATA, ID, IDREF, etc.)
+    fn handle_role_attlist_att_type(&mut self, role: xmlrole::Role) -> (XmlError, bool) {
+        // Store the attribute type for ID tracking
+        let type_name = match role {
+            Role::AttributeTypeCdata => "CDATA",
+            Role::AttributeTypeId => "ID",
+            Role::AttributeTypeIdref => "IDREF",
+            Role::AttributeTypeIdrefs => "IDREFS",
+            Role::AttributeTypeEntity => "ENTITY",
+            Role::AttributeTypeEntities => "ENTITIES",
+            Role::AttributeTypeNmtoken => "NMTOKEN",
+            Role::AttributeTypeNmtokens => "NMTOKENS",
+            _ => "CDATA",
+        };
+        self.current_attlist_type = Some(type_name.to_string());
+        if let (Some(ref elem), Some(ref attr)) =
+            (&self.current_attlist_element, &self.current_attlist_attr)
+        {
+            self.dtd
+                .borrow_mut()
+                .attlist_types
+                .entry(elem.clone())
+                .or_default()
+                .insert(attr.clone(), type_name.to_string());
+        }
+        // Suppress default handler for all attribute type roles — they're part of ATTLIST handling
+        let suppress = self.handlers.attlist_decl.is_some();
+        (XmlError::None, suppress)
+    }
+
+    /// Handle ATTLIST enumeration or NOTATION enumeration value.
+    /// If `is_notation` is true, uses "NOTATION(" prefix; otherwise uses "(" prefix.
+    fn handle_role_attlist_enum_value(
+        &mut self,
+        tok_text: &[u8],
+        is_notation: bool,
+    ) -> (XmlError, bool) {
+        let val = std::str::from_utf8(tok_text).unwrap_or("").to_string();
+        if let Some(ref mut type_str) = self.current_attlist_type {
+            if type_str.ends_with('(') {
+                type_str.push_str(&val);
+            } else {
+                type_str.push('|');
+                type_str.push_str(&val);
+            }
+        } else {
+            let prefix = if is_notation { "NOTATION(" } else { "(" };
+            self.current_attlist_type = Some(format!("{}{}", prefix, val));
+        }
+        (XmlError::None, self.handlers.attlist_decl.is_some())
+    }
+
+    /// Handle #IMPLIED attribute default
+    fn handle_role_implied_attr(&mut self) -> (XmlError, bool) {
+        // #IMPLIED — no default value, not required
+        let handler_called = self.handlers.attlist_decl.is_some();
+        if let Some(handler) = &mut self.handlers.attlist_decl {
+            let elem = self.current_attlist_element.clone().unwrap_or_default();
+            let attr = self.current_attlist_attr.clone().unwrap_or_default();
+            let mut type_str = self
+                .current_attlist_type
+                .clone()
+                .unwrap_or_else(|| "CDATA".to_string());
+            if type_str.contains('(') && !type_str.ends_with(')') {
+                type_str.push(')');
+            }
+            handler(&elem, &attr, &type_str, None, None, false);
+        }
+        (XmlError::None, handler_called)
+    }
+
+    /// Handle #REQUIRED attribute default
+    fn handle_role_required_attr(&mut self) -> (XmlError, bool) {
+        // #REQUIRED — no default value, is required
+        let handler_called = self.handlers.attlist_decl.is_some();
+        if let Some(handler) = &mut self.handlers.attlist_decl {
+            let elem = self.current_attlist_element.clone().unwrap_or_default();
+            let attr = self.current_attlist_attr.clone().unwrap_or_default();
+            let mut type_str = self
+                .current_attlist_type
+                .clone()
+                .unwrap_or_else(|| "CDATA".to_string());
+            if type_str.contains('(') && !type_str.ends_with(')') {
+                type_str.push(')');
+            }
+            handler(&elem, &attr, &type_str, None, None, true);
+        }
+        (XmlError::None, handler_called)
+    }
+
+    /// Handle ATTLIST default attribute value — validates, normalizes, and stores
+    fn handle_role_default_attr_value(&mut self, tok_text: &[u8], pos: usize) -> (XmlError, bool) {
+        // ATTLIST default value — validate and store
+        if let Err(e) = self.validate_attribute_value(tok_text) {
+            self.event_pos = pos;
+            return (e, false);
+        }
+        let handler_called = self.handlers.attlist_decl.is_some();
+        if let (Some(ref elem), Some(ref attr)) =
+            (&self.current_attlist_element, &self.current_attlist_attr)
+        {
+            let dtd_ref = self.dtd.borrow();
+            let entities = dtd_ref.internal_entities.clone();
+            let skip_unknown = dtd_ref.has_param_entity_refs && !dtd_ref.standalone;
+            drop(dtd_ref);
+            let value = Self::normalize_attribute_value(tok_text, &entities, skip_unknown);
+            {
+                let mut dtd = self.dtd.borrow_mut();
+                let defaults = dtd.attlist_defaults.entry(elem.clone()).or_default();
+                if !defaults.iter().any(|(n, _)| n == attr) {
+                    defaults.push((attr.clone(), value.clone()));
+                }
+            }
+            if let Some(handler) = &mut self.handlers.attlist_decl {
+                let mut type_str = self
+                    .current_attlist_type
+                    .clone()
+                    .unwrap_or_else(|| "CDATA".to_string());
+                if type_str.contains('(') && !type_str.ends_with(')') {
+                    type_str.push(')');
+                }
+                handler(elem, attr, &type_str, Some(&value), None, false);
+            }
+        }
+        (XmlError::None, handler_called)
+    }
+
+    /// Handle ATTLIST #FIXED attribute value — validates, normalizes, and stores
+    fn handle_role_fixed_attr_value(&mut self, tok_text: &[u8], pos: usize) -> (XmlError, bool) {
+        // ATTLIST #FIXED value — validate and store
+        if let Err(e) = self.validate_attribute_value(tok_text) {
+            self.event_pos = pos;
+            return (e, false);
+        }
+        let handler_called = self.handlers.attlist_decl.is_some();
+        if let (Some(ref elem), Some(ref attr)) =
+            (&self.current_attlist_element, &self.current_attlist_attr)
+        {
+            let dtd_ref = self.dtd.borrow();
+            let entities = dtd_ref.internal_entities.clone();
+            let skip_unknown = dtd_ref.has_param_entity_refs && !dtd_ref.standalone;
+            drop(dtd_ref);
+            let value = Self::normalize_attribute_value(tok_text, &entities, skip_unknown);
+            {
+                let mut dtd = self.dtd.borrow_mut();
+                let defaults = dtd.attlist_defaults.entry(elem.clone()).or_default();
+                if !defaults.iter().any(|(n, _)| n == attr) {
+                    defaults.push((attr.clone(), value.clone()));
+                }
+            }
+            if let Some(handler) = &mut self.handlers.attlist_decl {
+                let mut type_str = self
+                    .current_attlist_type
+                    .clone()
+                    .unwrap_or_else(|| "CDATA".to_string());
+                if type_str.contains('(') && !type_str.ends_with(')') {
+                    type_str.push(')');
+                }
+                handler(elem, attr, &type_str, Some(&value), None, false);
+            }
+        }
+        (XmlError::None, handler_called)
+    }
+
+    /// Handle ELEMENT EMPTY or ANY declaration — fires element declaration handler
+    fn handle_role_element_empty_or_any(&mut self) -> (XmlError, bool) {
+        // ELEMENT name EMPTY or ANY — call handler immediately
+        let handler_called = self.handlers.element_decl.is_some();
+        if let Some(ref name) = self.current_element_decl_name.clone() {
+            // For EMPTY/ANY, serialize an empty model
+            self.serialize_content_model();
+            if let Some(handler) = &mut self.handlers.element_decl {
+                handler(name, "");
+            }
+        }
+        self.current_element_decl_name = None;
+        (XmlError::None, handler_called)
+    }
+
+    /// Handle content model group sequence connector (',')
+    fn handle_role_group_sequence(&mut self) -> (XmlError, bool) {
+        if let Some(last) = self.group_connectors.last_mut() {
+            if *last == 2 {
+                return (XmlError::Syntax, false);
+            }
+            *last = 1;
+        }
+        (XmlError::None, self.handlers.element_decl.is_some())
+    }
+
+    /// Handle content model group choice connector ('|')
+    fn handle_role_group_choice(&mut self) -> (XmlError, bool) {
+        if let Some(last) = self.group_connectors.last_mut() {
+            if *last == 1 {
+                return (XmlError::Syntax, false);
+            }
+            *last = 2;
+        }
+        if let Some(node) = self.content_model_stack.last_mut() {
+            if node.content_type == ContentType::Seq {
+                node.content_type = ContentType::Choice;
+            }
+        }
+        (XmlError::None, self.handlers.element_decl.is_some())
+    }
+
+    /// Handle parameter entity reference — shared logic for PE and inner PE refs
+    /// (corresponds to C doProlog XML_ROLE_PARAM_ENTITY_REF / XML_ROLE_INNER_PARAM_ENTITY_REF,
+    /// lines 5996-6092)
+    fn handle_role_param_entity_ref(
+        &mut self,
+        role: xmlrole::Role,
+        data: &[u8],
+        pos: usize,
+    ) -> (XmlError, bool) {
+        // PE reference — shared logic matching C's fall-through at lines 5996-6092
+        let is_between_decl = matches!(role, Role::ParamEntityRef);
+        self.dtd.borrow_mut().has_param_entity_refs = true;
+        let mut handler_called = false;
+        // C uses break statements to skip the not_standalone check.
+        // We use this flag to track whether to run it (only when falling through).
+        let mut check_not_standalone = true;
+
+        if self.param_entity_parsing == ParamEntityParsing::Never {
+            let standalone = self.dtd.borrow().standalone;
+            self.dtd.borrow_mut().keep_processing = standalone;
+            // C: falls through to not_standalone check
+        } else {
+            // Extract entity name from %name; token
+            let pe_name = if data.len() > pos && data[pos] == b'%' {
+                data[pos + 1..]
+                    .iter()
+                    .position(|&b| b == b';')
+                    .and_then(|semi| {
+                        std::str::from_utf8(&data[pos + 1..pos + 1 + semi])
+                            .ok()
+                            .map(|s| s.to_string())
+                    })
+            } else {
+                None
+            };
+
+            if let Some(name) = pe_name {
+                let pe = self.dtd.borrow().param_entities.get(&name).cloned();
+
+                if let Some(pe) = pe {
+                    // C: entity->open check for recursion
+                    if pe.open {
+                        return (XmlError::RecursiveEntityRef, false);
+                    }
+                    if let Some(ref value) = pe.value {
+                        // Internal PE — call processEntity (C line 6059)
+                        let entity_bytes = value.as_bytes().to_vec();
+                        if let Some(e) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                            e.open = true;
+                        }
+                        let result = self.process_entity(&name, &entity_bytes, true);
+                        if result != XmlError::None {
+                            return (result, false);
+                        }
+                        handler_called = true;
+                        check_not_standalone = false; // C: break at line 6063
+                    } else if pe.system_id.is_some() {
+                        // External PE — call handler
+                        if let Some(handler) = self.handlers.external_entity_ref.as_mut() {
+                            self.dtd.borrow_mut().param_entity_read = false;
+                            if let Some(e) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                                e.open = true;
+                            }
+                            let base = self.base_uri.clone();
+                            // C passes 0 (NULL) as context for PE refs
+                            let ok = handler(
+                                "",
+                                base.as_deref(),
+                                pe.system_id.as_deref(),
+                                pe.public_id.as_deref(),
+                            );
+                            if let Some(e) = self.dtd.borrow_mut().param_entities.get_mut(&name) {
+                                e.open = false;
+                            }
+                            handler_called = true;
+                            if !ok {
+                                return (XmlError::ExternalEntityHandling, false);
+                            }
+                            if !self.dtd.borrow().param_entity_read {
+                                let standalone = self.dtd.borrow().standalone;
+                                self.dtd.borrow_mut().keep_processing = standalone;
+                                check_not_standalone = false; // C: break at line 6081
+                            }
+                            // paramEntityRead=true → falls through to not_standalone check
+                        } else {
+                            let standalone = self.dtd.borrow().standalone;
+                            self.dtd.borrow_mut().keep_processing = standalone;
+                            check_not_standalone = false; // C: break at line 6085
+                        }
+                    }
+                } else {
+                    // Entity not found
+                    let standalone = self.dtd.borrow().standalone;
+                    self.dtd.borrow_mut().keep_processing = standalone;
+                    if is_between_decl {
+                        if let Some(skipped_handler) = &mut self.handlers.skipped_entity {
+                            skipped_handler(&name, true);
+                            handler_called = true;
+                        }
+                    }
+                    check_not_standalone = false; // C: break at line 6051
+                }
+            }
         }
 
-        // Keep unprocessed data for next parse call
-        if next_pos < data.len() && error == XmlError::None {
-            self.buffer = data[next_pos..].to_vec();
+        // C line 6089-6091: not_standalone check only when falling through
+        if check_not_standalone && !self.dtd.borrow().standalone {
+            if let Some(ns_handler) = &mut self.handlers.not_standalone {
+                if !ns_handler() {
+                    return (XmlError::NotStandalone, false);
+                }
+            }
+        }
+
+        (XmlError::None, handler_called)
+    }
+
+    /// Handle text declaration in external entity
+    /// (corresponds to C processXmlDecl with isTextDecl=true)
+    fn handle_role_text_decl(&mut self, data: &[u8], pos: usize, next: usize) -> (XmlError, bool) {
+        // Text declaration in external entity — C: processXmlDecl(parser, 1, s, next)
+        // Parse and validate the text declaration (<?xml version='...' encoding='...'?>)
+        let decl_data = &data[pos..next];
+        match xmltok::parse_xml_decl(decl_data, true) {
+            Ok(info) => {
+                // Extract encoding
+                let encoding_str = if info.encoding_end > info.encoding_start {
+                    Some(
+                        std::str::from_utf8(&decl_data[info.encoding_start..info.encoding_end])
+                            .unwrap_or("")
+                            .to_string(),
+                    )
+                } else {
+                    None
+                };
+                // Call xml_decl_handler if set (C calls it for text declarations too)
+                let handler_called = self.handlers.xml_decl.is_some();
+                if let Some(handler) = &mut self.handlers.xml_decl {
+                    let version_str = if info.version_end > info.version_start {
+                        Some(
+                            std::str::from_utf8(&decl_data[info.version_start..info.version_end])
+                                .unwrap_or("")
+                                .to_string(),
+                        )
+                    } else {
+                        None
+                    };
+                    handler(version_str.as_deref(), encoding_str.as_deref(), None);
+                }
+                // Handle encoding switch if declared
+                if !self.protocol_encoding_set {
+                    if let Some(ref enc_name) = encoding_str {
+                        let upper = enc_name.to_uppercase();
+                        if upper == "ISO-8859-1"
+                            || upper == "LATIN1"
+                            || upper.starts_with("ISO-8859-")
+                            || upper == "WINDOWS-1252"
+                        {
+                            self.detected_encoding = Some(upper.clone());
+                        }
+                    }
+                }
+                (XmlError::None, handler_called)
+            }
+            Err(_) => {
+                self.event_pos = pos;
+                (XmlError::XmlDecl, false)
+            }
         }
     }
 
+    /// CDATA section processor — resumes interrupted CDATA section parsing
     /// Check if the data starting from err_pos is part of a partial UTF-8 sequence
     /// This checks if err_pos points to the start of a multi-byte UTF-8 lead byte that's incomplete,
     /// or if it's part of an incomplete sequence starting earlier
@@ -2716,11 +2583,11 @@ impl Parser {
         let byte_at_pos = data[err_pos];
 
         // First, check if err_pos itself points to a lead byte
-        if (0xc0..0xf8).contains(&byte_at_pos) {
+        if (UTF8_2BYTE_MIN..UTF8_MAX_LEAD).contains(&byte_at_pos) {
             // This is a lead byte at err_pos
-            let expected_bytes = if (0xc0..0xe0).contains(&byte_at_pos) {
+            let expected_bytes = if (UTF8_2BYTE_MIN..UTF8_3BYTE_MIN).contains(&byte_at_pos) {
                 2 // 2-byte UTF-8 character
-            } else if (0xe0..0xf0).contains(&byte_at_pos) {
+            } else if (UTF8_3BYTE_MIN..UTF8_4BYTE_MIN).contains(&byte_at_pos) {
                 3 // 3-byte UTF-8 character
             } else {
                 4 // 4-byte UTF-8 character (0xf0-0xf7)
@@ -2744,11 +2611,11 @@ impl Parser {
             let lead_byte = data[pos];
 
             // Check if this looks like a lead byte
-            if (0xc0..0xf8).contains(&lead_byte) {
+            if (UTF8_2BYTE_MIN..UTF8_MAX_LEAD).contains(&lead_byte) {
                 // Determine expected byte count from lead byte
-                let expected_bytes = if (0xc0..0xe0).contains(&lead_byte) {
+                let expected_bytes = if (UTF8_2BYTE_MIN..UTF8_3BYTE_MIN).contains(&lead_byte) {
                     2 // 2-byte UTF-8 character
-                } else if (0xe0..0xf0).contains(&lead_byte) {
+                } else if (UTF8_3BYTE_MIN..UTF8_4BYTE_MIN).contains(&lead_byte) {
                     3 // 3-byte UTF-8 character
                 } else {
                     4 // 4-byte UTF-8 character (0xf0-0xf7)
@@ -2771,7 +2638,7 @@ impl Parser {
     /// Helper to check if bytes form a valid (though possibly incomplete) UTF-8 sequence start
     fn all_bytes_valid(sequence: &[u8], expected_len: usize) -> bool {
         // First byte must be a lead byte
-        if sequence.is_empty() || (sequence[0] < 0xc0 || sequence[0] >= 0xf8) {
+        if sequence.is_empty() || (sequence[0] < UTF8_2BYTE_MIN || sequence[0] >= UTF8_MAX_LEAD) {
             return false;
         }
         // Remaining bytes (if present) should be trail bytes (10xxxxxx)
@@ -2780,7 +2647,7 @@ impl Parser {
             .take(sequence.len().min(expected_len))
             .skip(1)
         {
-            if *byte < 0x80 || *byte >= 0xc0 {
+            if *byte < UTF8_CONTINUATION_VALUE || *byte >= UTF8_2BYTE_MIN {
                 return false;
             }
         }
@@ -2837,6 +2704,12 @@ impl Parser {
             let entity_ref_line = self.open_internal_entities[entity_idx].entity_ref_line;
             let entity_ref_column = self.open_internal_entities[entity_idx].entity_ref_column;
             let entity_ref_event_pos = self.open_internal_entities[entity_idx].entity_ref_event_pos;
+
+            // Account for entity expansion bytes as indirect
+            let entity_bytes = entity_end - start_pos;
+            if entity_bytes > 0 && !self.accounting_diff_tolerated(entity_bytes, false) {
+                return (XmlError::AmplificationLimitBreach, start);
+            }
 
             let (error, next_pos) = if is_param {
                 self.do_prolog(&enc, &entity_text, start_pos, entity_end, false, true)
@@ -3033,6 +2906,508 @@ impl Parser {
     /// Uses content_tok from xmltok_impl to tokenize, then dispatches on token type.
     ///
     /// `is_internal_entity`: true when called from internal_entity_processor on
+    /// Handle `XmlTok::EntityRef` inside `do_content`.
+    /// Returns `Some(...)` to exit `do_content`, or `None` to continue the loop.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_content_entity_ref<E: Encoding>(
+        &mut self,
+        enc: &E,
+        data: &[u8],
+        pos: usize,
+        next: usize,
+    ) -> Option<(XmlError, usize)> {
+        // Check for predefined entities first
+        let minbpc = enc.min_bytes_per_char();
+        let name_start = pos + minbpc; // skip '&'
+        let name_end = next - minbpc; // skip ';'
+        let ch = xmltok_impl::predefined_entity_name(enc, data, name_start, name_end);
+        if ch != 0 {
+            if let Some(handler) = &mut self.handlers.character_data {
+                let mut buf = [0u8; 4];
+                if let Some(c) = char::from_u32(ch as u32) {
+                    let encoded = c.encode_utf8(&mut buf);
+                    handler(encoded.as_bytes());
+                }
+            } else {
+                self.report_default(enc, data, pos, next);
+            }
+        } else {
+            // General entity reference — matches C doContent entity handling
+            let name = std::str::from_utf8(&data[name_start..name_end]).unwrap_or("");
+
+            // Check for unparsed entity (NDATA notation) — can't be referenced with &
+            if self.dtd.borrow().unparsed_entities.contains(name) {
+                return Some((XmlError::BinaryEntityRef, pos));
+            }
+
+            // 1. Check internal entities
+            let entity_value = self.dtd.borrow().internal_entities.get(name).cloned();
+            if let Some(value) = entity_value {
+                if self.open_entities.contains(name) {
+                    return Some((XmlError::RecursiveEntityRef, pos));
+                }
+                // C: xmlparse.c:3440-3467
+                // m_defaultExpandInternalEntities is true (default) unless
+                // XML_SetDefaultHandler (not Expand) was called.
+                // In Rust: default_handler set without default_handler_expand = no expand.
+                let default_expand =
+                    self.handlers.default.is_none() || self.handlers.default_expand.is_some();
+                if !default_expand {
+                    // C: !m_defaultExpandInternalEntities path
+                    if let Some(handler) = &mut self.handlers.skipped_entity {
+                        handler(name, false);
+                    } else if self.handlers.default.is_some() {
+                        self.report_default(enc, data, pos, next);
+                    }
+                    // C: break (from switch)
+                } else {
+                    // C: processEntity(parser, entity, FALSE, ENTITY_INTERNAL)
+                    // Save entity reference text for XML_GetInputContext/ByteCount
+                    self.entity_reference_context = Some(data[pos..next].to_vec());
+                    let entity_name = name.to_string();
+                    let entity_bytes = value.as_bytes().to_vec();
+                    let result = self.process_entity(&entity_name, &entity_bytes, false);
+                    if result != XmlError::None {
+                        return Some((result, pos));
+                    }
+                    // C: break (from switch, for loop continues to reenter check)
+                }
+            }
+            // 2. Check external entities (have system ID)
+            else if self.dtd.borrow().external_entities.contains_key(name) {
+                let entity_name = name.to_string();
+                let (sys_id, pub_id) = self
+                    .dtd
+                    .borrow()
+                    .external_entities
+                    .get(&entity_name)
+                    .cloned()
+                    .unwrap_or((None, None));
+                // Call external entity ref handler if set
+                if let Some(handler) = &mut self.handlers.external_entity_ref {
+                    let base = self.base_uri.clone();
+                    let ok = handler(
+                        &entity_name,
+                        base.as_deref(),
+                        sys_id.as_deref(),
+                        pub_id.as_deref(),
+                    );
+                    if !ok {
+                        return Some((XmlError::ExternalEntityHandling, pos));
+                    }
+                } else if self.handlers.default.is_some() {
+                    self.report_default(enc, data, pos, next);
+                }
+                // If no handler, silently skip (entity can't be expanded)
+            }
+            // 3. Entity not found at all
+            else {
+                // WFC: Entity Declared
+                if !self.dtd.borrow().has_param_entity_refs || self.dtd.borrow().standalone {
+                    return Some((XmlError::UndefinedEntity, pos));
+                }
+                // External subset might define it — skip
+                if let Some(handler) = &mut self.handlers.skipped_entity {
+                    handler(name, false);
+                } else if self.handlers.default.is_some() {
+                    self.report_default(enc, data, pos, next);
+                }
+            }
+        }
+        None
+    }
+
+    /// Handle `XmlTok::StartTagNoAtts | XmlTok::StartTagWithAtts` inside `do_content`.
+    /// Returns `Some(...)` to exit `do_content`, or `None` to continue the loop.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_content_start_tag<E: Encoding>(
+        &mut self,
+        enc: &E,
+        tok: XmlTok,
+        data: &[u8],
+        pos: usize,
+        next: usize,
+    ) -> Option<(XmlError, usize)> {
+        let minbpc = enc.min_bytes_per_char();
+        let raw_name_start = pos + minbpc; // skip '<'
+        let raw_name_len = if self.ns_enabled {
+            self.extract_qualified_name(enc, data, raw_name_start)
+        } else {
+            xmltok_impl::name_length(enc, data, raw_name_start)
+        };
+        let tag_name =
+            std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len]).unwrap_or("");
+
+        self.tag_level += 1;
+        self.seen_root = true;
+
+        // Extract attributes (with duplicate detection)
+        let mut attrs = if tok == XmlTok::StartTagWithAtts {
+            match self.extract_attrs(enc, data, pos, next) {
+                Ok(a) => a,
+                Err(e) => return Some((e, pos)),
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Apply ATTLIST defaults, normalize, and find ID attr — single DTD borrow
+        let specified_count = attrs.len() as i32;
+        {
+            let dtd = self.dtd.borrow();
+            if !dtd.attlist_defaults.is_empty() {
+                if let Some(defaults) = dtd.attlist_defaults.get(tag_name) {
+                    for (dname, dval) in defaults {
+                        if !attrs.iter().any(|(n, _)| n == dname) {
+                            attrs.push((dname.clone(), dval.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Process namespaces if enabled
+        let effective_tag_name = if self.ns_enabled {
+            match self.process_namespaces(tag_name, &mut attrs) {
+                Ok(name) => name,
+                Err(e) => return Some((e, pos)),
+            }
+        } else {
+            String::new() // placeholder, won't be used
+        };
+        // Use borrowed &str for the common non-namespace path
+        let tag_name_ref: &str = if self.ns_enabled {
+            &effective_tag_name
+        } else {
+            tag_name
+        };
+
+        self.n_specified_atts = specified_count * 2;
+        self.id_att_index = None;
+        {
+            let dtd = self.dtd.borrow();
+            if !dtd.attlist_types.is_empty() {
+                if let Some(type_map) = dtd.attlist_types.get(tag_name) {
+                    for (attr_name, attr_val) in attrs.iter_mut() {
+                        if let Some(att_type) = type_map.get(attr_name.as_str()) {
+                            if matches!(
+                                att_type.as_str(),
+                                "NMTOKENS"
+                                    | "IDREFS"
+                                    | "ENTITIES"
+                                    | "NMTOKEN"
+                                    | "IDREF"
+                                    | "ENTITY"
+                                    | "ID"
+                                    | "NOTATION"
+                            ) {
+                                let collapsed: String =
+                                    attr_val.split_whitespace().collect::<Vec<&str>>().join(" ");
+                                *attr_val = collapsed;
+                            }
+                        }
+                    }
+                    for (i, (name, _)) in attrs.iter().enumerate() {
+                        if type_map
+                            .get(name.as_str())
+                            .map(|t| t == "ID")
+                            .unwrap_or(false)
+                        {
+                            self.id_att_index = Some(i * 2);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        self.tag_stack.push(tag_name_ref.to_string());
+        self.tag_triplet_flags.push(self.ns_triplets);
+
+        if let Some(handler) = &mut self.handlers.start_element {
+            let attr_refs: Vec<(&str, &str)> = attrs
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            handler(tag_name_ref, &attr_refs);
+        } else if self.handlers.default.is_some() || self.handlers.default_expand.is_some() {
+            self.report_default(enc, data, pos, next);
+        }
+        self.return_attrs(attrs);
+        None
+    }
+
+    /// Handle `XmlTok::EmptyElementNoAtts | XmlTok::EmptyElementWithAtts` inside `do_content`.
+    /// Returns `Some(...)` to exit `do_content`, or `None` to continue the loop.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_content_empty_element<E: Encoding>(
+        &mut self,
+        enc: &E,
+        tok: XmlTok,
+        data: &[u8],
+        pos: usize,
+        next: usize,
+        end: usize,
+    ) -> Option<(XmlError, usize)> {
+        let minbpc = enc.min_bytes_per_char();
+        let raw_name_start = pos + minbpc;
+        let raw_name_len = if self.ns_enabled {
+            self.extract_qualified_name(enc, data, raw_name_start)
+        } else {
+            xmltok_impl::name_length(enc, data, raw_name_start)
+        };
+        let tag_name = std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len])
+            .unwrap_or("")
+            .to_string();
+
+        self.seen_root = true;
+
+        let mut attrs = if tok == XmlTok::EmptyElementWithAtts {
+            match self.extract_attrs(enc, data, pos, next) {
+                Ok(a) => a,
+                Err(e) => return Some((e, pos)),
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Apply ATTLIST defaults and find ID attr — consolidated DTD borrow
+        let specified_count = attrs.len() as i32;
+        {
+            let dtd = self.dtd.borrow();
+            if !dtd.attlist_defaults.is_empty() {
+                if let Some(defaults) = dtd.attlist_defaults.get(&*tag_name) {
+                    for (dname, dval) in defaults {
+                        if !attrs.iter().any(|(n, _)| n == dname) {
+                            attrs.push((dname.clone(), dval.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        // For namespace processing, bump tag_level to track bindings
+        if self.ns_enabled {
+            self.tag_level += 1;
+        }
+
+        // Process namespaces if enabled
+        let effective_tag_name = if self.ns_enabled {
+            match self.process_namespaces(&tag_name, &mut attrs) {
+                Ok(name) => name,
+                Err(e) => return Some((e, pos)),
+            }
+        } else {
+            String::new() // placeholder
+        };
+        let tag_name_ref: &str = if self.ns_enabled {
+            &effective_tag_name
+        } else {
+            &tag_name
+        };
+        self.n_specified_atts = specified_count * 2;
+        self.id_att_index = None;
+        {
+            let dtd = self.dtd.borrow();
+            if !dtd.attlist_types.is_empty() {
+                if let Some(types) = dtd.attlist_types.get(&*tag_name) {
+                    for (i, (name, _)) in attrs.iter().enumerate() {
+                        if types.get(name.as_str()).map(|t| t == "ID").unwrap_or(false) {
+                            self.id_att_index = Some(i * 2);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // For empty elements, call start and end handlers if they exist.
+        // If neither exists, report to default handler (matches C logic).
+        let mut no_elm_handlers = true;
+        if let Some(handler) = &mut self.handlers.start_element {
+            let attr_refs: Vec<(&str, &str)> = attrs
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            handler(tag_name_ref, &attr_refs);
+            no_elm_handlers = false;
+        }
+        if let Some(handler) = &mut self.handlers.end_element {
+            if self.handlers.start_element.is_some() {
+                self.event_pos = next;
+            }
+            handler(tag_name_ref);
+            no_elm_handlers = false;
+        }
+        if no_elm_handlers
+            && (self.handlers.default.is_some() || self.handlers.default_expand.is_some())
+        {
+            self.report_default(enc, data, pos, next);
+        }
+        self.return_attrs(attrs);
+
+        // Pop namespace bindings for empty element (tag_level still at binding level)
+        if self.ns_enabled {
+            self.pop_ns_bindings(self.tag_level);
+            self.tag_level = self.tag_level.saturating_sub(1);
+        }
+
+        // Check if root element closed (empty root element)
+        if self.tag_level == 0 && self.parsing_state != ParsingState::Finished {
+            self.root_closed = true;
+            self.processor = Processor::Epilog;
+            if next < end {
+                let epilog_data = data[next..end].to_vec();
+                self.buffer = epilog_data;
+                self.epilog_processor();
+            }
+            return Some((self.error_code, end));
+        }
+        None
+    }
+
+    /// Handle `XmlTok::EndTag` inside `do_content`.
+    /// Returns `Some(...)` to exit `do_content`, or `None` to continue the loop.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_content_end_tag<E: Encoding>(
+        &mut self,
+        enc: &E,
+        data: &[u8],
+        pos: usize,
+        next: usize,
+        end: usize,
+        start_tag_level: u32,
+    ) -> Option<(XmlError, usize)> {
+        // Check for async entity — tag level matches start means entity boundary crossed
+        // Matches C: if (parser->m_tagLevel == startTagLevel) return ASYNC_ENTITY
+        // But NOT for ext entity content completion (where start == content_start_tag_level)
+        if self.tag_level == start_tag_level && start_tag_level != self.content_start_tag_level {
+            return Some((XmlError::AsyncEntity, pos));
+        }
+
+        let minbpc = enc.min_bytes_per_char();
+        let raw_name_start = pos + minbpc * 2; // skip '</'
+        let raw_name_len = if self.ns_enabled {
+            self.extract_qualified_name(enc, data, raw_name_start)
+        } else {
+            xmltok_impl::name_length(enc, data, raw_name_start)
+        };
+        let tag_name =
+            std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len]).unwrap_or("");
+
+        // Expand tag name if namespace processing is enabled
+        if self.ns_enabled {
+            let effective_tag_name = match self.expand_name(tag_name, true) {
+                Ok(name) => name,
+                Err(e) => return Some((e, raw_name_start)),
+            };
+
+            if let Some(expected) = self.tag_stack.last() {
+                let expected_canonical = self.strip_triplet(expected);
+                let actual_canonical = self.strip_triplet(&effective_tag_name);
+                if expected_canonical != actual_canonical {
+                    self.event_pos = raw_name_start;
+                    return Some((XmlError::TagMismatch, raw_name_start));
+                }
+            } else {
+                self.event_pos = raw_name_start;
+                return Some((XmlError::TagMismatch, raw_name_start));
+            }
+
+            self.tag_stack.pop();
+            let was_triplet = self.tag_triplet_flags.pop().unwrap_or(false);
+            self.tag_level = self.tag_level.saturating_sub(1);
+
+            let handler_name = if was_triplet && !self.ns_triplets && self.ns_separator != '\0' {
+                if let Some(colon_pos) = tag_name.find(':') {
+                    let prefix = &tag_name[..colon_pos];
+                    format!("{}{}{}", effective_tag_name, self.ns_separator, prefix)
+                } else {
+                    effective_tag_name.clone()
+                }
+            } else if !was_triplet && self.ns_triplets && self.ns_separator != '\0' {
+                self.strip_triplet(&effective_tag_name)
+            } else {
+                effective_tag_name
+            };
+
+            if let Some(handler) = &mut self.handlers.end_element {
+                handler(&handler_name);
+            } else if self.handlers.default.is_some() || self.handlers.default_expand.is_some() {
+                self.report_default(enc, data, pos, next);
+            }
+        } else {
+            // Non-namespace fast path: no String allocation needed
+            if let Some(expected) = self.tag_stack.last() {
+                if expected != tag_name {
+                    self.event_pos = raw_name_start;
+                    return Some((XmlError::TagMismatch, raw_name_start));
+                }
+            } else {
+                self.event_pos = raw_name_start;
+                return Some((XmlError::TagMismatch, raw_name_start));
+            }
+
+            self.tag_stack.pop();
+            self.tag_triplet_flags.pop();
+            self.tag_level = self.tag_level.saturating_sub(1);
+
+            if let Some(handler) = &mut self.handlers.end_element {
+                handler(tag_name);
+            } else if self.handlers.default.is_some() || self.handlers.default_expand.is_some() {
+                self.report_default(enc, data, pos, next);
+            }
+        }
+
+        // Pop namespace bindings (tag_level already decremented)
+        if self.ns_enabled {
+            self.pop_ns_bindings(self.tag_level + 1);
+        }
+
+        // C: xmlparse.c:3638 — epilog transition when tag_level reaches 0.
+        if self.tag_level == 0 {
+            self.root_closed = true;
+            self.processor = Processor::Epilog;
+            if next < end {
+                let epilog_data = data[next..end].to_vec();
+                self.buffer = epilog_data;
+                self.epilog_processor();
+            }
+            return Some((self.error_code, end));
+        }
+        // For entity/external entity content: return when tag_level
+        // returns to start level (C: no separate check, implicit)
+        if start_tag_level > 0 && self.tag_level == start_tag_level {
+            return Some((XmlError::None, next));
+        }
+        None
+    }
+
+    /// Handle `XmlTok::CharRef` inside `do_content`.
+    /// Returns `Some(...)` to exit `do_content`, or `None` to continue the loop.
+    fn handle_content_char_ref<E: Encoding>(
+        &mut self,
+        enc: &E,
+        data: &[u8],
+        pos: usize,
+        next: usize,
+    ) -> Option<(XmlError, usize)> {
+        let n = xmltok_impl::char_ref_number(enc, data, pos);
+        if n < 0 {
+            return Some((XmlError::BadCharRef, pos));
+        }
+        if let Some(handler) = &mut self.handlers.character_data {
+            let mut buf = [0u8; 4];
+            if let Some(c) = char::from_u32(n as u32) {
+                let encoded = c.encode_utf8(&mut buf);
+                handler(encoded.as_bytes());
+            }
+        } else {
+            self.report_default(enc, data, pos, next);
+        }
+        None
+    }
+
     /// entity replacement text. Prevents updating self.event_pos (which should
     /// stay pointing at the entity reference in the outer document). Matches C's
     /// eventPP indirection pattern.
@@ -3081,11 +3456,13 @@ impl Parser {
                 }
             };
 
-            // Track byte count and raw data of current token for reportDefault/DefaultCurrent
-            // These are always updated (even for entity text) since reportDefault needs
-            // the current token's bytes.
+            // Track byte count and position of current token for reportDefault/DefaultCurrent.
+            // Lazy: we only record positions; event_cur_data is populated on demand.
             self.event_cur_byte_count = (next - pos) as i32;
-            self.event_cur_data = data[pos..next].to_vec();
+            self.event_cur_data_start = pos;
+            self.event_cur_data_end = next;
+            self.event_cur_data_valid = true;
+            self.event_cur_data.clear();
 
             // Record the current token position for lazy line/column computation.
             // Only update for main document tokens, not entity text.
@@ -3100,7 +3477,7 @@ impl Parser {
                     if have_more {
                         return (XmlError::None, pos);
                     }
-                    if let Some(handler) = &mut self.character_data_handler {
+                    if let Some(handler) = &mut self.handlers.character_data {
                         handler(b"\n");
                     } else {
                         self.report_default(enc, data, pos, end);
@@ -3150,426 +3527,36 @@ impl Parser {
                 }
 
                 XmlTok::EntityRef => {
-                    // Check for predefined entities first
-                    let minbpc = enc.min_bytes_per_char();
-                    let name_start = pos + minbpc; // skip '&'
-                    let name_end = next - minbpc; // skip ';'
-                    let ch = xmltok_impl::predefined_entity_name(enc, data, name_start, name_end);
-                    if ch != 0 {
-                        if let Some(handler) = &mut self.character_data_handler {
-                            let mut buf = [0u8; 4];
-                            if let Some(c) = char::from_u32(ch as u32) {
-                                let encoded = c.encode_utf8(&mut buf);
-                                handler(encoded.as_bytes());
-                            }
-                        } else {
-                            self.report_default(enc, data, pos, next);
-                        }
-                    } else {
-                        // General entity reference — matches C doContent entity handling
-                        let name = std::str::from_utf8(&data[name_start..name_end]).unwrap_or("");
-
-                        // Check for unparsed entity (NDATA notation) — can't be referenced with &
-                        if self.dtd.borrow().unparsed_entities.contains(name) {
-                            return (XmlError::BinaryEntityRef, pos);
-                        }
-
-                        // 1. Check internal entities
-                        let entity_value = self.dtd.borrow().internal_entities.get(name).cloned();
-                        if let Some(value) = entity_value {
-                            if self.open_entities.contains(name) {
-                                return (XmlError::RecursiveEntityRef, pos);
-                            }
-                            // C: xmlparse.c:3440-3467
-                            // m_defaultExpandInternalEntities is true (default) unless
-                            // XML_SetDefaultHandler (not Expand) was called.
-                            // In Rust: default_handler set without default_handler_expand = no expand.
-                            let default_expand = self.default_handler.is_none()
-                                || self.default_handler_expand.is_some();
-                            if !default_expand {
-                                // C: !m_defaultExpandInternalEntities path
-                                if let Some(handler) = &mut self.skipped_entity_handler {
-                                    handler(name, false);
-                                } else if self.default_handler.is_some() {
-                                    self.report_default(enc, data, pos, next);
-                                }
-                                // C: break (from switch)
-                            } else {
-                                // C: processEntity(parser, entity, FALSE, ENTITY_INTERNAL)
-                                // Save entity reference text for XML_GetInputContext/ByteCount
-                                self.entity_reference_context = Some(data[pos..next].to_vec());
-                                let entity_name = name.to_string();
-                                let entity_bytes = value.as_bytes().to_vec();
-                                let result =
-                                    self.process_entity(&entity_name, &entity_bytes, false);
-                                if result != XmlError::None {
-                                    return (result, pos);
-                                }
-                                // C: break (from switch, for loop continues to reenter check)
-                            }
-                        }
-                        // 2. Check external entities (have system ID)
-                        else if self.dtd.borrow().external_entities.contains_key(name) {
-                            let entity_name = name.to_string();
-                            let (sys_id, pub_id) = self
-                                .dtd
-                                .borrow()
-                                .external_entities
-                                .get(&entity_name)
-                                .cloned()
-                                .unwrap_or((None, None));
-                            // Call external entity ref handler if set
-                            if let Some(handler) = &mut self.external_entity_ref_handler {
-                                let base = self.base_uri.clone();
-                                let ok = handler(
-                                    &entity_name,
-                                    base.as_deref(),
-                                    sys_id.as_deref(),
-                                    pub_id.as_deref(),
-                                );
-                                if !ok {
-                                    return (XmlError::ExternalEntityHandling, pos);
-                                }
-                            } else if self.default_handler.is_some() {
-                                self.report_default(enc, data, pos, next);
-                            }
-                            // If no handler, silently skip (entity can't be expanded)
-                        }
-                        // 3. Entity not found at all
-                        else {
-                            // WFC: Entity Declared
-                            if !self.dtd.borrow().has_param_entity_refs
-                                || self.dtd.borrow().standalone
-                            {
-                                return (XmlError::UndefinedEntity, pos);
-                            }
-                            // External subset might define it — skip
-                            if let Some(handler) = &mut self.skipped_entity_handler {
-                                handler(name, false);
-                            } else if self.default_handler.is_some() {
-                                self.report_default(enc, data, pos, next);
-                            }
-                        }
+                    if let Some(result) = self.handle_content_entity_ref(enc, data, pos, next) {
+                        return result;
                     }
                 }
 
                 XmlTok::StartTagNoAtts | XmlTok::StartTagWithAtts => {
-                    let minbpc = enc.min_bytes_per_char();
-                    let raw_name_start = pos + minbpc; // skip '<'
-                    let raw_name_len = if self.ns_enabled {
-                        self.extract_qualified_name(enc, data, raw_name_start)
-                    } else {
-                        xmltok_impl::name_length(enc, data, raw_name_start)
-                    };
-                    let tag_name =
-                        std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len])
-                            .unwrap_or("");
-
-                    self.tag_level += 1;
-                    self.seen_root = true;
-
-                    // Extract attributes (with duplicate detection)
-                    let mut attrs = if tok == XmlTok::StartTagWithAtts {
-                        match self.extract_attrs(enc, data, pos, next) {
-                            Ok(a) => a,
-                            Err(e) => return (e, pos),
-                        }
-                    } else {
-                        Vec::new()
-                    };
-
-                    // Apply ATTLIST defaults BEFORE namespace processing
-                    // (so xmlns:prefix defaults are picked up)
-                    let specified_count = attrs.len() as i32;
-                    if let Some(defaults) = self.dtd.borrow().attlist_defaults.get(tag_name) {
-                        for (dname, dval) in defaults {
-                            if !attrs.iter().any(|(n, _)| n == dname) {
-                                attrs.push((dname.clone(), dval.clone()));
-                            }
-                        }
-                    }
-
-                    // Process namespaces if enabled
-                    let effective_tag_name = if self.ns_enabled {
-                        match self.process_namespaces(tag_name, &mut attrs) {
-                            Ok(name) => name,
-                            Err(e) => return (e, pos),
-                        }
-                    } else {
-                        tag_name.to_string()
-                    };
-
-                    // Normalize tokenized attribute values per XML spec §3.3.3
-                    // NMTOKENS, IDREFS, ENTITIES types get whitespace collapsed
-                    if let Some(type_map) = self.dtd.borrow().attlist_types.get(tag_name) {
-                        for (attr_name, attr_val) in attrs.iter_mut() {
-                            if let Some(att_type) = type_map.get(attr_name.as_str()) {
-                                if matches!(
-                                    att_type.as_str(),
-                                    "NMTOKENS"
-                                        | "IDREFS"
-                                        | "ENTITIES"
-                                        | "NMTOKEN"
-                                        | "IDREF"
-                                        | "ENTITY"
-                                        | "ID"
-                                        | "NOTATION"
-                                ) {
-                                    // Collapse: strip leading/trailing whitespace, collapse internal runs
-                                    let collapsed: String = attr_val
-                                        .split_whitespace()
-                                        .collect::<Vec<&str>>()
-                                        .join(" ");
-                                    *attr_val = collapsed;
-                                }
-                            }
-                        }
-                    }
-                    self.n_specified_atts = specified_count * 2; // C counts name+value pairs
-                                                                 // Find ID attribute index
-                    self.id_att_index = -1;
-                    if let Some(types) = self.dtd.borrow().attlist_types.get(tag_name) {
-                        for (i, (name, _)) in attrs.iter().enumerate() {
-                            if types.get(name.as_str()).map(|t| t == "ID").unwrap_or(false) {
-                                self.id_att_index = (i * 2) as i32;
-                                break;
-                            }
-                        }
-                    }
-
-                    self.tag_stack.push(effective_tag_name.clone());
-                    self.tag_triplet_flags.push(self.ns_triplets);
-
-                    if let Some(handler) = &mut self.start_element_handler {
-                        let attr_refs: Vec<(&str, &str)> = attrs
-                            .iter()
-                            .map(|(k, v)| (k.as_str(), v.as_str()))
-                            .collect();
-                        handler(&effective_tag_name, &attr_refs);
-                    } else if self.default_handler.is_some()
-                        || self.default_handler_expand.is_some()
-                    {
-                        self.report_default(enc, data, pos, next);
+                    if let Some(result) = self.handle_content_start_tag(enc, tok, data, pos, next) {
+                        return result;
                     }
                 }
 
                 XmlTok::EmptyElementNoAtts | XmlTok::EmptyElementWithAtts => {
-                    let minbpc = enc.min_bytes_per_char();
-                    let raw_name_start = pos + minbpc;
-                    let raw_name_len = if self.ns_enabled {
-                        self.extract_qualified_name(enc, data, raw_name_start)
-                    } else {
-                        xmltok_impl::name_length(enc, data, raw_name_start)
-                    };
-                    let tag_name =
-                        std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len])
-                            .unwrap_or("")
-                            .to_string();
-
-                    self.seen_root = true;
-
-                    let mut attrs = if tok == XmlTok::EmptyElementWithAtts {
-                        match self.extract_attrs(enc, data, pos, next) {
-                            Ok(a) => a,
-                            Err(e) => return (e, pos),
-                        }
-                    } else {
-                        Vec::new()
-                    };
-
-                    // Apply ATTLIST defaults BEFORE namespace processing
-                    let specified_count = attrs.len() as i32;
-                    if let Some(defaults) = self.dtd.borrow().attlist_defaults.get(&tag_name) {
-                        for (dname, dval) in defaults {
-                            if !attrs.iter().any(|(n, _)| n == dname) {
-                                attrs.push((dname.clone(), dval.clone()));
-                            }
-                        }
-                    }
-
-                    // For namespace processing, bump tag_level to track bindings
-                    if self.ns_enabled {
-                        self.tag_level += 1;
-                    }
-
-                    // Process namespaces if enabled
-                    let effective_tag_name = if self.ns_enabled {
-                        match self.process_namespaces(&tag_name, &mut attrs) {
-                            Ok(name) => name,
-                            Err(e) => return (e, pos),
-                        }
-                    } else {
-                        tag_name.clone()
-                    };
-                    self.n_specified_atts = specified_count * 2;
-                    self.id_att_index = -1;
-                    if let Some(types) = self.dtd.borrow().attlist_types.get(&tag_name) {
-                        for (i, (name, _)) in attrs.iter().enumerate() {
-                            if types.get(name.as_str()).map(|t| t == "ID").unwrap_or(false) {
-                                self.id_att_index = (i * 2) as i32;
-                                break;
-                            }
-                        }
-                    }
-
-                    // For empty elements, call start and end handlers if they exist.
-                    // If neither exists, report to default handler (matches C logic).
-                    let mut no_elm_handlers = true;
-                    if let Some(handler) = &mut self.start_element_handler {
-                        let attr_refs: Vec<(&str, &str)> = attrs
-                            .iter()
-                            .map(|(k, v)| (k.as_str(), v.as_str()))
-                            .collect();
-                        handler(&effective_tag_name, &attr_refs);
-                        no_elm_handlers = false;
-                    }
-                    if let Some(handler) = &mut self.end_element_handler {
-                        // (matches C: eventPtr points to end of tag only if both start and end handlers exist)
-                        if self.start_element_handler.is_some() {
-                            self.event_pos = next;
-                        }
-                        handler(&effective_tag_name);
-                        no_elm_handlers = false;
-                    }
-                    if no_elm_handlers
-                        && (self.default_handler.is_some() || self.default_handler_expand.is_some())
+                    if let Some(result) =
+                        self.handle_content_empty_element(enc, tok, data, pos, next, end)
                     {
-                        self.report_default(enc, data, pos, next);
-                    }
-
-                    // Pop namespace bindings for empty element (tag_level still at binding level)
-                    if self.ns_enabled {
-                        self.pop_ns_bindings(self.tag_level);
-                        self.tag_level = self.tag_level.saturating_sub(1);
-                    }
-
-                    // Check if root element closed (empty root element)
-                    if self.tag_level == 0 && self.parsing_state != ParsingState::Finished {
-                        self.root_closed = true;
-                        self.processor = Processor::Epilog;
-                        if next < end {
-                            let epilog_data = data[next..end].to_vec();
-                            self.buffer = epilog_data;
-                            self.epilog_processor();
-                        }
-                        return (self.error_code, end);
+                        return result;
                     }
                 }
 
                 XmlTok::EndTag => {
-                    // Check for async entity — tag level matches start means entity boundary crossed
-                    // Matches C: if (parser->m_tagLevel == startTagLevel) return ASYNC_ENTITY
-                    // But NOT for ext entity content completion (where start == content_start_tag_level)
-                    if self.tag_level == start_tag_level
-                        && start_tag_level != self.content_start_tag_level
+                    if let Some(result) =
+                        self.handle_content_end_tag(enc, data, pos, next, end, start_tag_level)
                     {
-                        return (XmlError::AsyncEntity, pos);
-                    }
-
-                    let minbpc = enc.min_bytes_per_char();
-                    let raw_name_start = pos + minbpc * 2; // skip '</'
-                    let raw_name_len = if self.ns_enabled {
-                        self.extract_qualified_name(enc, data, raw_name_start)
-                    } else {
-                        xmltok_impl::name_length(enc, data, raw_name_start)
-                    };
-                    let tag_name =
-                        std::str::from_utf8(&data[raw_name_start..raw_name_start + raw_name_len])
-                            .unwrap_or("");
-
-                    // Expand tag name if namespace processing is enabled
-                    let effective_tag_name = if self.ns_enabled {
-                        match self.expand_name(tag_name, true) {
-                            Ok(name) => name,
-                            Err(e) => return (e, raw_name_start),
-                        }
-                    } else {
-                        tag_name.to_string()
-                    };
-
-                    // Check tag mismatch — set event position to rawName
-                    // (matches C: *eventPP = rawName)
-                    // Compare the canonical form (without triplet suffix) to handle ns_triplets changes
-                    if let Some(expected) = self.tag_stack.last() {
-                        let expected_canonical = self.strip_triplet(expected);
-                        let actual_canonical = self.strip_triplet(&effective_tag_name);
-                        if expected_canonical != actual_canonical {
-                            self.event_pos = raw_name_start;
-                            return (XmlError::TagMismatch, raw_name_start);
-                        }
-                    } else {
-                        self.event_pos = raw_name_start;
-                        return (XmlError::TagMismatch, raw_name_start);
-                    }
-
-                    self.tag_stack.pop();
-                    let was_triplet = self.tag_triplet_flags.pop().unwrap_or(false);
-                    self.tag_level = self.tag_level.saturating_sub(1);
-
-                    // If the element was opened with ns_triplets=true, we should call the handler
-                    // with the triplet format, even if ns_triplets is now false
-                    let handler_name =
-                        if was_triplet && !self.ns_triplets && self.ns_separator != '\0' {
-                            // Need to add the prefix back
-                            // The effective_tag_name is in format "uri + sep + local"
-                            // We need to find the prefix from the raw tag name
-                            if let Some(colon_pos) = tag_name.find(':') {
-                                let prefix = &tag_name[..colon_pos];
-                                format!("{}{}{}", effective_tag_name, self.ns_separator, prefix)
-                            } else {
-                                effective_tag_name.clone()
-                            }
-                        } else if !was_triplet && self.ns_triplets && self.ns_separator != '\0' {
-                            // Need to remove the prefix
-                            self.strip_triplet(&effective_tag_name)
-                        } else {
-                            effective_tag_name.clone()
-                        };
-
-                    if let Some(handler) = &mut self.end_element_handler {
-                        handler(&handler_name);
-                    } else if self.default_handler.is_some()
-                        || self.default_handler_expand.is_some()
-                    {
-                        self.report_default(enc, data, pos, next);
-                    }
-
-                    // Pop namespace bindings (tag_level already decremented)
-                    if self.ns_enabled {
-                        self.pop_ns_bindings(self.tag_level + 1);
-                    }
-
-                    // C: xmlparse.c:3638 — epilog transition when tag_level reaches 0.
-                    if self.tag_level == 0 {
-                        self.root_closed = true;
-                        self.processor = Processor::Epilog;
-                        if next < end {
-                            let epilog_data = data[next..end].to_vec();
-                            self.buffer = epilog_data;
-                            self.epilog_processor();
-                        }
-                        return (self.error_code, end);
-                    }
-                    // For entity/external entity content: return when tag_level
-                    // returns to start level (C: no separate check, implicit)
-                    if start_tag_level > 0 && self.tag_level == start_tag_level {
-                        return (XmlError::None, next);
+                        return result;
                     }
                 }
 
                 XmlTok::CharRef => {
-                    let n = xmltok_impl::char_ref_number(enc, data, pos);
-                    if n < 0 {
-                        return (XmlError::BadCharRef, pos);
-                    }
-                    if let Some(handler) = &mut self.character_data_handler {
-                        let mut buf = [0u8; 4];
-                        if let Some(c) = char::from_u32(n as u32) {
-                            let encoded = c.encode_utf8(&mut buf);
-                            handler(encoded.as_bytes());
-                        }
-                    } else {
-                        self.report_default(enc, data, pos, next);
+                    if let Some(result) = self.handle_content_char_ref(enc, data, pos, next) {
+                        return result;
                     }
                 }
 
@@ -3578,7 +3565,7 @@ impl Parser {
                 }
 
                 XmlTok::DataNewline => {
-                    if let Some(handler) = &mut self.character_data_handler {
+                    if let Some(handler) = &mut self.handlers.character_data {
                         handler(b"\n");
                     } else {
                         self.report_default(enc, data, pos, next);
@@ -3586,10 +3573,10 @@ impl Parser {
                 }
 
                 XmlTok::CdataSectOpen => {
-                    if let Some(handler) = &mut self.start_cdata_section_handler {
+                    if let Some(handler) = &mut self.handlers.start_cdata_section {
                         handler();
-                    } else if self.default_handler.is_some()
-                        || self.default_handler_expand.is_some()
+                    } else if self.handlers.default.is_some()
+                        || self.handlers.default_expand.is_some()
                     {
                         self.report_default(enc, data, pos, next);
                     }
@@ -3617,10 +3604,10 @@ impl Parser {
                     if have_more {
                         return (XmlError::None, pos);
                     }
-                    if let Some(handler) = &mut self.character_data_handler {
+                    if let Some(handler) = &mut self.handlers.character_data {
                         handler(&data[pos..end]);
-                    } else if self.default_handler.is_some()
-                        || self.default_handler_expand.is_some()
+                    } else if self.handlers.default.is_some()
+                        || self.handlers.default_expand.is_some()
                     {
                         self.report_default(enc, data, pos, end);
                     }
@@ -3635,7 +3622,7 @@ impl Parser {
                 }
 
                 XmlTok::DataChars => {
-                    if let Some(handler) = &mut self.character_data_handler {
+                    if let Some(handler) = &mut self.handlers.character_data {
                         handler(&data[pos..next]);
                     } else {
                         self.report_default(enc, data, pos, next);
@@ -3702,14 +3689,17 @@ impl Parser {
             // Track event position and byte count for handler callbacks
             self.event_pos = pos;
             self.event_cur_byte_count = (next - pos) as i32;
-            self.event_cur_data = data[pos..next].to_vec();
+            self.event_cur_data_start = pos;
+            self.event_cur_data_end = next;
+            self.event_cur_data_valid = true;
+            self.event_cur_data.clear();
 
             match tok {
                 XmlTok::CdataSectClose => {
-                    if let Some(handler) = &mut self.end_cdata_section_handler {
+                    if let Some(handler) = &mut self.handlers.end_cdata_section {
                         handler();
-                    } else if self.default_handler.is_some()
-                        || self.default_handler_expand.is_some()
+                    } else if self.handlers.default.is_some()
+                        || self.handlers.default_expand.is_some()
                     {
                         self.report_default(enc, data, pos, next);
                     }
@@ -3718,14 +3708,14 @@ impl Parser {
                     return (XmlError::None, next);
                 }
                 XmlTok::DataNewline => {
-                    if let Some(handler) = &mut self.character_data_handler {
+                    if let Some(handler) = &mut self.handlers.character_data {
                         handler(b"\n");
                     } else {
                         self.report_default(enc, data, pos, next);
                     }
                 }
                 XmlTok::DataChars => {
-                    if let Some(handler) = &mut self.character_data_handler {
+                    if let Some(handler) = &mut self.handlers.character_data {
                         handler(&data[pos..next]);
                     } else {
                         self.report_default(enc, data, pos, next);
@@ -3810,19 +3800,23 @@ impl Parser {
                 let byte = data[i];
 
                 // Check for invalid XML character (control chars except tab, LF, CR)
-                if byte < 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D {
+                if byte < XML_SPACE
+                    && byte != XML_TAB
+                    && byte != XML_NEWLINE
+                    && byte != XML_CARRIAGE_RETURN
+                {
                     // Invalid control character
                     return (XmlError::InvalidToken, start);
                 }
 
                 // Check for UTF-8 sequence validity
-                if byte >= 0x80 {
+                if byte >= UTF8_CONTINUATION_VALUE {
                     // Multi-byte UTF-8 sequence
-                    let bytes_needed = if byte & 0xE0 == 0xC0 {
+                    let bytes_needed = if byte & 0xE0 == UTF8_2BYTE_MIN {
                         2
-                    } else if byte & 0xF0 == 0xE0 {
+                    } else if byte & 0xF0 == UTF8_3BYTE_MIN {
                         3
-                    } else if byte & 0xF8 == 0xF0 {
+                    } else if byte & 0xF8 == UTF8_4BYTE_MIN {
                         4
                     } else {
                         // Invalid lead byte or continuation byte
@@ -3836,7 +3830,7 @@ impl Parser {
 
                     // Validate continuation bytes
                     for j in 1..bytes_needed {
-                        if data[i + j] & 0xC0 != 0x80 {
+                        if data[i + j] & UTF8_CONTINUATION_MASK != UTF8_CONTINUATION_VALUE {
                             // Invalid continuation byte
                             return (XmlError::InvalidToken, start);
                         }
@@ -3898,7 +3892,7 @@ impl Parser {
             if let Some(ref name) = self.current_element_decl_name.clone() {
                 // Serialize the model before calling handler
                 self.serialize_content_model();
-                if let Some(handler) = &mut self.element_decl_handler {
+                if let Some(handler) = &mut self.handlers.element_decl {
                     handler(name, "");
                 }
             }
@@ -3975,37 +3969,63 @@ impl Parser {
     /// - Expand internal general entity references
     /// - Normalize whitespace (\t, \n, \r, \r\n → space)
     fn extract_attrs<E: Encoding>(
-        &self,
+        &mut self,
         enc: &E,
         data: &[u8],
         start: usize,
         _end: usize,
     ) -> Result<Vec<(String, String)>, XmlError> {
-        let max_atts = 64; // reasonable upper bound
+        let max_atts = 64;
         let (_, atts) = xmltok_impl::get_atts(enc, data, start, max_atts);
-        let mut result = Vec::with_capacity(atts.len());
-        let mut seen = std::collections::HashSet::new();
-        for attr in &atts {
-            let name = std::str::from_utf8(&data[attr.name..attr.name_end])
-                .unwrap_or("")
-                .to_string();
+        let attr_count = atts.len();
+        // Take attr_buf from self to reuse its String allocations across elements
+        let mut attr_buf = std::mem::take(&mut self.attr_buf);
+        let dtd = self.dtd.borrow();
+        for (i, attr) in atts.iter().enumerate() {
+            let name_str = std::str::from_utf8(&data[attr.name..attr.name_end]).unwrap_or("");
             let raw_value = &data[attr.value_ptr..attr.value_end];
-            // Always normalize: expand refs, normalize \t \n \r → space
-            let dtd = self.dtd.borrow();
+            // Check for duplicates against already-processed attrs
+            for j in 0..i {
+                if attr_buf[j].0 == name_str {
+                    attr_buf.truncate(attr_count);
+                    self.attr_buf = attr_buf;
+                    return Err(XmlError::DuplicateAttribute);
+                }
+            }
             // C expat skips unknown entities when has_param_entity_refs is true
             // and standalone is false (i.e., an external subset may define them)
             let skip_unknown = dtd.has_param_entity_refs && !dtd.standalone;
-            let value =
-                Self::normalize_attribute_value(raw_value, &dtd.internal_entities, skip_unknown);
-            if value.contains('\x00') {
+            if i < attr_buf.len() {
+                // Reuse existing String capacity
+                attr_buf[i].0.clear();
+                attr_buf[i].0.push_str(name_str);
+                Self::normalize_attribute_value_into(
+                    raw_value,
+                    &dtd.internal_entities,
+                    skip_unknown,
+                    &mut attr_buf[i].1,
+                );
+            } else {
+                let value = Self::normalize_attribute_value(raw_value, &dtd.internal_entities, skip_unknown);
+                attr_buf.push((name_str.to_string(), value));
+            }
+            if attr_buf[i].1.contains('\x00') {
+                attr_buf.truncate(attr_count);
+                self.attr_buf = attr_buf;
                 return Err(XmlError::RecursiveEntityRef);
             }
-            if !seen.insert(name.clone()) {
-                return Err(XmlError::DuplicateAttribute);
-            }
-            result.push((name, value));
         }
+        attr_buf.truncate(attr_count);
+        drop(dtd);
+        // Swap: return the populated buffer, store empty Vec for next use
+        let result = attr_buf;
+        self.attr_buf = Vec::new();
         Ok(result)
+    }
+
+    /// Return attrs back into the reusable buffer after handler calls
+    fn return_attrs(&mut self, attrs: Vec<(String, String)>) {
+        self.attr_buf = attrs;
     }
 
     /// Check if an entity value contains a cycle (recursive entity references)
@@ -4062,6 +4082,13 @@ impl Parser {
         entities: &std::collections::HashMap<String, String>,
         skip_unknown_entities: bool,
     ) -> String {
+        // Fast path: if no special characters, just return as-is (avoids allocation)
+        if !raw
+            .iter()
+            .any(|&b| b == b'&' || b == b'\r' || b == b'\n' || b == b'\t')
+        {
+            return std::str::from_utf8(raw).unwrap_or_default().to_string();
+        }
         let mut result = Vec::with_capacity(raw.len());
         let mut i = 0;
         while i < raw.len() {
@@ -4156,6 +4183,29 @@ impl Parser {
         String::from_utf8(result).unwrap_or_default()
     }
 
+    /// Like normalize_attribute_value but writes into an existing String, reusing its capacity.
+    fn normalize_attribute_value_into(
+        raw: &[u8],
+        entities: &std::collections::HashMap<String, String>,
+        skip_unknown_entities: bool,
+        out: &mut String,
+    ) {
+        out.clear();
+        // Fast path: if no special characters, just copy as-is
+        if !raw
+            .iter()
+            .any(|&b| b == b'&' || b == b'\r' || b == b'\n' || b == b'\t')
+        {
+            if let Ok(s) = std::str::from_utf8(raw) {
+                out.push_str(s);
+            }
+            return;
+        }
+        // Slow path: delegate to the allocating version and swap
+        let result = Self::normalize_attribute_value(raw, entities, skip_unknown_entities);
+        out.push_str(&result);
+    }
+
     /// Report a processing instruction — corresponds to C reportProcessingInstruction()
     fn report_processing_instruction<E: Encoding>(
         &mut self,
@@ -4181,9 +4231,9 @@ impl Parser {
             ""
         };
 
-        if let Some(handler) = &mut self.processing_instruction_handler {
+        if let Some(handler) = &mut self.handlers.processing_instruction {
             handler(target, pi_data);
-        } else if let Some(handler) = &mut self.default_handler {
+        } else if let Some(handler) = &mut self.handlers.default {
             handler(&data[start..end]);
         }
     }
@@ -4199,9 +4249,9 @@ impl Parser {
         } else {
             &[]
         };
-        if let Some(handler) = &mut self.comment_handler {
+        if let Some(handler) = &mut self.handlers.comment {
             handler(comment_data);
-        } else if let Some(handler) = &mut self.default_handler {
+        } else if let Some(handler) = &mut self.handlers.default {
             handler(&data[start..end]);
         }
     }
@@ -4293,7 +4343,8 @@ impl Parser {
                                 if let Some(ref system_id) = pe.system_id {
                                     // External PE — call handler
                                     // C: xmlparse.c:6854-6872
-                                    if let Some(handler) = self.external_entity_ref_handler.as_mut()
+                                    if let Some(handler) =
+                                        self.handlers.external_entity_ref.as_mut()
                                     {
                                         self.dtd.borrow_mut().param_entity_read = false;
                                         if let Some(e) =
@@ -4358,8 +4409,9 @@ impl Parser {
                                     }
                                 }
                             } else {
-                                // Entity not found — not a well-formedness error
-                                // C: dtd->keepProcessing = dtd->standalone
+                                // Entity not found — not a well-formedness error per
+                                // XML 1.0 WFC: Entity Declared (only applies when
+                                // standalone="yes" or no parameter entity refs seen)
                                 let standalone = self.dtd.borrow().standalone;
                                 self.dtd.borrow_mut().keep_processing = standalone;
                                 break; // C: goto endEntityValue
@@ -4446,8 +4498,9 @@ impl Parser {
                 attrs.remove(i);
                 continue;
             } else if let Some(prefix) = name.strip_prefix("xmlns:") {
-                // Prefixed namespace declaration
-                // Empty URI is only valid for default namespace
+                // Prefixed namespace declaration.
+                // Empty URI is only valid for default namespace per XML Namespaces
+                // 1.0 (not 1.1); undeclaring a prefixed namespace is an error.
                 if value.is_empty() && !prefix.is_empty() {
                     return Err(XmlError::UndeclaringPrefix);
                 }
@@ -4468,7 +4521,16 @@ impl Parser {
                 if value == "http://www.w3.org/2000/xmlns/" {
                     return Err(XmlError::ReservedNamespaceUri);
                 }
-                // Check if namespace separator appears in URI (security check)
+                // Security: Reject namespace URIs containing the application-chosen
+                // namespace separator character, but only if the separator is a
+                // non-URI character per RFC 3986. This prevents an attacker from
+                // injecting extra separator characters into namespace declarations,
+                // which would create ambiguity when the application splits expanded
+                // element names ("{uri}local{sep}prefix") back into components.
+                //
+                // We don't reject URI-valid separators (like ':') because some
+                // widespread applications have used them for >20 years despite the
+                // XML_ParserCreateNS docs advising against it.
                 if self.ns_separator != '\0' && !is_rfc3986_uri_char(self.ns_separator) {
                     for ch in value.chars() {
                         if ch == self.ns_separator {
@@ -4509,7 +4571,7 @@ impl Parser {
             } else {
                 self.ns_map.insert(prefix.clone(), uri.clone());
             }
-            if let Some(handler) = &mut self.start_namespace_decl_handler {
+            if let Some(handler) = &mut self.handlers.start_namespace_decl {
                 let p = if prefix.is_empty() {
                     None
                 } else {
@@ -4598,7 +4660,7 @@ impl Parser {
                 self.ns_map.remove(&prefix);
             }
             // Call end namespace handler (in reverse order)
-            if let Some(handler) = &mut self.end_namespace_decl_handler {
+            if let Some(handler) = &mut self.handlers.end_namespace_decl {
                 let p = if prefix.is_empty() {
                     None
                 } else {
@@ -4612,9 +4674,9 @@ impl Parser {
     fn report_default<E: Encoding>(&mut self, _enc: &E, data: &[u8], start: usize, end: usize) {
         // Call default_handler_expand if set, otherwise call default_handler
         let chunk = &data[start..end];
-        if let Some(handler) = &mut self.default_handler_expand {
+        if let Some(handler) = &mut self.handlers.default_expand {
             handler(chunk);
-        } else if let Some(handler) = &mut self.default_handler {
+        } else if let Some(handler) = &mut self.handlers.default {
             handler(chunk);
         }
     }
@@ -4708,6 +4770,16 @@ impl Parser {
             self.parsing_state = ParsingState::Parsing;
         }
 
+        // Amplification tracking: account for bytes entering the parser.
+        // Root parser bytes are "direct"; subordinate (child) parser bytes are "indirect".
+        if !data.is_empty() {
+            let is_direct = !self.is_subordinate;
+            if !self.accounting_diff_tolerated(data.len(), is_direct) {
+                self.error_code = XmlError::AmplificationLimitBreach;
+                return XmlStatus::Error;
+            }
+        }
+
         // Store the is_final flag
         self.is_final = is_final;
 
@@ -4730,9 +4802,9 @@ impl Parser {
                     self.detected_encoding = Some(enc_upper);
                     let input = if data.len() >= 2 {
                         let has_bom = if is_be {
-                            data[0] == 0xFE && data[1] == 0xFF
+                            data[..2] == UTF16_BE_BOM
                         } else {
-                            data[0] == 0xFF && data[1] == 0xFE
+                            data[..2] == UTF16_LE_BOM
                         };
                         if has_bom {
                             &data[2..]
@@ -4762,7 +4834,7 @@ impl Parser {
                 } else if !is_known_encoding(&enc_upper) {
                     // Unknown encoding — try the unknown encoding handler first
                     let mut handled = false;
-                    if let Some(handler) = &mut self.unknown_encoding_handler {
+                    if let Some(handler) = &mut self.handlers.unknown_encoding {
                         handled = handler(enc);
                     }
                     if handled {
@@ -4794,7 +4866,7 @@ impl Parser {
                     // Explicit UTF-8/ASCII encoding — consume UTF-8 BOM if present,
                     // then treat as UTF-8
                     self.detected_encoding = Some(enc_upper);
-                    if data.len() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+                    if data.len() >= 3 && data[..3] == UTF8_BOM {
                         self.original_chunk_bom_len = 3;
                         self.buffer = data[3..].to_vec();
                     } else {
@@ -4909,6 +4981,7 @@ impl Parser {
         // Reset event byte count and data (only valid during handler callbacks)
         self.event_cur_byte_count = 0;
         self.event_cur_data.clear();
+        self.event_cur_data_valid = false;
 
         // If the parser was suspended during a handler callback, update position
         // tracking only up to the event point (not beyond), save remaining data,
@@ -5029,10 +5102,11 @@ impl Parser {
             // Check if combined data could still be a partial BOM
             if !self.is_final && combined.len() < 4 {
                 // Check if first bytes could be a BOM prefix that needs more bytes
-                let could_be_bom = (combined[0] == 0xFF && combined[1] == 0xFE)
-                    || (combined[0] == 0xFE && combined[1] == 0xFF)
-                    || (combined[0] == 0xEF
-                        && (combined.len() < 3 || (combined.len() >= 2 && combined[1] == 0xBB)));
+                let could_be_bom = (combined[..2] == UTF16_LE_BOM)
+                    || (combined[..2] == UTF16_BE_BOM)
+                    || (combined[0] == UTF8_BOM[0]
+                        && (combined.len() < 3
+                            || (combined.len() >= 2 && combined[1] == UTF8_BOM[1])));
                 if could_be_bom {
                     // Still looks like a partial BOM, wait for more bytes
                     self.encoding_detection_buf = combined;
@@ -5057,9 +5131,9 @@ impl Parser {
         // If non-final and 2-3 bytes, check if we might need more data for detection
         if !self.is_final && data.len() < 4 {
             // Check if first bytes could be a BOM prefix that needs more bytes
-            let could_be_bom = (data[0] == 0xFF && data[1] == 0xFE)
-                || (data[0] == 0xFE && data[1] == 0xFF)
-                || (data[0] == 0xEF && (data.len() < 3 || data[1] == 0xBB));
+            let could_be_bom = (data[..2] == UTF16_LE_BOM)
+                || (data[..2] == UTF16_BE_BOM)
+                || (data[0] == UTF8_BOM[0] && (data.len() < 3 || data[1] == UTF8_BOM[1]));
             if could_be_bom {
                 self.encoding_detection_buf = data.to_vec();
                 return Ok(Vec::new());
@@ -5243,17 +5317,17 @@ impl Parser {
                     if codepoint <= 0x7F {
                         result.push(codepoint as u8);
                     } else if codepoint <= 0x7FF {
-                        result.push(0xC0 | ((codepoint >> 6) as u8));
-                        result.push(0x80 | ((codepoint & 0x3F) as u8));
+                        result.push(UTF8_2BYTE_MIN | ((codepoint >> 6) as u8));
+                        result.push(UTF8_CONTINUATION_VALUE | ((codepoint & 0x3F) as u8));
                     } else if codepoint <= 0xFFFF {
-                        result.push(0xE0 | ((codepoint >> 12) as u8));
-                        result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
-                        result.push(0x80 | ((codepoint & 0x3F) as u8));
+                        result.push(UTF8_3BYTE_MIN | ((codepoint >> 12) as u8));
+                        result.push(UTF8_CONTINUATION_VALUE | (((codepoint >> 6) & 0x3F) as u8));
+                        result.push(UTF8_CONTINUATION_VALUE | ((codepoint & 0x3F) as u8));
                     } else {
-                        result.push(0xF0 | ((codepoint >> 18) as u8));
-                        result.push(0x80 | (((codepoint >> 12) & 0x3F) as u8));
-                        result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
-                        result.push(0x80 | ((codepoint & 0x3F) as u8));
+                        result.push(UTF8_4BYTE_MIN | ((codepoint >> 18) as u8));
+                        result.push(UTF8_CONTINUATION_VALUE | (((codepoint >> 12) & 0x3F) as u8));
+                        result.push(UTF8_CONTINUATION_VALUE | (((codepoint >> 6) & 0x3F) as u8));
+                        result.push(UTF8_CONTINUATION_VALUE | ((codepoint & 0x3F) as u8));
                     }
                     i += 1;
                 } else if map_val < -4 {
@@ -5290,17 +5364,20 @@ impl Parser {
                         if codepoint <= 0x7F {
                             result.push(codepoint as u8);
                         } else if codepoint <= 0x7FF {
-                            result.push(0xC0 | ((codepoint >> 6) as u8));
-                            result.push(0x80 | ((codepoint & 0x3F) as u8));
+                            result.push(UTF8_2BYTE_MIN | ((codepoint >> 6) as u8));
+                            result.push(UTF8_CONTINUATION_VALUE | ((codepoint & 0x3F) as u8));
                         } else if codepoint <= 0xFFFF {
-                            result.push(0xE0 | ((codepoint >> 12) as u8));
-                            result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
-                            result.push(0x80 | ((codepoint & 0x3F) as u8));
+                            result.push(UTF8_3BYTE_MIN | ((codepoint >> 12) as u8));
+                            result
+                                .push(UTF8_CONTINUATION_VALUE | (((codepoint >> 6) & 0x3F) as u8));
+                            result.push(UTF8_CONTINUATION_VALUE | ((codepoint & 0x3F) as u8));
                         } else {
-                            result.push(0xF0 | ((codepoint >> 18) as u8));
-                            result.push(0x80 | (((codepoint >> 12) & 0x3F) as u8));
-                            result.push(0x80 | (((codepoint >> 6) & 0x3F) as u8));
-                            result.push(0x80 | ((codepoint & 0x3F) as u8));
+                            result.push(UTF8_4BYTE_MIN | ((codepoint >> 18) as u8));
+                            result
+                                .push(UTF8_CONTINUATION_VALUE | (((codepoint >> 12) & 0x3F) as u8));
+                            result
+                                .push(UTF8_CONTINUATION_VALUE | (((codepoint >> 6) & 0x3F) as u8));
+                            result.push(UTF8_CONTINUATION_VALUE | ((codepoint & 0x3F) as u8));
                         }
                         i += n_bytes;
                     } else {
@@ -5597,7 +5674,11 @@ impl Parser {
                     let byte = orig[orig_pos];
                     orig_pos += 1;
                     // Latin-1 bytes 0x80-0xFF become 2 UTF-8 bytes; rest are 1
-                    utf8_pos += if byte >= 0x80 { 2 } else { 1 };
+                    utf8_pos += if byte >= UTF8_CONTINUATION_VALUE {
+                        2
+                    } else {
+                        1
+                    };
                 }
 
                 self.original_bytes_before_chunk as i64 + orig_pos as i64
@@ -5723,7 +5804,7 @@ impl Parser {
     /// Equivalent to XML_GetIdAttributeIndex(parser) in C.
     /// Returns -1 if there is no ID-type attribute.
     pub fn id_attribute_index(&self) -> i32 {
-        self.id_att_index
+        self.id_att_index.map_or(-1, |i| i as i32)
     }
 
     /// Register a callback invoked at the start of each element.
@@ -5731,14 +5812,14 @@ impl Parser {
     /// The handler receives `(element_name, attributes)` where `attributes` is
     /// a slice of `(name, value)` pairs. Pass `None` to remove the handler.
     pub fn set_start_element_handler(&mut self, handler: Option<StartElementHandler>) {
-        self.start_element_handler = handler;
+        self.handlers.start_element = handler;
     }
 
     /// Set the end element handler
     ///
     /// Handler receives element_name
     pub fn set_end_element_handler(&mut self, handler: Option<EndElementHandler>) {
-        self.end_element_handler = handler;
+        self.handlers.end_element = handler;
     }
 
     /// Set both start and end element handlers
@@ -5747,15 +5828,15 @@ impl Parser {
         start: Option<StartElementHandler>,
         end: Option<EndElementHandler>,
     ) {
-        self.start_element_handler = start;
-        self.end_element_handler = end;
+        self.handlers.start_element = start;
+        self.handlers.end_element = end;
     }
 
     /// Set the character data handler
     ///
     /// Handler receives character data as &[u8]
     pub fn set_character_data_handler(&mut self, handler: Option<CharacterDataHandler>) {
-        self.character_data_handler = handler;
+        self.handlers.character_data = handler;
     }
 
     /// Set the processing instruction handler
@@ -5765,14 +5846,14 @@ impl Parser {
         &mut self,
         handler: Option<ProcessingInstructionHandler>,
     ) {
-        self.processing_instruction_handler = handler;
+        self.handlers.processing_instruction = handler;
     }
 
     /// Set the comment handler
     ///
     /// Handler receives comment data
     pub fn set_comment_handler(&mut self, handler: Option<CommentHandler>) {
-        self.comment_handler = handler;
+        self.handlers.comment = handler;
     }
 
     /// Set the CDATA section handlers
@@ -5781,30 +5862,30 @@ impl Parser {
         start: Option<CdataSectionHandler>,
         end: Option<CdataSectionHandler>,
     ) {
-        self.start_cdata_section_handler = start;
-        self.end_cdata_section_handler = end;
+        self.handlers.start_cdata_section = start;
+        self.handlers.end_cdata_section = end;
     }
 
     /// Set the start CDATA section handler
     pub fn set_start_cdata_section_handler(&mut self, handler: Option<CdataSectionHandler>) {
-        self.start_cdata_section_handler = handler;
+        self.handlers.start_cdata_section = handler;
     }
 
     /// Set the end CDATA section handler
     pub fn set_end_cdata_section_handler(&mut self, handler: Option<CdataSectionHandler>) {
-        self.end_cdata_section_handler = handler;
+        self.handlers.end_cdata_section = handler;
     }
 
     /// Set the default handler
     ///
     /// Handler receives raw data as &[u8]
     pub fn set_default_handler(&mut self, handler: Option<DefaultHandler>) {
-        self.default_handler = handler;
+        self.handlers.default = handler;
     }
 
     /// Set the default handler (without inhibiting internal entity expansion)
     pub fn set_default_handler_expand(&mut self, handler: Option<DefaultHandler>) {
-        self.default_handler_expand = handler;
+        self.handlers.default_expand = handler;
     }
 
     /// Set the DOCTYPE declaration handlers
@@ -5813,50 +5894,50 @@ impl Parser {
         start: Option<StartDoctypeDeclHandler>,
         end: Option<EndDoctypeDeclHandler>,
     ) {
-        self.start_doctype_decl_handler = start;
-        self.end_doctype_decl_handler = end;
+        self.handlers.start_doctype_decl = start;
+        self.handlers.end_doctype_decl = end;
     }
 
     /// Set the start DOCTYPE declaration handler
     pub fn set_start_doctype_decl_handler(&mut self, handler: Option<StartDoctypeDeclHandler>) {
-        self.start_doctype_decl_handler = handler;
+        self.handlers.start_doctype_decl = handler;
     }
 
     /// Set the end DOCTYPE declaration handler
     pub fn set_end_doctype_decl_handler(&mut self, handler: Option<EndDoctypeDeclHandler>) {
-        self.end_doctype_decl_handler = handler;
+        self.handlers.end_doctype_decl = handler;
     }
 
     /// Set the element declaration handler
     ///
     /// Handler receives (element_name, content_model)
     pub fn set_element_decl_handler(&mut self, handler: Option<ElementDeclHandler>) {
-        self.element_decl_handler = handler;
+        self.handlers.element_decl = handler;
     }
 
     /// Set the attribute list declaration handler
     pub fn set_attlist_decl_handler(&mut self, handler: Option<AttlistDeclHandler>) {
-        self.attlist_decl_handler = handler;
+        self.handlers.attlist_decl = handler;
     }
 
     /// Set the XML declaration handler
     pub fn set_xml_decl_handler(&mut self, handler: Option<XmlDeclHandler>) {
-        self.xml_decl_handler = handler;
+        self.handlers.xml_decl = handler;
     }
 
     /// Set the entity declaration handler
     pub fn set_entity_decl_handler(&mut self, handler: Option<EntityDeclHandler>) {
-        self.entity_decl_handler = handler;
+        self.handlers.entity_decl = handler;
     }
 
     /// Set the unparsed entity declaration handler
     pub fn set_unparsed_entity_decl_handler(&mut self, handler: Option<UnparsedEntityDeclHandler>) {
-        self.unparsed_entity_decl_handler = handler;
+        self.handlers.unparsed_entity_decl = handler;
     }
 
     /// Set the notation declaration handler
     pub fn set_notation_decl_handler(&mut self, handler: Option<NotationDeclHandler>) {
-        self.notation_decl_handler = handler;
+        self.handlers.notation_decl = handler;
     }
 
     /// Set the namespace declaration handlers
@@ -5865,38 +5946,38 @@ impl Parser {
         start: Option<NamespaceDeclHandler>,
         end: Option<NamespaceDeclEndHandler>,
     ) {
-        self.start_namespace_decl_handler = start;
-        self.end_namespace_decl_handler = end;
+        self.handlers.start_namespace_decl = start;
+        self.handlers.end_namespace_decl = end;
     }
 
     /// Set the start namespace declaration handler
     pub fn set_start_namespace_decl_handler(&mut self, handler: Option<NamespaceDeclHandler>) {
-        self.start_namespace_decl_handler = handler;
+        self.handlers.start_namespace_decl = handler;
     }
 
     /// Set the end namespace declaration handler
     pub fn set_end_namespace_decl_handler(&mut self, handler: Option<NamespaceDeclEndHandler>) {
-        self.end_namespace_decl_handler = handler;
+        self.handlers.end_namespace_decl = handler;
     }
 
     /// Set the "not standalone" handler
     pub fn set_not_standalone_handler(&mut self, handler: Option<NotStandaloneHandler>) {
-        self.not_standalone_handler = handler;
+        self.handlers.not_standalone = handler;
     }
 
     /// Set the external entity reference handler
     pub fn set_external_entity_ref_handler(&mut self, handler: Option<ExternalEntityRefHandler>) {
-        self.external_entity_ref_handler = handler;
+        self.handlers.external_entity_ref = handler;
     }
 
     /// Set the skipped entity handler
     pub fn set_skipped_entity_handler(&mut self, handler: Option<SkippedEntityHandler>) {
-        self.skipped_entity_handler = handler;
+        self.handlers.skipped_entity = handler;
     }
 
     /// Set the unknown encoding handler
     pub fn set_unknown_encoding_handler(&mut self, handler: Option<UnknownEncodingHandler>) {
-        self.unknown_encoding_handler = handler;
+        self.handlers.unknown_encoding = handler;
     }
 
     /// Set whether to return namespace triplets
@@ -5914,12 +5995,19 @@ impl Parser {
 
     /// Default current markup to the default handler
     pub fn default_current(&mut self) {
-        // Forward the current event's raw bytes to the default handler
+        // Lazily populate event_cur_data from parse_data if needed
+        if self.event_cur_data.is_empty() && self.event_cur_data_valid {
+            let start = self.event_cur_data_start;
+            let end = self.event_cur_data_end;
+            if end > start && end <= self.parse_data.len() {
+                self.event_cur_data = self.parse_data[start..end].to_vec();
+            }
+        }
         if !self.event_cur_data.is_empty() {
             let data = self.event_cur_data.clone();
-            if let Some(handler) = &mut self.default_handler_expand {
+            if let Some(handler) = &mut self.handlers.default_expand {
                 handler(&data);
-            } else if let Some(handler) = &mut self.default_handler {
+            } else if let Some(handler) = &mut self.handlers.default {
                 handler(&data);
             }
         }
@@ -5929,26 +6017,44 @@ impl Parser {
     ///
     /// Equivalent to XML_SetBillionLaughsAttackProtectionMaximumAmplification in C.
     /// Controls the maximum ratio of output text to input text during entity expansion.
+    /// Must be called on a root parser (not a child/subordinate parser).
     pub fn set_billion_laughs_attack_protection_maximum_amplification(
         &mut self,
         factor: f32,
     ) -> bool {
+        // C: Reject calls on non-root (subordinate) parsers
+        if self.is_subordinate {
+            return false;
+        }
+        // Reject NaN, negative, and positive values < 1.0 (but allow 0.0 = use default)
+        if factor.is_nan() || factor < 0.0 {
+            return false;
+        }
         if factor < 1.0 && factor != 0.0 {
             return false;
         }
-        self.billion_laughs_max_amplification = factor;
+        self.accounting.borrow_mut().maximum_amplification_factor = if factor == 0.0 {
+            100.0 // default
+        } else {
+            factor
+        };
         true
     }
 
     /// Set the billion laughs attack protection activation threshold
     ///
     /// Equivalent to XML_SetBillionLaughsAttackProtectionActivationThreshold in C.
-    /// Entity expansion limits only activate after this many bytes of input.
+    /// Entity expansion limits only activate after this many bytes of output.
+    /// Must be called on a root parser (not a child/subordinate parser).
     pub fn set_billion_laughs_attack_protection_activation_threshold(
         &mut self,
         threshold: u64,
     ) -> bool {
-        self.billion_laughs_activation_threshold = threshold;
+        // C: Reject calls on non-root (subordinate) parsers
+        if self.is_subordinate {
+            return false;
+        }
+        self.accounting.borrow_mut().activation_threshold_bytes = threshold;
         true
     }
 
@@ -5966,6 +6072,17 @@ impl Parser {
     pub fn set_reparse_deferral_enabled(&mut self, enabled: bool) -> bool {
         self.reparse_deferral_enabled = enabled;
         true
+    }
+
+    /// Record bytes processed and check amplification limit.
+    /// `bytes_more`: number of bytes in this token.
+    /// `is_direct`: true if this is direct input on a root parser (not entity expansion
+    /// or a child parser). In C, this is `(account == XML_ACCOUNT_DIRECT) && (originParser == rootParser)`.
+    /// Returns true if tolerated, false if amplification limit breached.
+    fn accounting_diff_tolerated(&self, bytes_more: usize, is_direct: bool) -> bool {
+        self.accounting
+            .borrow_mut()
+            .diff_tolerated(bytes_more as u64, is_direct)
     }
 
     /// Create an external entity parser
@@ -5995,6 +6112,9 @@ impl Parser {
             // Content child — clone DTD state (isolated snapshot)
             child.dtd = Rc::new(RefCell::new(self.dtd.borrow().clone()));
         }
+        // Share accounting with parent — amplification tracking accumulates
+        // across the entire parse tree (root + all external entity sub-parsers)
+        child.accounting = Rc::clone(&self.accounting);
         child.param_entity_parsing = self.param_entity_parsing;
         // Foreign DTD subset (empty context) is treated as document entity
         // General entities (non-empty context) are not
@@ -6057,13 +6177,13 @@ fn is_latin1_encoding(name: Option<&str>) -> bool {
 fn transcode_latin1_to_utf8(data: &[u8]) -> Vec<u8> {
     let mut result = Vec::with_capacity(data.len() * 2);
     for &b in data {
-        if b < 0x80 {
+        if b < UTF8_CONTINUATION_VALUE {
             result.push(b);
         } else {
             // Latin-1 byte value = Unicode code point
             // Encode as 2-byte UTF-8: 110xxxxx 10xxxxxx
-            result.push(0xC0 | (b >> 6));
-            result.push(0x80 | (b & 0x3F));
+            result.push(UTF8_2BYTE_MIN | (b >> 6));
+            result.push(UTF8_CONTINUATION_VALUE | (b & 0x3F));
         }
     }
     result
@@ -6074,8 +6194,8 @@ fn transcode_latin1_to_utf8(data: &[u8]) -> Vec<u8> {
 fn is_valid_public_id(data: &[u8]) -> bool {
     for &b in data {
         match b {
-            0x20 | 0x0D | 0x0A => {}                      // whitespace
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => {} // alphanumeric
+            XML_SPACE | XML_CARRIAGE_RETURN | XML_NEWLINE => {} // whitespace
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => {}       // alphanumeric
             b'-' | b'\'' | b'(' | b')' | b'+' | b',' | b'.' | b'/' | b':' | b'=' | b'?' | b';'
             | b'!' | b'*' | b'#' | b'@' | b'$' | b'_' | b'%' => {} // special chars
             _ => return false,

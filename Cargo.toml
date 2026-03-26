@@ -1,3 +1,11 @@
 [workspace]
 members = ["expat-rust", "expat-sys", "expat-ffi", "c-tests-runner"]
 resolver = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.bench]
+lto = true
+codegen-units = 1
