@@ -398,6 +398,8 @@ pub struct Parser {
     utf16_pending_byte: Option<u8>,
     /// Pending bytes for custom encoding multi-byte sequences split across parse() calls
     custom_encoding_pending: Vec<u8>,
+    /// Flag: unknown encoding handler just succeeded in prolog — remaining data needs transcoding
+    encoding_needs_transcode: bool,
     /// Buffer for partial encoding detection (BOM bytes received across calls)
     encoding_detection_buf: Vec<u8>,
     /// Current ATTLIST element name being processed
@@ -552,6 +554,7 @@ impl Parser {
             event_cur_data: Vec::new(),
             utf16_pending_byte: None,
             custom_encoding_pending: Vec::new(),
+            encoding_needs_transcode: false,
             encoding_detection_buf: Vec::new(),
             current_attlist_element: None,
             current_attlist_attr: None,
@@ -667,6 +670,7 @@ impl Parser {
             event_cur_data: Vec::new(),
             utf16_pending_byte: None,
             custom_encoding_pending: Vec::new(),
+            encoding_needs_transcode: false,
             encoding_detection_buf: Vec::new(),
             current_attlist_element: None,
             current_attlist_attr: None,
@@ -820,7 +824,7 @@ impl Parser {
     /// Run the current processor on the buffered data
     fn run_processor(&mut self) {
         // Take buffer once — matches C where parse() passes data to the processor
-        let data = std::mem::take(&mut self.buffer);
+        let mut data = std::mem::take(&mut self.buffer);
         if data.is_empty() {
             if !self.is_final {
                 return; // Non-final empty buffer — nothing to process
@@ -849,7 +853,7 @@ impl Parser {
 
         // Dispatch to processor — may loop if processor transitions
         let mut start = 0usize;
-        let end = data.len();
+        let mut end = data.len();
         loop {
             let prev_processor = self.processor;
             let (error, next_pos) = match self.processor {
@@ -908,6 +912,29 @@ impl Parser {
                 start = next_pos;
                 continue;
             }
+
+            // If the prolog tokenizer hit custom-encoded bytes that aren't
+            // valid UTF-8, transcode the remaining data and re-dispatch.
+            // This handles the case where the XML declaration specified a
+            // custom encoding and subsequent data contains non-UTF-8 bytes.
+            if self.encoding_needs_transcode && next_pos < end {
+                self.encoding_needs_transcode = false;
+                let remaining = &data[next_pos..end];
+                match self.transcode_custom_encoding(remaining) {
+                    Ok(transcoded) => {
+                        // Replace data with transcoded version and continue the loop
+                        data = transcoded;
+                        start = 0;
+                        end = data.len();
+                        continue;
+                    }
+                    Err(err) => {
+                        self.error_code = err;
+                        return;
+                    }
+                }
+            }
+            self.encoding_needs_transcode = false;
 
             // If processor changed, re-dispatch with remaining data
             // Skip re-dispatch when suspended — resume() will handle it
@@ -1393,6 +1420,13 @@ impl Parser {
                         }
                         // Final buffer with partial char → PartialChar error (C: XML_ERROR_PARTIAL_CHAR)
                         return (XmlError::PartialChar, pos);
+                    }
+                    // If a custom encoding is active, the error may be because
+                    // we're hitting custom-encoded bytes that aren't valid UTF-8.
+                    // Signal the caller to transcode remaining data and retry.
+                    if self.custom_encoding_map.is_some() && !is_internal_entity {
+                        self.encoding_needs_transcode = true;
+                        return (XmlError::None, pos);
                     }
                     return (XmlError::InvalidToken, pos);
                 }
