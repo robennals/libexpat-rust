@@ -64,8 +64,8 @@ lldb -b -o "run" -o "quit" ./target/debug/c-tests-runner 2>&1 | grep -c "^PASS:"
 lldb -b -o "run" -o "quit" ./target/debug/c-tests-runner 2>&1 | grep -c "^FAIL "
 ```
 
-Current status: **279 pass, 11 fail** of 290 tests (96.2% pass rate).
-5 of the 11 failures are principled skips (C allocator/accounting internals).
+Current status: **286 pass, 5 fail** of 291 tests (98.3% pass rate).
+All 5 failures are principled skips (C allocator/accounting internals).
 No longer needs `lldb` — custom `assert.h` converts C asserts to test failures.
 ```bash
 cargo build -p c-tests-runner
