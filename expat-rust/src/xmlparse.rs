@@ -4173,8 +4173,9 @@ impl Parser {
                                     }
                                 }
                             } else {
-                                // Entity not found — not a well-formedness error
-                                // C: dtd->keepProcessing = dtd->standalone
+                                // Entity not found — not a well-formedness error per
+                                // XML 1.0 WFC: Entity Declared (only applies when
+                                // standalone="yes" or no parameter entity refs seen)
                                 let standalone = self.dtd.borrow().standalone;
                                 self.dtd.borrow_mut().keep_processing = standalone;
                                 break; // C: goto endEntityValue
@@ -4261,8 +4262,9 @@ impl Parser {
                 attrs.remove(i);
                 continue;
             } else if let Some(prefix) = name.strip_prefix("xmlns:") {
-                // Prefixed namespace declaration
-                // Empty URI is only valid for default namespace
+                // Prefixed namespace declaration.
+                // Empty URI is only valid for default namespace per XML Namespaces
+                // 1.0 (not 1.1); undeclaring a prefixed namespace is an error.
                 if value.is_empty() && !prefix.is_empty() {
                     return Err(XmlError::UndeclaringPrefix);
                 }
@@ -4283,7 +4285,16 @@ impl Parser {
                 if value == "http://www.w3.org/2000/xmlns/" {
                     return Err(XmlError::ReservedNamespaceUri);
                 }
-                // Check if namespace separator appears in URI (security check)
+                // Security: Reject namespace URIs containing the application-chosen
+                // namespace separator character, but only if the separator is a
+                // non-URI character per RFC 3986. This prevents an attacker from
+                // injecting extra separator characters into namespace declarations,
+                // which would create ambiguity when the application splits expanded
+                // element names ("{uri}local{sep}prefix") back into components.
+                //
+                // We don't reject URI-valid separators (like ':') because some
+                // widespread applications have used them for >20 years despite the
+                // XML_ParserCreateNS docs advising against it.
                 if self.ns_separator != '\0' && !is_rfc3986_uri_char(self.ns_separator) {
                     for ch in value.chars() {
                         if ch == self.ns_separator {
