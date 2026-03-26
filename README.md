@@ -8,7 +8,7 @@ A memory-safe, idiomatic Rust reimplementation of [libexpat](https://github.com/
 
 ## What is this?
 
-`expat-rust` is a complete rewrite of libexpat in safe Rust. It is **not** a wrapper or binding — it is a from-scratch reimplementation that reproduces libexpat's behavior exactly. It passes **all 290 of libexpat's own C tests** (except 5 that test C-specific allocation APIs), and is additionally verified by **463 comparison tests** that run identical XML inputs through both the C and Rust parsers and confirm identical SAX callback sequences, error codes, and parse results.
+`expat-rust` is a complete rewrite of libexpat in safe Rust. It is **not** a wrapper or binding — it is a from-scratch reimplementation that reproduces libexpat's behavior exactly. It passes **288 of libexpat's 291 C tests** (the 3 skipped test C-specific custom allocator APIs that don't apply to Rust), and is additionally verified by **463 comparison tests** that run identical XML inputs through both the C and Rust parsers and confirm identical SAX callback sequences, error codes, and parse results.
 
 Like libexpat, it is a **streaming SAX-style XML parser**: you register callback handlers, feed the parser chunks of XML data, and your handlers are called as the parser encounters elements, text, processing instructions, and other XML structures.
 
@@ -19,7 +19,7 @@ Like libexpat, it is a **streaming SAX-style XML parser**: you register callback
 `expat-rust` provides:
 
 - **Memory safety**: Zero `unsafe` blocks. Buffer overflows, use-after-free, and double-free bugs are structurally impossible.
-- **Behavioral compatibility**: Passes all of libexpat 2.7.5's own test suite (285/290 tests; 5 skipped test C-specific allocator APIs). Additionally verified by [463 comparison tests](docs/verification.md) that confirm identical SAX event traces across normal parsing, error handling, encodings, DTDs, namespaces, and security limits.
+- **Behavioral compatibility**: Passes 288/291 of libexpat 2.7.5's own test suite (3 skipped test C-specific custom allocator APIs). Additionally verified by [463 comparison tests](docs/verification.md) that confirm identical SAX event traces across normal parsing, error handling, encodings, DTDs, namespaces, and security limits.
 - **Familiar API**: The same SAX callback model that libexpat users know, expressed in idiomatic Rust.
 - **C drop-in replacement**: The `expat-ffi` crate produces a `libexpat.so`/`.dylib`/`.dll` with the same C ABI — swap it into existing C/C++ applications without changing a line of code.
 - **Zero dependencies**: The core parser has no production dependencies.
@@ -31,7 +31,7 @@ Like libexpat, it is a **streaming SAX-style XML parser**: you register callback
 
 | Metric | Value |
 |--------|-------|
-| Original C test suite | 285/290 pass (5 skipped: C-specific allocator APIs) |
+| Original C test suite | 288/291 pass (3 skipped: C-specific custom allocator APIs) |
 | Additional comparison tests | 463 (identical XML through both C and Rust parsers) |
 | Line coverage (reachable code) | 76% |
 | Lines of Rust (core parser) | ~11,800 |
@@ -39,7 +39,7 @@ Like libexpat, it is a **streaming SAX-style XML parser**: you register callback
 | Production dependencies | 0 |
 | Minimum Rust version | 1.70 |
 
-The original C test suite (`basic_tests.c`, `ns_tests.c`, `misc_tests.c`, `acc_tests.c` — 290 tests) is compiled and linked against the Rust parser's C-compatible FFI layer, verifying not just parse status but handler callback data, error positions, encoding handling, external entities, and more. The 5 skipped tests exercise C-specific custom allocator hooks (`XML_ParserCreate_MM`) which don't apply to Rust.
+The original C test suite (`basic_tests.c`, `ns_tests.c`, `misc_tests.c`, `acc_tests.c` — 291 tests) is compiled and linked against the Rust parser's C-compatible FFI layer, verifying not just parse status but handler callback data, error positions, encoding handling, external entities, and more. The 3 skipped tests exercise C-specific custom allocator hooks (`XML_ParserCreate_MM`) and a C-internal byte counter — none apply to Rust.
 
 On top of that, 463 comparison tests run the same XML inputs through both the C library and the Rust port, comparing full SAX event traces (handler calls, error codes, attribute values, byte positions) for exact equivalence. See [docs/verification.md](docs/verification.md) for the full testing methodology.
 
@@ -104,7 +104,7 @@ This port was created using an AI-assisted methodology with rigorous automated v
 
 3. **Structural verification**: A custom AST comparison tool verified that each Rust function structurally matched its C counterpart — same switch/match arms, same error paths, same handler calls.
 
-4. **Original test suite**: The 290 tests from libexpat's own C test suite (`basic_tests.c`, `ns_tests.c`, `misc_tests.c`, `acc_tests.c`) are compiled and linked against the Rust parser's C FFI layer — 285 pass, with 5 skipped for testing C-specific allocator APIs.
+4. **Original test suite**: The 291 tests from libexpat's own C test suite (`basic_tests.c`, `ns_tests.c`, `misc_tests.c`, `acc_tests.c`) are compiled and linked against the Rust parser's C FFI layer — 288 pass, with 3 skipped for testing C-specific custom allocator APIs.
 
 5. **Behavioral verification**: 463 additional FFI comparison tests run identical XML inputs through both the C library and the Rust port, comparing full SAX event traces (handler calls, error codes, attribute values) for exact equivalence. See [docs/verification.md](docs/verification.md) for the detailed methodology.
 

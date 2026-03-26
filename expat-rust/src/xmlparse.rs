@@ -66,6 +66,78 @@ use std::rc::Rc;
 /// Returns negative on error.
 type CustomEncodingConverter = Rc<dyn Fn(&[u8]) -> i32>;
 
+/// Amplification tracking — shared between parent and child parsers via Rc<RefCell<>>.
+/// Matches C's `ACCOUNTING` struct. The root parser creates this; child parsers
+/// created via `create_external_entity_parser` share the same instance so that
+/// byte counts accumulate across the entire parse tree.
+///
+/// This is the core of billion laughs attack protection: it tracks the ratio of
+/// bytes produced (entity expansion output) to bytes consumed (direct input).
+/// When the ratio exceeds `maximum_amplification_factor` and total output exceeds
+/// `activation_threshold_bytes`, parsing is aborted with `AmplificationLimitBreach`.
+#[derive(Debug, Clone)]
+pub struct Accounting {
+    /// Bytes of direct (original document) input processed
+    pub count_bytes_direct: u64,
+    /// Bytes of indirect (entity expansion) output produced
+    pub count_bytes_indirect: u64,
+    /// Maximum allowed amplification factor (default 100.0)
+    pub maximum_amplification_factor: f32,
+    /// Amplification limits only activate after this many bytes of output (default 8MB)
+    pub activation_threshold_bytes: u64,
+}
+
+impl Default for Accounting {
+    fn default() -> Self {
+        Accounting {
+            count_bytes_direct: 0,
+            count_bytes_indirect: 0,
+            maximum_amplification_factor: 100.0, // C: EXPAT_BILLION_LAUGHS_ATTACK_PROTECTION_MAXIMUM_AMPLIFICATION_DEFAULT
+            activation_threshold_bytes: 8_388_608, // C: 8 MiB, 2^23
+        }
+    }
+}
+
+impl Accounting {
+    /// Compute the current amplification factor.
+    /// Matches C's `accountingGetCurrentAmplification`.
+    fn get_current_amplification(&self) -> f32 {
+        // Length of shortest possible entity include: <!ENTITY a SYSTEM 'b'>
+        const LEN_OF_SHORTEST_INCLUDE: u64 = 22;
+        let count_bytes_output = self.count_bytes_direct + self.count_bytes_indirect;
+        if self.count_bytes_direct > 0 {
+            count_bytes_output as f32 / self.count_bytes_direct as f32
+        } else {
+            (LEN_OF_SHORTEST_INCLUDE + self.count_bytes_indirect) as f32
+                / LEN_OF_SHORTEST_INCLUDE as f32
+        }
+    }
+
+    /// Record bytes and check if the amplification is tolerable.
+    /// Matches C's `accountingDiffTolerated`.
+    /// `is_direct`: true for direct input on the root parser, false for entity expansion.
+    /// Returns true if tolerated, false if amplification limit breached.
+    fn diff_tolerated(&mut self, bytes_more: u64, is_direct: bool) -> bool {
+        let target = if is_direct {
+            &mut self.count_bytes_direct
+        } else {
+            &mut self.count_bytes_indirect
+        };
+
+        // Detect and avoid integer overflow
+        if *target > u64::MAX - bytes_more {
+            return false;
+        }
+        *target += bytes_more;
+
+        let count_bytes_output = self.count_bytes_direct + self.count_bytes_indirect;
+        let amplification_factor = self.get_current_amplification();
+
+        (count_bytes_output < self.activation_threshold_bytes)
+            || (amplification_factor <= self.maximum_amplification_factor)
+    }
+}
+
 /// DTD state — shared between parent and child DTD parsers via Rc<RefCell<>>.
 /// Matches C's `DTD` struct which is shared via `m_dtd` pointer.
 /// Parameter entity record
@@ -493,10 +565,9 @@ pub struct Parser {
     is_param_entity: bool,
     /// Whether this parser is a subordinate (child) parser — cannot be reset
     pub is_subordinate: bool,
-    /// Billion laughs: maximum amplification factor (0.0 = use default)
-    billion_laughs_max_amplification: f32,
-    /// Billion laughs: activation threshold in bytes (0 = use default)
-    billion_laughs_activation_threshold: u64,
+    /// Amplification tracking — shared between parent and child parsers.
+    /// The root parser creates this; children inherit the same Rc.
+    accounting: Rc<RefCell<Accounting>>,
     /// XML role state machine for prolog parsing
     prolog_state: XmlRoleState,
     /// Current element declaration name being processed
@@ -626,8 +697,7 @@ impl Parser {
             parsing_foreign_dtd: false,
             is_param_entity: false,
             is_subordinate: false,
-            billion_laughs_max_amplification: 0.0,
-            billion_laughs_activation_threshold: 0,
+            accounting: Rc::new(RefCell::new(Accounting::default())),
             prolog_state: XmlRoleState::new(),
             current_element_decl_name: None,
             content_model_stack: Vec::new(),
@@ -741,8 +811,7 @@ impl Parser {
             parsing_foreign_dtd: false,
             is_param_entity: false,
             is_subordinate: false,
-            billion_laughs_max_amplification: 0.0,
-            billion_laughs_activation_threshold: 0,
+            accounting: Rc::new(RefCell::new(Accounting::default())),
             prolog_state: XmlRoleState::new(),
             current_element_decl_name: None,
             content_model_stack: Vec::new(),
@@ -2662,6 +2731,12 @@ impl Parser {
             let entity_ref_column = self.open_internal_entities[entity_idx].entity_ref_column;
             let entity_ref_event_pos = self.open_internal_entities[entity_idx].entity_ref_event_pos;
 
+            // Account for entity expansion bytes as indirect
+            let entity_bytes = entity_end - start_pos;
+            if entity_bytes > 0 && !self.accounting_diff_tolerated(entity_bytes, false) {
+                return (XmlError::AmplificationLimitBreach, start);
+            }
+
             let (error, next_pos) = if is_param {
                 self.do_prolog(&enc, &entity_text, start_pos, entity_end, false, true)
             } else {
@@ -4534,6 +4609,16 @@ impl Parser {
             self.parsing_state = ParsingState::Parsing;
         }
 
+        // Amplification tracking: account for bytes entering the parser.
+        // Root parser bytes are "direct"; subordinate (child) parser bytes are "indirect".
+        if !data.is_empty() {
+            let is_direct = !self.is_subordinate;
+            if !self.accounting_diff_tolerated(data.len(), is_direct) {
+                self.error_code = XmlError::AmplificationLimitBreach;
+                return XmlStatus::Error;
+            }
+        }
+
         // Store the is_final flag
         self.is_final = is_final;
 
@@ -5755,26 +5840,44 @@ impl Parser {
     ///
     /// Equivalent to XML_SetBillionLaughsAttackProtectionMaximumAmplification in C.
     /// Controls the maximum ratio of output text to input text during entity expansion.
+    /// Must be called on a root parser (not a child/subordinate parser).
     pub fn set_billion_laughs_attack_protection_maximum_amplification(
         &mut self,
         factor: f32,
     ) -> bool {
+        // C: Reject calls on non-root (subordinate) parsers
+        if self.is_subordinate {
+            return false;
+        }
+        // Reject NaN, negative, and positive values < 1.0 (but allow 0.0 = use default)
+        if factor.is_nan() || factor < 0.0 {
+            return false;
+        }
         if factor < 1.0 && factor != 0.0 {
             return false;
         }
-        self.billion_laughs_max_amplification = factor;
+        self.accounting.borrow_mut().maximum_amplification_factor = if factor == 0.0 {
+            100.0 // default
+        } else {
+            factor
+        };
         true
     }
 
     /// Set the billion laughs attack protection activation threshold
     ///
     /// Equivalent to XML_SetBillionLaughsAttackProtectionActivationThreshold in C.
-    /// Entity expansion limits only activate after this many bytes of input.
+    /// Entity expansion limits only activate after this many bytes of output.
+    /// Must be called on a root parser (not a child/subordinate parser).
     pub fn set_billion_laughs_attack_protection_activation_threshold(
         &mut self,
         threshold: u64,
     ) -> bool {
-        self.billion_laughs_activation_threshold = threshold;
+        // C: Reject calls on non-root (subordinate) parsers
+        if self.is_subordinate {
+            return false;
+        }
+        self.accounting.borrow_mut().activation_threshold_bytes = threshold;
         true
     }
 
@@ -5792,6 +5895,17 @@ impl Parser {
     pub fn set_reparse_deferral_enabled(&mut self, enabled: bool) -> bool {
         self.reparse_deferral_enabled = enabled;
         true
+    }
+
+    /// Record bytes processed and check amplification limit.
+    /// `bytes_more`: number of bytes in this token.
+    /// `is_direct`: true if this is direct input on a root parser (not entity expansion
+    /// or a child parser). In C, this is `(account == XML_ACCOUNT_DIRECT) && (originParser == rootParser)`.
+    /// Returns true if tolerated, false if amplification limit breached.
+    fn accounting_diff_tolerated(&self, bytes_more: usize, is_direct: bool) -> bool {
+        self.accounting
+            .borrow_mut()
+            .diff_tolerated(bytes_more as u64, is_direct)
     }
 
     /// Create an external entity parser
@@ -5821,6 +5935,9 @@ impl Parser {
             // Content child — clone DTD state (isolated snapshot)
             child.dtd = Rc::new(RefCell::new(self.dtd.borrow().clone()));
         }
+        // Share accounting with parent — amplification tracking accumulates
+        // across the entire parse tree (root + all external entity sub-parsers)
+        child.accounting = Rc::clone(&self.accounting);
         child.param_entity_parsing = self.param_entity_parsing;
         // Foreign DTD subset (empty context) is treated as document entity
         // General entities (non-empty context) are not
