@@ -118,7 +118,7 @@ principled:
 
   - name: c_event_ptr_assign
     skip: c
-    c: "expr_stmt(assign(=, ptr(*, $ptr), $value))"
+    c: "expr_stmt(assign(ptr($ptr), $value))"
     why: >
       C writes parse position via output pointers (*eventPP = s, *eventEndPP = next).
       Rust returns positions in return tuples.
@@ -227,6 +227,15 @@ principled:
 temporary:
 
   # --- C for(;;) vs Rust while loop with setup ---
+
+  # C loop matches Rust expr_stmt(loop) — Rust wraps loops in expr_stmt
+  - name: c_loop_is_rust_expr_stmt_loop
+    c: "loop($children...)"
+    r: "expr_stmt(loop($children...))"
+    why: >
+      Rust loops are expressions, so when used as statements they get
+      wrapped in expr_stmt. C loops are statements directly. The loop
+      body must still match recursively.
 
   - name: c_infinite_loop_is_rust_while_with_setup
     c_children:
