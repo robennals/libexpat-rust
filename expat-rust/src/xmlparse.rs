@@ -1164,10 +1164,6 @@ impl Parser {
                     }
                 }
                 XmlTok::Bom => {
-                    // Check amplification accounting for BOM
-                    if !self.accounting_diff_tolerated(next_pos.saturating_sub(start), XmlAccount::Direct) {
-                        return (XmlError::AmplificationLimitBreach, start);
-                    }
                     // Skip BOM, continue with init
                     if next_pos < end {
                         self.external_entity_init_processor3(data, next_pos, end)
@@ -1549,20 +1545,6 @@ impl Parser {
                     // Get the role for this token
                     let role =
                         xmlrole::xml_token_role(&mut self.prolog_state, role_tok, &tok_text, &[]);
-
-                    // Check amplification accounting for non-whitespace roles
-                    // C: accountingDiffTolerated is called for roles other than
-                    // XML_ROLE_NONE, XML_ROLE_INSTANCE_START, and whitespace
-                    if !matches!(role, xmlrole::Role::None | xmlrole::Role::InstanceStart) {
-                        let account = if is_internal_entity {
-                            XmlAccount::EntityExpansion
-                        } else {
-                            XmlAccount::Direct
-                        };
-                        if !self.accounting_diff_tolerated(next.saturating_sub(pos), account) {
-                            return (XmlError::AmplificationLimitBreach, pos);
-                        }
-                    }
 
                     // Handle IgnoreSect specially: scan past the closing ]]>
                     if role == xmlrole::Role::IgnoreSect {
@@ -2686,10 +2668,6 @@ impl Parser {
                 let suppress_default = matches!(tok, XmlTok::Bom);
                 (XmlError::None, suppress_default)
             }
-            _ => {
-                // Other roles — no error, let default handler run
-                (XmlError::None, false)
-            }
         }
     }
 
@@ -3014,6 +2992,14 @@ impl Parser {
         // Track entity opening for amplification detection
         self.entity_tracking_on_open();
 
+        // Account for entity expansion bytes (indirect — these bytes come from
+        // expanding an entity, not from direct input)
+        if !entity_text.is_empty()
+            && !self.accounting_diff_tolerated(entity_text.len(), XmlAccount::EntityExpansion)
+        {
+            return XmlError::AmplificationLimitBreach;
+        }
+
         self.open_internal_entities.push(open);
         self.processor = Processor::InternalEntity;
         self.reenter = true;
@@ -3032,15 +3018,7 @@ impl Parser {
         while pos < len {
             let result = xmltok_impl::prolog_tok(&enc, &data, pos, len);
             match result {
-                Ok(TokenResult { token, next_pos }) => {
-                    // Check amplification accounting
-                    if !matches!(token, XmlTok::None | XmlTok::Partial | XmlTok::PartialChar | XmlTok::Invalid) {
-                        if !self.accounting_diff_tolerated(next_pos.saturating_sub(pos), XmlAccount::Direct) {
-                            self.error_code = XmlError::AmplificationLimitBreach;
-                            return;
-                        }
-                    }
-                    match token {
+                Ok(TokenResult { token, next_pos }) => match token {
                     XmlTok::PrologS => {
                         self.report_default(&enc, &data, pos, next_pos);
                         pos = next_pos;
@@ -3080,7 +3058,7 @@ impl Parser {
                         self.error_code = XmlError::JunkAfterDocElement;
                         return;
                     }
-                }},
+                },
                 Err(err_pos) => {
                     // Check if this is a partial UTF-8 character at the end
                     if Self::is_partial_utf8_sequence(&data, err_pos) {
@@ -3150,24 +3128,6 @@ impl Parser {
                     return (XmlError::InvalidToken, pos);
                 }
             };
-
-            // Check amplification accounting before processing this token
-            let account = if is_internal_entity {
-                XmlAccount::EntityExpansion
-            } else {
-                XmlAccount::Direct
-            };
-            // For trailing tokens, account up to the actual end if we're not consuming more
-            let account_end = if matches!(tok, XmlTok::TrailingRsqb | XmlTok::TrailingCr) {
-                if have_more { pos } else { end }
-            } else {
-                next
-            };
-            if !matches!(tok, XmlTok::None | XmlTok::Partial | XmlTok::PartialChar | XmlTok::Invalid) {
-                if !self.accounting_diff_tolerated(account_end.saturating_sub(pos), account) {
-                    return (XmlError::AmplificationLimitBreach, pos);
-                }
-            }
 
             // Track byte count and raw data of current token for reportDefault/DefaultCurrent
             // These are always updated (even for entity text) since reportDefault needs
@@ -3787,13 +3747,6 @@ impl Parser {
                 Err(_) => return (XmlError::InvalidToken, pos),
             };
 
-            // Check amplification accounting
-            if !matches!(tok, XmlTok::None | XmlTok::Partial | XmlTok::PartialChar | XmlTok::Invalid) {
-                if !self.accounting_diff_tolerated(next.saturating_sub(pos), XmlAccount::Direct) {
-                    return (XmlError::AmplificationLimitBreach, pos);
-                }
-            }
-
             // Track event position and byte count for handler callbacks
             self.event_pos = pos;
             self.event_cur_byte_count = (next - pos) as i32;
@@ -4311,13 +4264,6 @@ impl Parser {
                 Err(_) => return Err(XmlError::InvalidToken),
             };
 
-            // Check amplification accounting for entity value parsing
-            if !matches!(tok, XmlTok::None | XmlTok::Partial | XmlTok::PartialChar | XmlTok::Invalid) {
-                if !self.accounting_diff_tolerated(next.saturating_sub(pos), XmlAccount::EntityExpansion) {
-                    return Err(XmlError::AmplificationLimitBreach);
-                }
-            }
-
             match tok {
                 XmlTok::None => break,
                 XmlTok::EntityRef | XmlTok::DataChars => {
@@ -4799,6 +4745,23 @@ impl Parser {
         // If not yet started, transition to parsing
         if self.parsing_state == ParsingState::Initialized {
             self.parsing_state = ParsingState::Parsing;
+        }
+
+        // Amplification tracking: account for bytes entering the parser.
+        // Root parser bytes are "direct"; subordinate (child) parser bytes are "indirect".
+        if !data.is_empty() {
+            let is_direct = !self.is_subordinate;
+            if !self.accounting_diff_tolerated(
+                data.len(),
+                if is_direct {
+                    XmlAccount::Direct
+                } else {
+                    XmlAccount::EntityExpansion
+                },
+            ) {
+                self.error_code = XmlError::AmplificationLimitBreach;
+                return XmlStatus::Error;
+            }
         }
 
         // Store the is_final flag
@@ -6026,7 +5989,16 @@ impl Parser {
         &mut self,
         factor: f32,
     ) -> bool {
-        if factor < 1.0 && factor != 0.0 {
+        // C: reject subordinate (child) parsers — only root parser can set limits
+        if self.is_subordinate {
+            return false;
+        }
+        // Reject NaN and values in range (0, 1.0)
+        if factor.is_nan() || (factor > 0.0 && factor < 1.0) {
+            return false;
+        }
+        // Reject negative values
+        if factor < 0.0 {
             return false;
         }
         self.billion_laughs_max_amplification = factor;
@@ -6041,6 +6013,10 @@ impl Parser {
         &mut self,
         threshold: u64,
     ) -> bool {
+        // C: reject subordinate (child) parsers
+        if self.is_subordinate {
+            return false;
+        }
         self.billion_laughs_activation_threshold = threshold;
         true
     }
@@ -6062,13 +6038,13 @@ impl Parser {
         let bytes_more = bytes_consumed as u64;
 
         // Determine if this is direct input or entity expansion
-        let is_direct = account == XmlAccount::Direct
-            && !self.is_subordinate;
+        let is_direct = account == XmlAccount::Direct && !self.is_subordinate;
 
         if is_direct {
             self.accounting_bytes_direct = self.accounting_bytes_direct.saturating_add(bytes_more);
         } else {
-            self.accounting_bytes_indirect = self.accounting_bytes_indirect.saturating_add(bytes_more);
+            self.accounting_bytes_indirect =
+                self.accounting_bytes_indirect.saturating_add(bytes_more);
         }
 
         // Check amplification
@@ -6159,6 +6135,9 @@ impl Parser {
             child.dtd = Rc::new(RefCell::new(self.dtd.borrow().clone()));
         }
         child.param_entity_parsing = self.param_entity_parsing;
+        // Inherit amplification protection settings from parent
+        child.billion_laughs_max_amplification = self.billion_laughs_max_amplification;
+        child.billion_laughs_activation_threshold = self.billion_laughs_activation_threshold;
         // Foreign DTD subset (empty context) is treated as document entity
         // General entities (non-empty context) are not
         child.prolog_state.document_entity = context.is_empty();

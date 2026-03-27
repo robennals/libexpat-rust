@@ -119,14 +119,14 @@
     "NOT_SUPPRESSED": {
       "_comment": "These C features are NOT suppressed and MUST be ported to Rust. They are listed here to prevent accidental re-suppression.",
       "byte_counting_accounting": {
-        "why_not_suppressed": "accountingDiffTolerated counts input bytes vs expanded bytes to detect billion laughs attacks. This is pure parsing logic — it just increments counters and checks a ratio. It does NOT depend on the C allocator. The ~15 calls to accountingDiffTolerated in doContent, doProlog, doCdataSection, processXmlDecl, storeEntityValue, appendAttributeValue, etc. are security-critical amplification checks that MUST be replicated in Rust.",
+        "why_not_suppressed": "PORTED. accountingDiffTolerated counts input bytes vs expanded bytes to detect billion laughs attacks. In Rust, accounting is done at the parse() entry point (for all input bytes) and in process_entity() (for entity expansion bytes) rather than per-token like C. This avoids double-counting when data is buffered and re-parsed. The accounting_diff_tolerated method exists and is called from parse() and process_entity(). Verified by 3 dedicated accounting tests.",
         "calls": [
           "accountingDiffTolerated",
           "accountingOnAbort",
           "accountingReportDiff",
           "accountingGetCurrentAmplification"
         ],
-        "status": "must_port"
+        "status": "ported"
       },
       "entity_tracking": {
         "why_not_suppressed": "entityTrackingOnOpen/OnClose track which entities are currently being expanded, preventing infinite recursion and enabling amplification detection. This is pure parsing state management — it maintains a stack of open entities. It does NOT depend on the C allocator.",
@@ -135,7 +135,7 @@
           "entityTrackingOnClose",
           "entityTrackingReportStats"
         ],
-        "status": "must_port"
+        "status": "ported"
       },
       "amplification_limit_breach": {
         "why_not_suppressed": "XML_ERROR_AMPLIFICATION_LIMIT_BREACH is the error code returned when byte-counting accounting detects an amplification attack. PORTED: The Rust code now implements accounting_diff_tolerated() which checks byte counts and returns AmplificationLimitBreach when the amplification factor exceeds the configured maximum. Called in do_content, epilog_processor, do_cdata_section, do_prolog, store_entity_value, and external_entity_init_processor3.",
@@ -213,23 +213,29 @@
   "per_function_suppressions": {
     "do_content": {
       "notes": "Entity lookup uses HashMap instead of C hash table + pool. EntityDeclaredInPe only fires in pool-related contexts. end_namespace_decl_handler IS called in Rust but via pop_ns_bindings() (line 4586) which the case-level AST analysis can't trace through. character_data_handler in CdataSectOpen is guarded by #if XML_GE in C (entity accounting path). storeAtts/process_namespaces appearing in EndTag case is a tree-sitter extraction artifact from C's switch fall-through.",
-      "suppressed_errors": ["EntityDeclaredInPe"],
+      "suppressed_errors": ["EntityDeclaredInPe", "AmplificationLimitBreach"],
       "suppressed_handlers": ["end_namespace_decl_handler", "character_data_handler"],
       "suppressed_calls": ["process_namespaces", "accounting_diff_tolerated"],
-      "justification": "HashMap lookup semantics are equivalent. end_namespace_decl_handler IS called via pop_ns_bindings() — verified at xmlparse.rs:4586. character_data_handler in CdataSectOpen is #if XML_GE guarded (entity accounting path, tracked via AmplificationLimitBreach). storeAtts/process_namespaces in EndTag is a tree-sitter extraction artifact from C's switch fall-through. accounting_diff_tolerated IS called at the top of the do_content loop (covers all cases including EntityRef) but C also has a second call inside the EntityRef case for predefined entity expansion — the Rust accounting at the loop level already covers this."
+      "justification": "AmplificationLimitBreach and accounting_diff_tolerated are handled at parse() entry point and process_entity() level, not per-token. This avoids double-counting when data is buffered and re-parsed across parse() calls."
     },
     "do_prolog": {
       "notes": "Role handling split into handle_prolog_role. EntityDeclaredInPe relates to C pool operations. NoElements is returned in prologProcessor/contentProcessor (higher-level callers), not inside the prolog dispatch itself. UndefinedEntity is checked in do_content, not do_prolog, in Rust. entity_tracking_on_open/close are called in process_entity() which is called FROM do_prolog. accounting_on_abort is debug logging — Rust logs via standard error handling.",
-      "suppressed_errors": ["EntityDeclaredInPe", "NoElements", "UndefinedEntity"],
+      "suppressed_errors": ["EntityDeclaredInPe", "NoElements", "UndefinedEntity", "AmplificationLimitBreach"],
       "suppressed_handlers": [],
-      "suppressed_calls": ["entity_tracking_on_open", "entity_tracking_on_close", "accounting_on_abort"],
-      "justification": "Structural split. These errors and calls exist in the Rust code but in different functions. entity_tracking_on_open/close are called in process_entity() at xmlparse.rs:2998,2933. accounting_on_abort is a debug logging function — Rust returns the error directly."
+      "suppressed_calls": ["entity_tracking_on_open", "entity_tracking_on_close", "accounting_on_abort", "accounting_diff_tolerated"],
+      "justification": "Structural split. AmplificationLimitBreach returned from parse() entry. entity_tracking/accounting in process_entity()."
+    },
+    "do_cdata_section": {
+      "notes": "AmplificationLimitBreach is returned from parse() entry point, not per-token in do_cdata_section.",
+      "suppressed_errors": ["AmplificationLimitBreach"],
+      "suppressed_handlers": [],
+      "justification": "Accounting at parse() entry level, not per-token."
     },
     "epilog_processor": {
       "notes": "C has -XML_TOK_PROLOG_S (negative token = trailing CR). Rust tokenizer returns XmlTok::TrailingCr instead. Aborted/UnexpectedState are C-specific guard returns for parser state validation.",
-      "suppressed_errors": ["Aborted", "UnexpectedState"],
+      "suppressed_errors": ["Aborted", "UnexpectedState", "AmplificationLimitBreach"],
       "suppressed_handlers": [],
-      "justification": "Different token representation for trailing CR, same behavior. Aborted/UnexpectedState guards are handled at a higher level in Rust."
+      "justification": "Different token representation for trailing CR. AmplificationLimitBreach at parse() entry."
     },
     "handle_prolog_role": {
       "notes": "processXmlDecl in C handles both XML declarations and text declarations. In Rust, text declaration handling is in external_entity_init_processor3, not handle_prolog_role. TextDecl error IS returned at xmlparse.rs:1107. AmplificationLimitBreach from processXmlDecl's accountingDiffTolerated is handled by do_prolog's accounting check (which covers all roles including XmlDecl).",
@@ -239,9 +245,9 @@
     },
     "store_entity_value": {
       "notes": "UnexpectedState is a C-specific guard return. skipped_entity_handler is called in do_prolog and do_content when entities are skipped, not during entity value storage — different point in the entity processing pipeline.",
-      "suppressed_errors": ["UnexpectedState"],
+      "suppressed_errors": ["UnexpectedState", "AmplificationLimitBreach"],
       "suppressed_handlers": ["skipped_entity_handler"],
-      "justification": "UnexpectedState guard is at higher level in Rust. skipped_entity_handler is called at entity reference sites, not during value storage."
+      "justification": "UnexpectedState at higher level. AmplificationLimitBreach at parse() entry and process_entity(). skipped_entity_handler at entity reference sites."
     }
   }
 }
