@@ -25,6 +25,9 @@ __pycache__/
 *.dll
 *.exe
 
+# Fuzz corpora (downloaded at test time)
+corpus/
+
 # CMake (for expat submodule builds)
 expat/build/
 expat-ffi/examples/basic_parse

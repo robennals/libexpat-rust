@@ -91,6 +91,25 @@ jobs:
       - name: Check for C test regressions
         run: bash c-tests-runner/check-regressions.sh ./target/debug/c-tests-runner
 
+  fuzz-corpus:
+    name: Fuzz Corpus Comparison (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Download OSS-Fuzz corpora
+        run: bash scripts/download-fuzz-corpus.sh corpus
+      - name: Run fuzz corpus C-vs-Rust comparison
+        run: cargo test -p expat-rust --test fuzz_corpus_comparison
+        env:
+          RUST_TEST_THREADS: 1
+
   audit:
     name: Security Audit
     runs-on: ubuntu-latest

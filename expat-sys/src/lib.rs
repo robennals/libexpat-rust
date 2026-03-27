@@ -232,7 +232,7 @@ extern "C" {
 
 /// Safe wrapper around the C XML parser for comparison testing
 pub struct CParser {
-    parser: XML_Parser,
+    pub parser: XML_Parser,
 }
 
 impl CParser {
