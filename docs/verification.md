@@ -18,8 +18,11 @@ Each layer catches different classes of bugs:
 
 - The AST comparison catches **structural omissions** — a missing error check, a
   forgotten handler call, a dropped match arm — even if no test input triggers the
-  missing path. It won't catch subtle semantic differences within structurally
-  similar code.
+  missing path. It starts from the assumption that C and Rust must be identical,
+  and only allows differences that match an explicit rewrite rule. So semantic
+  differences can only slip through if a rewrite rule is wrong — i.e., it
+  suppresses a difference that is actually a bug, not a legitimate language
+  difference. The risk is concentrated in the rewrite rules, not in the comparison.
 - The C test suite catches **behavioral regressions** against libexpat's own quality
   bar, including edge cases the expat maintainers specifically wrote tests for.
 - The comparison tests catch **behavioral divergences** on a broad corpus of inputs,
@@ -27,9 +30,12 @@ Each layer catches different classes of bugs:
   parsing boundaries.
 
 Together, these make behavioral differences *unlikely* without guaranteeing their
-absence. The AST comparison constrains the code to be structurally very close to C,
-the original tests verify known-important behaviors, and the comparison tests sweep
-a wide input space. A bug would need to hide from all three.
+absence. The AST comparison requires identical structure except where a rewrite
+rule explicitly allows a difference, the original tests verify known-important
+behaviors, and the comparison tests sweep a wide input space. A bug would need to
+either hide behind a wrong rewrite rule that is also not exercised by any of
+~750 tests, or exist in argument details that the AST tool doesn't compare
+(e.g., wrong slice bounds on a structurally-matched call).
 
 ## Layer 1: AST Structural Comparison
 
@@ -64,22 +70,26 @@ python3 validator/strict-ast-compare.py --ci
 python3 validator/strict-ast-compare.py --dump doContent do_content
 ```
 
-### What the AST comparison does NOT guarantee
+### Where the AST comparison has residual risk
 
-The AST comparison is a necessary but not sufficient condition for correctness.
-It verifies structural correspondence — that the same operations appear in the
-same places — but cannot verify:
+The AST comparison is strict by default: it requires the C and Rust skeletons
+to be identical, and only allows differences that match an explicit rewrite rule.
+This means semantic differences can only occur in two places:
 
-- **Argument correctness**: A call to `handler(data)` is matched by label, but
-  the actual data passed may differ (e.g., wrong slice bounds)
-- **Expression semantics**: `if (tag_level == 0)` structurally matches any branch
-  checking `tag_level`, even if the comparison operator or threshold differs
-- **Completeness of rewrites**: A temporary rewrite rule that suppresses a C
-  operation may be masking a real bug, not an equivalent pattern
+- **Wrong rewrite rules**: A rule suppresses a C operation that should actually
+  have a Rust equivalent. This is why temporary rules are tracked separately in
+  `temporary-rewrites.json` — they are believed correct but not fully verified.
+  Each should be reviewed and either promoted or removed.
+- **Argument-level differences**: The tool matches calls by name but does not
+  compare argument values. A call to `handler(data)` matches any call to
+  `handler(...)`, even if the actual data differs (e.g., wrong slice bounds).
+  Similarly, branch conditions are matched by the core variable being checked,
+  not by the full expression.
 
-This is by design. Verifying exact semantic equivalence across languages would
-require formal methods. Instead, we constrain the structure tightly enough that,
-combined with behavioral testing, semantic differences become unlikely.
+These are deliberate trade-offs. Comparing argument expressions across languages
+(C pointer arithmetic vs Rust slice indexing) would require a semantic model of
+both languages. Instead, we constrain the structure tightly and rely on behavioral
+testing to catch argument-level bugs.
 
 ### Value for AI-assisted porting
 
@@ -269,12 +279,14 @@ The Rust parser transcodes all non-UTF-8 input to UTF-8 before tokenizing (unlik
 This verification approach builds high confidence but does not constitute a proof
 of equivalence. Known limitations:
 
-1. **The AST comparison allows documented gaps.** The rewrite rules in
-   `structural-rewrites.json` and `temporary-rewrites.json` suppress real
-   structural differences. Each is justified, but the justifications could be
-   wrong — particularly the temporary rules. For example, the rule that suppresses
-   C's OOM return checks assumes Rust's panic-on-OOM is acceptable; if graceful
-   OOM handling matters, this is a real behavioral difference.
+1. **The AST comparison's guarantees are only as good as its rewrite rules.**
+   The verifier requires identical structure by default, but each rewrite rule
+   creates a documented gap where a difference is allowed. If a rule is wrong,
+   it masks a real bug. The verified rules in `structural-rewrites.json` have
+   been reviewed, but the temporary rules in `temporary-rewrites.json` are
+   believed correct without full verification. For example, the rule that
+   suppresses C's OOM return checks assumes Rust's panic-on-OOM is acceptable;
+   if graceful OOM handling matters, this is a real behavioral difference.
 
 2. **Behavioral tests cover a finite input space.** 463 comparison tests is a lot,
    but XML is infinitely varied. A bug that only manifests with a specific combination
