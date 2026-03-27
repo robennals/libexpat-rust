@@ -249,6 +249,16 @@ temporary:
       Body must still match.
     risk: Loop condition may not be equivalent to C's break condition.
 
+  # --- C entity type check ---
+
+  - name: c_entity_type_check
+    skip: c
+    c: "if(binary(ident(type), $other), $body)"
+    why: >
+      C checks entity type (type == ENTITY_INTERNAL) for specific handling.
+      Rust uses is_param bool and handles entity types differently.
+    risk: Different entity type handling could affect recursive expansion.
+
   - name: handler_dispatch_if_let
     c: "if(field(self, $handler), $body)"
     r: "if_let($pattern, $handler_expr, $body)"
