@@ -397,6 +397,10 @@ pub struct Parser {
     seen_root: bool,
     /// Whether the root element has been closed
     root_closed: bool,
+    /// Whether the epilog ended on a trailing CR (partial whitespace).
+    /// Used to tolerate a pending UTF-16 byte that is the high byte of
+    /// what would have been the next whitespace character.
+    epilog_ended_on_cr: bool,
     /// Whether we've seen an XML declaration
     seen_xml_decl: bool,
     /// Detected encoding from BOM/auto-detection
@@ -574,6 +578,7 @@ impl Parser {
             tag_triplet_flags: Vec::new(),
             seen_root: false,
             root_closed: false,
+            epilog_ended_on_cr: false,
             seen_xml_decl: false,
             detected_encoding: None,
             dtd: Rc::new(RefCell::new(DtdState::default())),
@@ -695,6 +700,7 @@ impl Parser {
             tag_triplet_flags: Vec::new(),
             seen_root: false,
             root_closed: false,
+            epilog_ended_on_cr: false,
             seen_xml_decl: false,
             detected_encoding: None,
             dtd: Rc::new(RefCell::new(DtdState::default())),
@@ -801,6 +807,7 @@ impl Parser {
         self.tag_stack.clear();
         self.seen_root = false;
         self.root_closed = false;
+        self.epilog_ended_on_cr = false;
         self.seen_xml_decl = false;
         self.detected_encoding = None;
         self.original_bytes_before_chunk = 0;
@@ -3069,7 +3076,10 @@ impl Parser {
                             return;
                         }
                         // Final buffer with trailing CR — this is valid whitespace
-                        // in the epilog (C handles it as XML_TOK_PROLOG_S).
+                        // in the epilog (C handles it as -XML_TOK_PROLOG_S).
+                        // Flag this so the pending UTF-16 byte check knows the
+                        // epilog ended on partial whitespace.
+                        self.epilog_ended_on_cr = true;
                         break;
                     }
                     XmlTok::Partial => {
@@ -5250,12 +5260,15 @@ impl Parser {
         // If final, check for incomplete document and mark as finished
         if is_final {
             // If there's a pending UTF-16 byte, the input ended mid-character.
-            // C returns XML_ERROR_UNCLOSED_TOKEN for trailing odd bytes.
-            // Note: C has one edge case where trailing CR + odd byte in the
-            // epilog returns -XML_TOK_PROLOG_S (accepted), but we consistently
-            // reject all trailing odd bytes — this is stricter than C for 1 known
-            // fuzz corpus file (e1c60632...) but safer overall.
-            if self.utf16_pending_byte.is_some() && self.error_code == XmlError::None {
+            // C returns XML_ERROR_UNCLOSED_TOKEN for trailing odd bytes — except
+            // when the epilog ended on a trailing CR. In C, the UTF-16 tokenizer
+            // returns -XML_TOK_PROLOG_S (partial whitespace including the CR) and
+            // the epilog processor accepts it. The pending byte is the high byte
+            // of what would have been the next character after the CR.
+            if self.utf16_pending_byte.is_some()
+                && self.error_code == XmlError::None
+                && !self.epilog_ended_on_cr
+            {
                 self.error_code = XmlError::UnclosedToken;
                 self.parsing_state = ParsingState::Finished;
                 return XmlStatus::Error;
