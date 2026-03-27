@@ -24,3 +24,7 @@ libc = "0.2"
 [[bench]]
 name = "parse_benchmark"
 harness = false
+
+[[bench]]
+name = "pathological_benchmark"
+harness = false
