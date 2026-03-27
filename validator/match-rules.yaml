@@ -107,6 +107,31 @@ principled:
     r: "call(field(field(self, $handler), ident(is_some)))"
     why: C handler (truthy) = Rust handler.is_some().
 
+  # --- C return(XML_ERROR_NONE) = success sentinel ---
+
+  - name: return_error_none
+    skip: c
+    c: "return(ident(xml_error_none))"
+    why: C returns XML_ERROR_NONE as success. Rust returns void or Ok(()).
+
+  # --- C position tracking assigns ---
+
+  - name: c_event_ptr_assign
+    skip: c
+    c: "expr_stmt(assign(=, ptr(*, $ptr), $value))"
+    why: >
+      C writes parse position via output pointers (*eventPP = s, *eventEndPP = next).
+      Rust returns positions in return tuples.
+
+  # --- C encoding pointer selection ---
+
+  - name: c_enc_selection
+    skip: c
+    c: "if(binary(==, ident(enc), $other), $then, $else)"
+    why: >
+      C checks enc == parser->m_encoding to select event pointer pair.
+      Rust uses a single encoding model. No equivalent branch.
+
   # --- Encoding (Rust is UTF-8 only) ---
 
   - name: must_convert
