@@ -127,15 +127,10 @@ principled:
 
   - name: c_enc_selection
     skip: c
-    c: "if(binary(==, ident(enc), $other), $then, $else)"
+    c: "if(binary(ident(enc), $other), $body...)"
     why: >
       C checks enc == parser->m_encoding to select event pointer pair.
       Rust uses a single encoding model. No equivalent branch.
-
-  - name: c_enc_selection_no_else
-    skip: c
-    c: "if(binary(==, ident(enc), $other), $then)"
-    why: Same as above but without else branch.
 
   # --- C success returns ---
 
