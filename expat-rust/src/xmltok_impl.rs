@@ -2740,7 +2740,8 @@ pub fn name_length<E: Encoding>(enc: &E, data: &[u8], mut ptr: usize) -> usize {
             | ByteType::HEX
             | ByteType::DIGIT
             | ByteType::NAME
-            | ByteType::MINUS => {
+            | ByteType::MINUS
+            | ByteType::COLON => {
                 ptr += minbpc;
             }
             _ => {
@@ -3294,8 +3295,8 @@ mod tests {
         let enc = Utf8Encoding;
         let data = b"ns:tag>";
         let len = name_length(&enc, data, 0);
-        // Colon stops the name, so just "ns"
-        assert_eq!(len, 2);
+        // Colon is a valid name character, so full "ns:tag"
+        assert_eq!(len, 6);
     }
 
     #[test]
