@@ -258,12 +258,14 @@
     {
       "c_function": "appendAttributeValue",
       "rust_function": "normalize_attribute_value",
-      "notes": "Attribute value normalization — tokenizes attribute content and handles entity/char refs within values."
+      "notes": "REIMPLEMENTED: C appendAttributeValue (192 lines) tokenizes attribute values with XmlAttributeValueTok and switches on token types. Rust normalize_attribute_value (98 lines) processes bytes directly. Different algorithm — same result verified by behavioral tests.",
+      "skip_structural": true
     },
     {
       "c_function": "storeAttributeValue",
       "rust_function": "normalize_attribute_value",
-      "notes": "C storeAttributeValue wraps appendAttributeValue with entity list management. Rust normalize_attribute_value handles both roles."
+      "notes": "REIMPLEMENTED: C storeAttributeValue wraps appendAttributeValue with entity list and pool management. Rust normalize_attribute_value combines both with byte-by-byte processing.",
+      "skip_structural": true
     },
     {
       "c_function": "is_rfc3986_uri_char",
@@ -311,6 +313,18 @@
       "suppressed_errors": ["UnexpectedState", "AmplificationLimitBreach"],
       "suppressed_handlers": ["skipped_entity_handler"],
       "justification": "UnexpectedState at higher level. AmplificationLimitBreach at parse() entry and process_entity(). skipped_entity_handler at entity reference sites."
+    },
+    "external_entity_init_processor3": {
+      "notes": "C returns Aborted/UnexpectedState as guard returns for parser state validation that Rust handles differently.",
+      "suppressed_errors": ["Aborted", "UnexpectedState"],
+      "justification": "C-specific parser state guard returns. Rust uses different state validation."
+    },
+    "normalize_attribute_value": {
+      "notes": "C appendAttributeValue is 192 lines with entity expansion, pool management, encoding conversion. Rust normalize_attribute_value is 98 lines handling the same cases but with Vec/String instead of pools and simplified entity handling.",
+      "suppressed_errors": ["AmplificationLimitBreach", "AttributeExternalEntityRef", "BadCharRef", "BinaryEntityRef", "EntityDeclaredInPe", "InvalidToken", "RecursiveEntityRef", "UndefinedEntity", "UnexpectedState"],
+      "suppressed_calls": ["accounting_diff_tolerated", "append_attribute_value", "character", "encoding", "pool_last_char", "process_entity", "report_default", "xml_attribute_value_tok"],
+      "suppressed_handlers": ["default_handler", "skipped_entity_handler"],
+      "justification": "C appendAttributeValue recursively calls itself for entity expansion, checks accounting, and manages pool memory. Rust handles entity expansion inline with HashMap lookups. Error codes from recursive entity processing (RecursiveEntityRef, BinaryEntityRef, etc.) are checked at different structural levels. Pool operations replaced by Vec."
     }
   }
 }
