@@ -124,6 +124,27 @@
       "category": "language_type_system"
     },
     {
+      "name": "xml_char_null_check_removal",
+      "input":  { "kind": "branch", "label_regex": "\\*s\\s*==\\s*XML_T\\(.*\\\\0|\\*s\\s*==\\s*0$" },
+      "output": null,
+      "justification": "C checks for null terminator in XML_Char buffer (*s == XML_T('\\0')). Rust uses iterator length / index bounds instead of null terminators. The loop termination condition is equivalent but expressed differently.",
+      "category": "language_difference"
+    },
+    {
+      "name": "xml_char_cr_to_byte_cr",
+      "input":  { "kind": "branch", "label_regex": "\\*s\\s*==\\s*0xD|\\*s\\s*==\\s*0x0D|\\*s\\s*==\\s*13" },
+      "output": { "kind": "branch", "label": "byte_is_cr" },
+      "justification": "C checks *s == 0xD (carriage return as XML_Char). Rust checks raw[i] == b'\\r'. Same comparison, different type system. Rewritten to a generic label that matches Rust's byte check.",
+      "category": "language_difference"
+    },
+    {
+      "name": "xml_t_macro_removal",
+      "input":  { "kind": "call", "label": "xml_t" },
+      "output": null,
+      "justification": "C XML_T() macro converts character literals to XML_Char type. Rust uses native byte/char literals directly. No function call equivalent.",
+      "category": "language_difference"
+    },
+    {
       "name": "c_internal_macro_removal",
       "input":  { "kind": "call", "label_regex": "^(must_convert|get_context|parser_busy|set_context|unused_p|UNUSED_P)$" },
       "output": null,
@@ -438,13 +459,13 @@
       "category": "naming_difference"
     },
     {
-      "name": "c_end_pointer_to_end",
+      "name": "c_end_pointer_to_end_or_len",
       "description": "C 'end' pointer corresponds to Rust 'end' or 'len'",
       "side": "c",
       "function": "*",
       "match": "^end$",
-      "replace": "end",
-      "justification": "C and Rust both use 'end' for buffer end position. Identity mapping for clarity.",
+      "replace": null,
+      "justification": "C uses 'end' as buffer end pointer. Rust uses 'end' or 'len' depending on context. Deleted to avoid false mismatch since the naming varies.",
       "category": "naming_difference"
     },
     {
@@ -470,84 +491,52 @@
   ],
 
   "per_function_suppressions": {
-    "description": "Structural mismatches that are accepted for specific function pairs because they represent deliberate architectural choices.",
+    "description": "Principled architectural choices where C and Rust deliberately differ. Each must be a well-reasoned decision, not a temporary workaround. Temporary workarounds go in temporary-rewrites.json.",
 
     "epilog_processor": {
-      "suppressed_calls": ["accounting_diff_tolerated", "prolog_tok"],
-      "suppressed_errors": ["UnclosedToken", "PartialChar"],
-      "suppressed_labels": ["parsing_status", "final_buffer"],
-      "justification": "Accounting checked at parse() entry, not per-token. prolog_tok call structure differs (Rust tokenizes inline). UnclosedToken/PartialChar returns are inside merged Partial|TrailingCr arms in Rust. parsing_status/finalBuffer checks are suspend/resume (not yet ported)."
+      "suppressed_calls": ["accounting_diff_tolerated"],
+      "justification": "Accounting checked at parse() entry, not per-token. Same security guarantee, different granularity — Rust counts all input bytes in parse(), C counts per-token."
     },
     "do_content": {
-      "suppressed_calls": ["accounting_diff_tolerated", "process_namespaces", "content_tok", "char_data_handler"],
+      "suppressed_calls": ["accounting_diff_tolerated"],
       "suppressed_errors": ["EntityDeclaredInPe", "AmplificationLimitBreach"],
-      "suppressed_labels": ["parsing_status", "char_data_handler"],
-      "justification": "Accounting at parse() entry. process_namespaces refactored. content_tok call structure differs. char_data_handler dispatch pattern differs (C uses local variable + MUST_CONVERT loop, Rust uses if-let directly). Suspend/resume (parsing_status) not yet ported."
+      "justification": "Accounting at parse() entry (architectural choice). EntityDeclaredInPe relates to standalone validation that C checks via pool operations."
     },
     "do_prolog": {
-      "suppressed_calls": ["accounting_diff_tolerated", "entity_tracking_on_open", "entity_tracking_on_close", "accounting_on_abort", "xml_token_role"],
+      "suppressed_calls": ["accounting_diff_tolerated", "accounting_on_abort"],
       "suppressed_errors": ["EntityDeclaredInPe", "NoElements", "UndefinedEntity", "AmplificationLimitBreach"],
-      "suppressed_labels": ["role"],
-      "justification": "Accounting at parse() entry. Entity tracking in process_entity(). Role dispatch split into handle_prolog_role. xml_token_role called at different structural level. match(role) is in handle_prolog_role in Rust."
+      "justification": "Accounting at parse() entry. Entity-related errors checked at different levels in Rust (process_entity handles entity tracking)."
     },
     "do_cdata_section": {
-      "suppressed_calls": ["accounting_diff_tolerated", "cdata_section_tok", "char_data_handler"],
+      "suppressed_calls": ["accounting_diff_tolerated"],
       "suppressed_errors": ["AmplificationLimitBreach"],
-      "suppressed_labels": ["char_data_handler"],
-      "justification": "Accounting at parse() entry. cdata_section_tok call structure differs. char_data_handler dispatch pattern differs (C saves handler locally + MUST_CONVERT, Rust uses if-let)."
+      "justification": "Accounting at parse() entry."
     },
     "content_processor": {
-      "suppressed_calls": ["do_content", "store_raw_names"],
-      "justification": "C calls doContent then storeRawNames as separate functions. Rust inlines the content processing differently."
-    },
-    "prolog_processor": {
-      "suppressed_calls": ["prolog_tok", "do_prolog"],
-      "justification": "C tokenizes then calls doProlog separately. Rust inlines tokenization into do_prolog."
+      "suppressed_calls": ["store_raw_names"],
+      "justification": "C storeRawNames copies raw element names for XML_GetCurrentByteIndex. Rust tracks via event_pos. Performance optimization only."
     },
     "report_default": {
       "suppressed_calls": ["xml_convert"],
-      "justification": "C has XmlConvert loop for encoding conversion. Rust assumes UTF-8 only, so no conversion needed."
+      "justification": "C XmlConvert does encoding conversion before calling default handler. Rust works in UTF-8 natively, no conversion needed."
     },
     "store_entity_value": {
-      "suppressed_calls": ["accounting_diff_tolerated", "entity_tracking_on_open", "entity_tracking_on_close"],
+      "suppressed_calls": ["accounting_diff_tolerated"],
       "suppressed_errors": ["AmplificationLimitBreach"],
-      "justification": "Accounting and entity tracking in process_entity()."
+      "justification": "Accounting at parse() entry and process_entity()."
     },
     "handle_prolog_role": {
       "suppressed_calls": ["accounting_diff_tolerated"],
       "suppressed_errors": ["AmplificationLimitBreach", "TextDecl"],
-      "suppressed_labels": ["XmlParseXmlDecl", "is_general_text_entity", "xml_decl_handler", "protocol_encoding_name", "stored_enc_name", "storedversion"],
-      "justification": "processXmlDecl inlined into handle_prolog_role. Full structural match not feasible for inlined function — C's processXmlDecl has 6 branches that are restructured in the Rust inline version. TextDecl handling in external_entity_init_processor3."
-    },
-    "store_entity_value": {
-      "suppressed_calls": ["accounting_diff_tolerated", "entity_tracking_on_open", "entity_tracking_on_close", "xml_entity_value_tok"],
-      "suppressed_errors": ["AmplificationLimitBreach"],
-      "suppressed_labels": ["tok"],
-      "justification": "Accounting and entity tracking in process_entity(). xml_entity_value_tok called at different structural nesting level in Rust (inside match on Ok result). match(tok) is nested inside match(tok_result) in Rust."
+      "justification": "Accounting at parse() entry. TextDecl handling in external_entity_init_processor3."
     },
     "external_entity_init_processor": {
-      "suppressed_calls": ["initialize_encoding", "external_entity_init_processor_2"],
-      "justification": "Encoding initialization not yet ported (UTF-8 only). Processor2 call is inlined."
-    },
-    "normalize_lines": {
-      "suppressed_calls": ["xml_t"],
-      "suppressed_labels": ["XML_T", "0xD", "0x0D"],
-      "justification": "C normalizeLines operates in-place on XML_Char buffer with explicit null terminator and 0xD comparisons. Rust normalize_lines builds a new Vec<u8> with b'\\r' byte comparisons. Same semantics, different data representation. xml_t is a C char conversion macro."
-    },
-    "process_entity": {
-      "suppressed_calls": ["entity_tracking_on_open", "trigger_reenter"],
-      "suppressed_labels": ["type", "free_entity_list", "ENTITY_INTERNAL", "ENTITY_ATTRIBUTE", "ENTITY_VALUE"],
-      "justification": "C uses typed entity enum (INTERNAL/ATTRIBUTE/VALUE) with separate entity list management. Rust uses is_param bool + HashMap. entity_tracking_on_open IS called in Rust but at different structural level. trigger_reenter replaced by setting reenter flag directly."
-    },
-    "external_entity_init_processor3": {
-      "suppressed_calls": ["process_xml_decl", "content_tok", "cdata_section_tok", "external_entity_content_processor"],
-      "suppressed_errors": ["UnclosedToken", "PartialChar"],
-      "suppressed_labels": ["parsing_status", "final_buffer"],
-      "justification": "processXmlDecl inlined. Tokenizer calls at different structural level. UnclosedToken/PartialChar inside merged partial-handling arms. parsing_status is suspend/resume (not ported). externalEntityContentProcessor return is a tail-call that Rust inlines."
+      "suppressed_calls": ["initialize_encoding"],
+      "justification": "C probes document encoding at start. Rust assumes UTF-8 only (multi-encoding not yet ported). This is a known limitation."
     },
     "process_namespaces": {
-      "suppressed_calls": ["get_atts", "add_binding"],
-      "justification": "C getAtts (XmlGetAttributes) is a tokenizer call at a different level. addBinding is 161 lines of namespace binding with pool management — Rust replaces with Vec push + HashMap insert. These are complete reimplementations, not simple refactors."
+      "suppressed_calls": ["get_atts"],
+      "justification": "C getAtts (XmlGetAttributes) is a tokenizer call. Rust extracts attributes during tokenization, so no separate call needed."
     },
     "normalize_attribute_value": {
       "suppressed_calls": ["xml_attribute_value_tok", "append_attribute_value"],
