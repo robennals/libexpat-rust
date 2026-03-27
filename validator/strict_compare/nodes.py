@@ -15,6 +15,7 @@ class SkeletonNode:
     kind: str  # sequence, match, arm, branch, loop, call, return, assign, handler_dispatch, break
     label: str = ""  # normalized name
     args: list[str] = field(default_factory=list)  # normalized arguments
+    expr: Optional['ExprInfo'] = None  # parsed expression details (operators, literals)
     children: list['SkeletonNode'] = field(default_factory=list)
     source_file: str = ""
     source_start: int = 0  # line number
@@ -47,6 +48,34 @@ class SkeletonNode:
         for child in self.children:
             result.extend(child.leaf_calls())
         return result
+
+
+@dataclass
+class ExprInfo:
+    """Parsed expression details for deep comparison.
+
+    Captures the structure of an expression — operators, identifiers,
+    and literals — in a language-agnostic form.
+    """
+    operator: str = ""  # ==, !=, <, >, <=, >=, &&, ||, !, or "" for simple exprs
+    identifiers: list[str] = field(default_factory=list)  # normalized variable names
+    literals: list[str] = field(default_factory=list)  # numeric/string literal values
+    negated: bool = False  # ! prefix
+    sub_exprs: list['ExprInfo'] = field(default_factory=list)  # for compound expressions (a && b)
+
+    def __repr__(self):
+        parts = []
+        if self.negated:
+            parts.append("!")
+        if self.operator:
+            parts.append(f"op:{self.operator}")
+        if self.identifiers:
+            parts.append(f"ids:{self.identifiers}")
+        if self.literals:
+            parts.append(f"lits:{self.literals}")
+        if self.sub_exprs:
+            parts.append(f"sub:[{', '.join(repr(s) for s in self.sub_exprs)}]")
+        return f"Expr({' '.join(parts)})"
 
 
 @dataclass

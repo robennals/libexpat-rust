@@ -45,27 +45,28 @@ For each tracked function pair, the skeleton comparison verifies:
      overlap (catches mismatched variables being checked)
    - **Return values**: non-error return expressions compared by identifier
    - **Assignment targets**: assign labels compared by identifier
+7. **Deep expression comparison** — branch conditions with comparison operators
+   are parsed into structured expression trees using tree-sitter. This compares:
+   - **Operators**: `==` vs `!=` vs `<` vs `>` vs `<=` vs `>=` must match
+   - **Literals**: numeric values (`0`, `1`, etc.) must match
+   - **Negation**: `!expr` vs `expr` is detected
+   - **Logical structure**: compound conditions (`a && b`) are compared pairwise
 
 ### What it does NOT check
 
-The verifier ensures structural correspondence and expression identity, not full
-semantic equivalence:
+The verifier ensures structural correspondence and deep expression comparison,
+not full semantic equivalence:
 
-- **Expression arithmetic/logic** — expressions are compared by identifier, not
-  by value. `&data[pos..next]` and `&data[pos+1..next]` both match because they
-  reference the same identifiers (`data`, `pos`, `next`). Wrong slice bounds,
-  off-by-one errors, or inverted comparison operators are not caught.
+- **Arithmetic within subscripts** — `data[pos..next]` and `data[pos+1..next]`
+  both match because they reference the same identifiers. Offset arithmetic
+  inside array indexing is not parsed.
 - **Handler dispatch sequence internals** — C arms containing handler dispatch
-  patterns are matched permissively against Rust's if-let pattern. The handler
-  call is verified, but surrounding C-specific operations are not compared.
+  patterns are matched permissively against Rust's if-let pattern.
 - **Side effects** are not tracked (the order of calls is checked, but not what
   data flows between them)
 
-These are deliberate trade-offs. Full semantic comparison of expressions across
-languages (C pointer arithmetic vs Rust slice indexing, boolean operator
-differences) would require a semantic model of both. Instead, we constrain
-structure tightly, verify expression identity, and rely on behavioral testing
-(~750 tests) to catch expression-level bugs like wrong slice bounds.
+These are deliberate trade-offs. The combination of structural constraint + deep
+expression comparison + behavioral testing (~750 tests) makes divergence unlikely.
 
 ## Rewrite rules
 

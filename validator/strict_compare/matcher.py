@@ -248,9 +248,12 @@ def _compare_branch(c: SkeletonNode, r: SkeletonNode, ctx: str,
                 ctx, "WARNING",
             ))
 
-    # Compare condition expressions (identifier-level)
+    # Compare condition expressions — deep comparison if ExprInfo available
     if c_cond and r_cond and not c_handler:
-        _compare_condition_exprs(c, r, c_cond, r_cond, ctx, mismatches)
+        if c.expr and r.expr:
+            _compare_expr_info(c, r, c.expr, r.expr, ctx, mismatches)
+        else:
+            _compare_condition_exprs(c, r, c_cond, r_cond, ctx, mismatches)
 
     # Compare then-branches
     c_then = c.children[0] if c.children else SkeletonNode("sequence")
@@ -327,6 +330,87 @@ def _compare_assign(c: SkeletonNode, r: SkeletonNode, ctx: str,
                 f"Assign target mismatch: C assigns '{c.label}', Rust assigns '{r.label}'",
                 ctx, "WARNING",
             ))
+
+
+def _compare_expr_info(c: SkeletonNode, r: SkeletonNode,
+                       c_expr: 'ExprInfo', r_expr: 'ExprInfo',
+                       ctx: str, mismatches: list[Mismatch]):
+    """Deep comparison of parsed expression trees.
+
+    Compares operators, identifiers, and literals between C and Rust expressions.
+    Falls back to identifier-level matching when structure differs too much.
+    """
+    from .nodes import ExprInfo
+
+    # Compare operators — both must have the same comparison/logical operator
+    if c_expr.operator and r_expr.operator:
+        if c_expr.operator in ('==', '!=', '<', '>', '<=', '>='):
+            if r_expr.operator in ('==', '!=', '<', '>', '<=', '>='):
+                if c_expr.operator != r_expr.operator:
+                    mismatches.append(Mismatch(
+                        c, r,
+                        f"Condition operator mismatch: C uses '{c_expr.operator}', "
+                        f"Rust uses '{r_expr.operator}'",
+                        ctx, "WARNING",
+                    ))
+
+        # For compound expressions (&&, ||), compare sub-expressions
+        if c_expr.operator in ('&&', '||') and r_expr.operator in ('&&', '||'):
+            if c_expr.operator != r_expr.operator:
+                mismatches.append(Mismatch(
+                    c, r,
+                    f"Logical operator mismatch: C uses '{c_expr.operator}', "
+                    f"Rust uses '{r_expr.operator}'",
+                    ctx, "WARNING",
+                ))
+            # Compare sub-expressions pairwise
+            for i, (c_sub, r_sub) in enumerate(zip(c_expr.sub_exprs, r_expr.sub_exprs)):
+                _compare_expr_info(c, r, c_sub, r_sub, ctx, mismatches)
+            return
+
+    # Compare negation
+    if c_expr.negated != r_expr.negated:
+        # Only warn if both have identifiers (not just structural noise)
+        if c_expr.identifiers and r_expr.identifiers:
+            mismatches.append(Mismatch(
+                c, r,
+                f"Condition negation mismatch: C {'negated' if c_expr.negated else 'not negated'}, "
+                f"Rust {'negated' if r_expr.negated else 'not negated'}",
+                ctx, "WARNING",
+            ))
+
+    # Compare identifiers
+    c_ids = {_normalize_expr_for_comparison(i) for i in c_expr.identifiers if i}
+    r_ids = {_normalize_expr_for_comparison(i) for i in r_expr.identifiers if i}
+
+    if c_ids and r_ids and not (c_ids & r_ids):
+        # No overlap — check with relaxed matching
+        found = False
+        for c_id in c_expr.identifiers:
+            for r_id in r_expr.identifiers:
+                if _exprs_match(c_id, r_id):
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
+            mismatches.append(Mismatch(
+                c, r,
+                f"Condition variable mismatch: C checks {list(c_ids)}, "
+                f"Rust checks {list(r_ids)}",
+                ctx, "WARNING",
+            ))
+
+    # Compare literals
+    c_lits = set(c_expr.literals)
+    r_lits = set(r_expr.literals)
+    if c_lits and r_lits and c_lits != r_lits:
+        mismatches.append(Mismatch(
+            c, r,
+            f"Condition literal mismatch: C uses {sorted(c_lits)}, "
+            f"Rust uses {sorted(r_lits)}",
+            ctx, "WARNING",
+        ))
 
 
 def _compare_condition_exprs(c: SkeletonNode, r: SkeletonNode,

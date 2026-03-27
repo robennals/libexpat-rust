@@ -241,6 +241,7 @@ def _extract_if(node, sf: str) -> SkeletonNode:
     """Extract if/else -> branch skeleton."""
     condition = node.child_by_field_name("condition")
     cond_text = _normalize_condition(_node_text(condition)) if condition else ""
+    cond_expr = normalize.extract_expr_info(condition, "c") if condition else None
 
     consequence = node.child_by_field_name("consequence")
     alternative = node.child_by_field_name("alternative")
@@ -274,7 +275,7 @@ def _extract_if(node, sf: str) -> SkeletonNode:
             children.append(SkeletonNode("sequence", source_file=sf))
 
     return SkeletonNode(
-        "branch", label=cond_text, children=children,
+        "branch", label=cond_text, expr=cond_expr, children=children,
         source_file=sf, source_start=_start_line(node), source_end=_end_line(node),
     )
 
@@ -426,6 +427,7 @@ def _extract_ternary(node, sf: str) -> SkeletonNode:
     alternative = node.child_by_field_name("alternative")
 
     cond_text = _normalize_condition(_node_text(condition)) if condition else ""
+    cond_expr = normalize.extract_expr_info(condition, "c") if condition else None
     children = []
     if consequence:
         c = _extract_expression(consequence, sf)
@@ -435,7 +437,7 @@ def _extract_ternary(node, sf: str) -> SkeletonNode:
         children.append(a if a else SkeletonNode("sequence", source_file=sf))
 
     return SkeletonNode(
-        "branch", label=cond_text, children=children,
+        "branch", label=cond_text, expr=cond_expr, children=children,
         source_file=sf, source_start=_start_line(node), source_end=_end_line(node),
     )
 

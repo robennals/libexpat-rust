@@ -233,3 +233,161 @@ def is_rust_noise(name: str) -> bool:
     are semantically meaningful and are NOT filtered.
     """
     return name in RUST_SYNTAX_ONLY
+
+
+# ========= Expression tree extraction (shared by C and Rust) =========
+
+# Comparison and logical operators recognized by tree-sitter in both C and Rust
+_COMPARISON_OPS = {'==', '!=', '<', '>', '<=', '>='}
+_LOGICAL_OPS = {'&&', '||'}
+_UNARY_OPS = {'!'}
+_ALL_OPS = _COMPARISON_OPS | _LOGICAL_OPS | _UNARY_OPS
+
+
+def extract_expr_info(ts_node, lang: str = "c") -> 'ExprInfo':
+    """Extract structured expression info from a tree-sitter AST node.
+
+    Works for both C and Rust tree-sitter nodes since they use the same
+    node types for binary_expression, unary_expression, etc.
+
+    Args:
+        ts_node: A tree-sitter node (condition, return value, etc.)
+        lang: "c" or "rust" — affects identifier normalization
+    """
+    from .nodes import ExprInfo
+
+    if ts_node is None:
+        return None
+
+    node_type = ts_node.type
+    text = ts_node.text.decode().strip()
+
+    # Strip wrapping parentheses
+    if node_type == "parenthesized_expression":
+        inner = [c for c in ts_node.children if c.type not in ("(", ")")]
+        if inner:
+            return extract_expr_info(inner[0], lang)
+
+    # Binary expression: left OP right
+    if node_type == "binary_expression":
+        children = ts_node.children
+        # Find the operator token
+        op = ""
+        left_nodes = []
+        right_nodes = []
+        found_op = False
+        for child in children:
+            child_text = child.text.decode().strip()
+            if child_text in (_COMPARISON_OPS | _LOGICAL_OPS):
+                op = child_text
+                found_op = True
+                continue
+            if not found_op:
+                left_nodes.append(child)
+            else:
+                right_nodes.append(child)
+
+        if op and left_nodes and right_nodes:
+            if op in _LOGICAL_OPS:
+                # Compound: a && b — extract sub-expressions
+                left_expr = extract_expr_info(left_nodes[0], lang)
+                right_expr = extract_expr_info(right_nodes[0], lang)
+                sub = [e for e in [left_expr, right_expr] if e]
+                return ExprInfo(operator=op, sub_exprs=sub)
+            else:
+                # Comparison: a == b — extract identifiers and literals
+                left_info = _extract_atom(left_nodes[0], lang)
+                right_info = _extract_atom(right_nodes[0], lang)
+                ids = left_info["ids"] + right_info["ids"]
+                lits = left_info["lits"] + right_info["lits"]
+                return ExprInfo(operator=op, identifiers=ids, literals=lits)
+
+    # Unary expression: !expr
+    if node_type == "unary_expression":
+        children = ts_node.children
+        negated = any(c.text.decode().strip() == "!" for c in children)
+        inner = [c for c in children if c.text.decode().strip() != "!"]
+        if inner:
+            inner_expr = extract_expr_info(inner[0], lang)
+            if inner_expr:
+                inner_expr.negated = negated
+                return inner_expr
+        # Simple negated identifier
+        atom = _extract_atom(ts_node, lang)
+        return ExprInfo(negated=negated, identifiers=atom["ids"], literals=atom["lits"])
+
+    # If-let pattern (Rust): if let Some(x) = expr
+    if node_type in ("let_declaration", "let_chain"):
+        atom = _extract_atom(ts_node, lang)
+        return ExprInfo(identifiers=atom["ids"], literals=atom["lits"])
+
+    # Fall through: extract as atom (identifier or literal)
+    atom = _extract_atom(ts_node, lang)
+    if atom["ids"] or atom["lits"]:
+        return ExprInfo(identifiers=atom["ids"], literals=atom["lits"])
+
+    return None
+
+
+def _extract_atom(ts_node, lang: str) -> dict:
+    """Extract identifiers and literals from a tree-sitter expression node."""
+    ids = []
+    lits = []
+
+    def walk(node):
+        t = node.type
+        text = node.text.decode().strip()
+
+        # Identifiers
+        if t in ("identifier", "field_identifier"):
+            normalized = _normalize_expr_identifier(text, lang)
+            if normalized:
+                ids.append(normalized)
+        elif t == "field_expression":
+            # parser->m_field or self.field — extract the field name
+            field = node.child_by_field_name("field")
+            if field:
+                normalized = _normalize_expr_identifier(field.text.decode().strip(), lang)
+                if normalized:
+                    ids.append(normalized)
+            return  # Don't recurse into children (already got the field)
+        elif t == "scoped_identifier":
+            # XmlError::None, XmlTok::Partial — keep as-is
+            ids.append(text)
+            return
+
+        # Literals
+        elif t in ("number_literal", "integer_literal", "float_literal",
+                    "char_literal", "string_literal"):
+            lits.append(text)
+            return
+        elif t == "true" or (t == "identifier" and text == "true"):
+            lits.append("true")
+            return
+        elif t == "false" or (t == "identifier" and text == "false"):
+            lits.append("false")
+            return
+        elif t == "null" or text == "NULL":
+            lits.append("NULL")
+            return
+
+        # Recurse into children
+        for child in node.children:
+            if child.type not in ("(", ")", ",", ";", ".", "->", "&", "*",
+                                   "mut", "as", "let", "ref"):
+                walk(child)
+
+    walk(ts_node)
+    return {"ids": ids, "lits": lits}
+
+
+def _normalize_expr_identifier(name: str, lang: str) -> str:
+    """Normalize an identifier for expression comparison."""
+    # Strip C prefixes
+    if name.startswith("m_"):
+        name = name[2:]
+    # Skip noise words
+    noise = {"parser", "self", "enc", "mut", "XML", "ICHAR"}
+    if name in noise:
+        return ""
+    return camel_to_snake(name)
