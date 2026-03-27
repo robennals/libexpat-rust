@@ -72,11 +72,21 @@ def _compare_nodes(c: Node, r: Node, path: str,
                    mismatches: list[Mismatch]):
     """Compare two nodes strictly."""
 
-    # Exact match: same kind, value, and same number of children
-    if c.kind == r.kind and c.value == r.value and len(c.children) == len(r.children):
-        # Recursively compare children
-        for i, (cc, rc) in enumerate(zip(c.children, r.children)):
-            _compare_nodes(cc, rc, f"{path}/{c.kind}[{i}]", mismatches)
+    # Exact match: same kind, value
+    if c.kind == r.kind and c.value == r.value:
+        # For block/sequence nodes, use alignment-based child comparison
+        if c.kind in ("block", "match") and c.children and r.children:
+            _compare_children_aligned(c.children, r.children,
+                                       f"{path}/{c.kind}", mismatches)
+            return
+        # For other nodes, require exact children count
+        if len(c.children) == len(r.children):
+            for i, (cc, rc) in enumerate(zip(c.children, r.children)):
+                _compare_nodes(cc, rc, f"{path}/{c.kind}[{i}]", mismatches)
+            return
+        # Same kind/value but different children count — try alignment
+        _compare_children_aligned(c.children, r.children,
+                                   f"{path}/{c.kind}", mismatches)
         return
 
     # Try match rules
@@ -91,6 +101,152 @@ def _compare_nodes(c: Node, r: Node, path: str,
             return
 
     # No match — report mismatch
+    _report_mismatch(c, r, path, mismatches)
+
+
+def _compare_children_aligned(c_children: list[Node], r_children: list[Node],
+                               path: str, mismatches: list[Mismatch]):
+    """Compare child lists using alignment (like a diff algorithm).
+
+    Walks both lists trying to match corresponding children:
+    1. If current C and R children match (or a match rule applies), recurse
+    2. If C child can be skipped (a "c_only" rule says it has no Rust equivalent), skip it
+    3. If R child can be skipped (a "r_only" rule says it has no C equivalent), skip it
+    4. Otherwise, report mismatch and advance both
+
+    This handles different numbers of children, extra nodes on either side,
+    and reordered nodes (within limits).
+    """
+    c_idx = 0
+    r_idx = 0
+
+    while c_idx < len(c_children) and r_idx < len(r_children):
+        c_node = c_children[c_idx]
+        r_node = r_children[r_idx]
+
+        # Try direct match
+        test_mismatches = []
+        _compare_nodes(c_node, r_node, f"{path}[{c_idx},{r_idx}]", test_mismatches)
+        if not test_mismatches:
+            c_idx += 1
+            r_idx += 1
+            continue
+
+        # Try match rules
+        rule_matched = False
+        for rule in _match_rules:
+            captures = {}
+            if _try_match_rule(c_node, r_node, rule, captures):
+                for var_name, (c_cap, r_cap) in captures.items():
+                    _compare_nodes(c_cap, r_cap,
+                                    f"{path}/{rule.get('name', '?')}/${var_name}",
+                                    mismatches)
+                c_idx += 1
+                r_idx += 1
+                rule_matched = True
+                break
+        if rule_matched:
+            continue
+
+        # Try skipping C child (C-only node)
+        if _can_skip(c_node, "c"):
+            c_idx += 1
+            continue
+
+        # Try skipping R child (Rust-only node)
+        if _can_skip(r_node, "r"):
+            r_idx += 1
+            continue
+
+        # Try lookahead: maybe C child matches a later R child
+        found_later = False
+        for r_look in range(r_idx + 1, min(r_idx + 5, len(r_children))):
+            test = []
+            _compare_nodes(c_node, r_children[r_look], "", test)
+            if not test:
+                # C matches later R — skip intervening R children
+                for r_skip in range(r_idx, r_look):
+                    if not _can_skip(r_children[r_skip], "r"):
+                        mismatches.append(Mismatch(
+                            None, r_children[r_skip],
+                            f"Extra Rust node: {r_children[r_skip].kind}({r_children[r_skip].value})",
+                            f"{path}[{r_skip}]",
+                        ))
+                _compare_nodes(c_node, r_children[r_look],
+                                f"{path}[{c_idx},{r_look}]", mismatches)
+                c_idx += 1
+                r_idx = r_look + 1
+                found_later = True
+                break
+        if found_later:
+            continue
+
+        # Try lookahead other direction: R child matches a later C child
+        found_later = False
+        for c_look in range(c_idx + 1, min(c_idx + 5, len(c_children))):
+            test = []
+            _compare_nodes(c_children[c_look], r_node, "", test)
+            if not test:
+                for c_skip in range(c_idx, c_look):
+                    if not _can_skip(c_children[c_skip], "c"):
+                        mismatches.append(Mismatch(
+                            c_children[c_skip], None,
+                            f"Extra C node: {c_children[c_skip].kind}({c_children[c_skip].value})",
+                            f"{path}[{c_skip}]",
+                        ))
+                _compare_nodes(c_children[c_look], r_node,
+                                f"{path}[{c_look},{r_idx}]", mismatches)
+                c_idx = c_look + 1
+                r_idx += 1
+                found_later = True
+                break
+        if found_later:
+            continue
+
+        # No match possible — report and advance both
+        mismatches.append(Mismatch(
+            c_node, r_node,
+            f"Unmatched pair: C {c_node.kind}({c_node.value}) vs R {r_node.kind}({r_node.value})",
+            f"{path}[{c_idx},{r_idx}]",
+        ))
+        c_idx += 1
+        r_idx += 1
+
+    # Report remaining unmatched children
+    while c_idx < len(c_children):
+        c_node = c_children[c_idx]
+        if not _can_skip(c_node, "c"):
+            mismatches.append(Mismatch(
+                c_node, None,
+                f"Extra C node: {c_node.kind}({c_node.value})",
+                f"{path}[{c_idx}]",
+            ))
+        c_idx += 1
+
+    while r_idx < len(r_children):
+        r_node = r_children[r_idx]
+        if not _can_skip(r_node, "r"):
+            mismatches.append(Mismatch(
+                None, r_node,
+                f"Extra Rust node: {r_node.kind}({r_node.value})",
+                f"{path}[{r_idx}]",
+            ))
+        r_idx += 1
+
+
+def _can_skip(node: Node, lang: str) -> bool:
+    """Check if a node can be skipped (has a skip rule)."""
+    for rule in _match_rules:
+        skip_lang = rule.get("skip")
+        if skip_lang and skip_lang == lang:
+            pattern = rule.get("c_pattern" if lang == "c" else "r_pattern", {})
+            if _pattern_matches(node, pattern, {}):
+                return True
+    return False
+
+
+def _report_mismatch(c: Node, r: Node, path: str, mismatches: list[Mismatch]):
+    """Report a mismatch with a descriptive message."""
     if c.kind != r.kind:
         mismatches.append(Mismatch(
             c, r,
@@ -103,17 +259,11 @@ def _compare_nodes(c: Node, r: Node, path: str,
             f"Value mismatch: C has {c.kind}({c.value}), Rust has {r.kind}({r.value})",
             path,
         ))
-    elif len(c.children) != len(r.children):
-        mismatches.append(Mismatch(
-            c, r,
-            f"Children count mismatch: C {c.kind} has {len(c.children)} children, "
-            f"Rust has {len(r.children)} children",
-            path,
-        ))
     else:
         mismatches.append(Mismatch(
             c, r,
-            f"Structural mismatch at {c.kind}({c.value})",
+            f"Structural mismatch at {c.kind}({c.value}): "
+            f"C has {len(c.children)} children, Rust has {len(r.children)}",
             path,
         ))
 
@@ -203,8 +353,11 @@ def _match_children(children: list[Node], patterns: list[dict],
                     captures: dict[str, Node]) -> bool:
     """Match a list of children against a list of patterns.
 
-    Handles rest captures ({"capture": "rest", "rest": true}) which
-    match zero or more remaining children.
+    Handles:
+    - Positional matching: patterns match children in order
+    - Rest captures: {"capture": "rest", "rest": true} matches remaining
+    - Partial matching: if patterns don't cover all children, the
+      remaining children are ignored (patterns are a prefix match)
     """
     c_idx = 0
     p_idx = 0
@@ -217,9 +370,8 @@ def _match_children(children: list[Node], patterns: list[dict],
             capture_name = pattern.get("capture", "")
             remaining = children[c_idx:]
             if capture_name:
-                # Capture as a block node containing the remaining children
                 captures[capture_name] = Node("block", children=remaining)
-            return True  # Rest always succeeds
+            return True
 
         if c_idx >= len(children):
             return False  # Ran out of children
@@ -230,5 +382,5 @@ def _match_children(children: list[Node], patterns: list[dict],
         c_idx += 1
         p_idx += 1
 
-    # All patterns matched — check for leftover children
-    return c_idx == len(children)
+    # All patterns matched — remaining children are OK (prefix match)
+    return True

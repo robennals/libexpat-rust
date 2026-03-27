@@ -63,6 +63,33 @@
       "justification": "C returns 0 for failure (OOM). Rust panics on OOM — no error return."
     },
     {
+      "name": "skip_c_let_type_decl",
+      "skip": "c",
+      "c_pattern": { "kind": "let" },
+      "justification": "C local variable declarations (type + name) have no direct Rust equivalent — Rust uses let bindings at the point of initialization, not at the top of the block.",
+      "status": "principled"
+    },
+    {
+      "name": "skip_c_must_convert_branch",
+      "skip": "c",
+      "c_pattern": { "kind": "if", "children": [{"kind": "call", "children": [{"kind": "ident", "value_regex": "must_convert|MUST_CONVERT"}]}] },
+      "justification": "C MUST_CONVERT(enc, s) checks if encoding conversion is needed. Rust works in UTF-8 natively, so no conversion is ever needed. The entire if-branch has no Rust equivalent.",
+      "status": "temporary",
+      "risk": "If multi-encoding support is added to Rust, the conversion logic would need to be ported."
+    },
+    {
+      "name": "skip_c_comment",
+      "skip": "c",
+      "c_pattern": { "kind": "comment" },
+      "justification": "C comments are not semantic."
+    },
+    {
+      "name": "skip_r_comment",
+      "skip": "r",
+      "r_pattern": { "kind": "//" },
+      "justification": "Rust comments are not semantic."
+    },
+    {
       "name": "c_handler_dispatch_is_rust_if_let",
       "c_pattern": {
         "kind": "if",

@@ -62,14 +62,20 @@ def _simplify(node: Node, lang: str) -> Node:
         if simplified is not None:  # Rules can delete nodes
             new_children.append(simplified)
 
+    # Apply multi-child simplification rules to the children list
+    new_children = _apply_multi_child_rules(new_children, lang)
+
     # Rebuild if children changed
     if new_children != node.children:
         node = Node(kind=node.kind, children=new_children,
                      value=node.value, source_file=node.source_file,
                      line=node.line)
 
-    # Apply rules to this node
+    # Apply single-node rules to this node
     for rule in _rules:
+        if rule.get("type") == "multi_child":
+            continue  # Already applied above
+
         # Check language filter
         rule_lang = rule.get("lang", "both")
         if rule_lang != "both" and rule_lang != lang:
@@ -82,6 +88,82 @@ def _simplify(node: Node, lang: str) -> Node:
             node = result
 
     return node
+
+
+def _apply_multi_child_rules(children: list[Node], lang: str) -> list[Node]:
+    """Apply multi-child simplification rules to a children list.
+
+    Multi-child rules match a contiguous subsequence of children and
+    replace them with zero or more new nodes. Applied repeatedly until
+    no rule fires.
+
+    Rule format:
+    {
+      "type": "multi_child",
+      "lang": "c",
+      "match_sequence": [
+        {"kind": "let", "capture": "decl"},
+        {"kind": "expr_stmt", "has_child_kind": "assign", "capture": "init"},
+        {"kind": "if", "child_value": "!", "capture": "null_check"}
+      ],
+      "action": "replace_sequence",
+      "replacement": [{"kind": "let", "children": ["$decl", "$init"]}]
+    }
+    """
+    changed = True
+    iterations = 0
+    while changed and iterations < 20:
+        changed = False
+        iterations += 1
+        for rule in _rules:
+            if rule.get("type") != "multi_child":
+                continue
+            rule_lang = rule.get("lang", "both")
+            if rule_lang != "both" and rule_lang != lang:
+                continue
+
+            result = _try_multi_child_rule(children, rule)
+            if result is not None:
+                children = result
+                changed = True
+                break
+
+    return children
+
+
+def _try_multi_child_rule(children: list[Node], rule: dict) -> list[Node] | None:
+    """Try to apply a multi-child rule to a children list."""
+    patterns = rule.get("match_sequence", [])
+    if not patterns or len(patterns) > len(children):
+        return None
+
+    action = rule.get("action", "")
+
+    for start in range(len(children) - len(patterns) + 1):
+        captures = {}
+        matched = True
+        for j, pattern in enumerate(patterns):
+            if not _matches(children[start + j], pattern):
+                matched = False
+                break
+            capture_name = pattern.get("capture")
+            if capture_name:
+                captures[capture_name] = children[start + j]
+
+        if not matched:
+            continue
+
+        if action == "delete_sequence":
+            return children[:start] + children[start + len(patterns):]
+
+        if action == "replace_sequence":
+            replacements = []
+            for spec in rule.get("replacement", []):
+                node = _build_replacement(spec, captures.get(spec.get("from"), Node("block")))
+                replacements.append(node)
+            return children[:start] + replacements + children[start + len(patterns):]
+
+    return None
 
 
 def _apply_rule(node: Node, rule: dict) -> Node | None:
