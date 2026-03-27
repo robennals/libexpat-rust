@@ -139,6 +139,13 @@ def _convert(ts, sf: str) -> Node:
     if t == "expression_statement":
         children = [_convert(c, sf) for c in ts.children if c.type != ";"]
         if len(children) == 1:
+            inner = children[0]
+            # Unwrap expr_stmt around control flow statements — these are
+            # syntactic wrappers because Rust's if/loop/match/return are
+            # expressions, but when used as statements they get the same
+            # semantic role as C's statement forms
+            if inner.kind in ("loop", "if", "if_let", "match", "return"):
+                return inner
             return Node("expr_stmt", children=children,
                          source_file=sf, line=_line(ts))
         return Node("expr_stmt", children=children,
