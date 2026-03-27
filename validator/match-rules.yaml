@@ -166,14 +166,15 @@ principled:
 
   # --- C position tracking via struct fields ---
 
-  - name: c_event_ptr_field_assign
+  - name: c_struct_field_assign
     skip: c
-    c: "assign(=, field($obj, $field), $value)"
+    c: "expr_stmt(assign(field($obj, $field), $value))"
     why: >
-      C assigns event pointer fields (m_eventPtr, m_eventEndPtr).
-      Rust tracks position via return values, not struct mutations.
-    # NOTE: This is more specific than "skip all assigns" — it only
-    # matches assigns to struct fields, not local variable assigns.
+      C assigns parser struct fields for position tracking and state
+      (m_eventPtr, m_eventEndPtr, openEntity fields, etc.).
+      Rust tracks position via return values and handles struct state
+      through initialization or different field organization.
+      Only matches assigns where LHS is a struct field access.
 
   # --- Encoding (Rust is UTF-8 only) ---
 
