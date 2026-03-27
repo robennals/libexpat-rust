@@ -85,16 +85,22 @@ This means semantic differences can only occur in two places:
   have a Rust equivalent. This is why temporary rules are tracked separately in
   `temporary-rewrites.json` — they are believed correct but not fully verified.
   Each should be reviewed and either promoted or removed.
-- **Argument-level differences**: The tool matches calls by name but does not
-  compare argument values. A call to `handler(data)` matches any call to
-  `handler(...)`, even if the actual data differs (e.g., wrong slice bounds).
-  Similarly, branch conditions are matched by the core variable being checked,
-  not by the full expression.
+- **Expression arithmetic/logic**: The tool compares expressions at the
+  identifier level across all node types — call arguments, branch conditions,
+  return values, and assignment targets — using JSON-configurable rewrite rules.
+  This verifies that the same variables are referenced but does not verify
+  arithmetic or logic within expressions. For example, `&data[pos..next]` and
+  `&data[pos+1..next]` both match because they reference the same identifiers.
+  Similarly, `if x > 0` and `if x >= 0` both match because both check `x`.
+- **Handler dispatch sequences** — C arms containing handler dispatch patterns
+  are matched permissively against Rust's if-let pattern. The handler call is
+  verified, but surrounding C-specific operations are not compared.
 
-These are deliberate trade-offs. Comparing argument expressions across languages
-(C pointer arithmetic vs Rust slice indexing) would require a semantic model of
-both languages. Instead, we constrain the structure tightly and rely on behavioral
-testing to catch argument-level bugs.
+These are deliberate trade-offs. Full semantic comparison of expressions across
+languages (C pointer arithmetic vs Rust slice indexing) would require a semantic
+model of both languages. Instead, we constrain structure tightly, verify
+expression identity, and rely on behavioral testing to catch expression-level
+bugs like wrong slice bounds or inverted conditions.
 
 ### Value for AI-assisted porting
 

@@ -22,16 +22,18 @@ _TEMP_REWRITES_FILE = os.path.join(
 
 _loaded_rules = None
 _loaded_suppressions = None
+_loaded_expr_rewrites = None
 
 
 def _load_config():
-    global _loaded_rules, _loaded_suppressions
+    global _loaded_rules, _loaded_suppressions, _loaded_expr_rewrites
     if _loaded_rules is not None:
         return
     with open(_REWRITES_FILE) as f:
         config = json.load(f)
     _loaded_rules = config.get("rewrite_rules", [])
     _loaded_suppressions = config.get("per_function_suppressions", {})
+    _loaded_expr_rewrites = config.get("expression_rewrites", [])
 
     # Also load temporary rules (marked with temporary=True)
     try:
@@ -40,6 +42,9 @@ def _load_config():
         for rule in temp_config.get("temporary_rules", []):
             rule["_temporary"] = True
             _loaded_rules.append(rule)
+        for rule in temp_config.get("temporary_expression_rewrites", []):
+            rule["_temporary"] = True
+            _loaded_expr_rewrites.append(rule)
     except (FileNotFoundError, json.JSONDecodeError):
         pass
 
@@ -73,6 +78,11 @@ def _pattern_matches(node: SkeletonNode, pattern: dict) -> bool:
     # Regex label match
     if "label_regex" in pattern:
         if not re.search(pattern["label_regex"], node.label):
+            return False
+
+    # Children count match
+    if "children_count" in pattern:
+        if len(node.children) != pattern["children_count"]:
             return False
 
     return True
@@ -174,3 +184,66 @@ def apply_all_rules(skeleton: SkeletonNode) -> SkeletonNode | None:
         return child
 
     return skeleton
+
+
+# ========= Expression rewrite rules =========
+
+def apply_expression_rewrites(args: list[str], func_name: str, lang: str) -> list[str]:
+    """Apply expression rewrite rules to a list of argument strings.
+
+    Args:
+        args: List of normalized argument strings.
+        func_name: The call's function name (for function-specific rules).
+        lang: "c" or "r" — which side these args come from.
+
+    Returns:
+        Rewritten argument list. Some entries may be None (deleted by rules).
+
+    Expression rewrite rules in JSON have the form:
+        {
+            "name": "rule_name",
+            "side": "c" | "r" | "both",
+            "function": "optional_func_name_or_*",
+            "match": "regex_or_literal",
+            "replace": "replacement_or_null",
+            "justification": "why"
+        }
+
+    - "side": which arg list the rule applies to
+    - "function": function name filter ("*" or omitted = all functions)
+    - "match": regex to match against arg string
+    - "replace": replacement string (null = delete the arg)
+    """
+    _load_config()
+
+    result = list(args)
+    for rule in _loaded_expr_rewrites:
+        # Check side filter
+        rule_side = rule.get("side", "both")
+        if rule_side != "both" and rule_side != lang:
+            continue
+
+        # Check function filter
+        rule_func = rule.get("function", "*")
+        if rule_func != "*" and rule_func != func_name:
+            continue
+
+        # Apply match/replace to each arg
+        match_pattern = rule.get("match", "")
+        replacement = rule.get("replace")
+
+        for i, arg in enumerate(result):
+            if arg is None:
+                continue
+            full_match = re.fullmatch(match_pattern, arg)
+            if full_match:
+                if replacement is None:
+                    result[i] = None  # Delete this arg
+                else:
+                    result[i] = full_match.expand(replacement)
+            elif replacement is not None:
+                partial_match = re.search(match_pattern, arg)
+                if partial_match:
+                    result[i] = re.sub(match_pattern, replacement, arg)
+
+    return result

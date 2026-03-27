@@ -36,20 +36,36 @@ For each tracked function pair, the skeleton comparison verifies:
 4. **Loop structure** — C `for(;;)` loops match Rust `loop {}` at the same nesting
 5. **Return values** — error returns match (`XmlError::InvalidToken` in both)
 
+6. **Expression identity** — expressions are compared at the identifier level
+   across all node types, with JSON-configurable expression rewrite rules:
+   - **Call arguments**: ordered subsequence matching (C args after rewriting
+     `parser->m_field` → `field`, removing `handler_arg`, `sizeof()`, `NULL`,
+     `&next`, etc., must appear in order in Rust args)
+   - **Branch conditions**: identifiers extracted from both conditions must
+     overlap (catches mismatched variables being checked)
+   - **Return values**: non-error return expressions compared by identifier
+   - **Assignment targets**: assign labels compared by identifier
+
 ### What it does NOT check
 
-The verifier ensures structural correspondence, not semantic equivalence:
+The verifier ensures structural correspondence and expression identity, not full
+semantic equivalence:
 
-- **Argument values** are not compared (a call to `handler(data)` matches any
-  call to `handler(...)`)
-- **Expression details** within conditions are normalized but not fully parsed
-  (e.g., `tag_level == 0` matches any branch checking `tag_level`)
+- **Expression arithmetic/logic** — expressions are compared by identifier, not
+  by value. `&data[pos..next]` and `&data[pos+1..next]` both match because they
+  reference the same identifiers (`data`, `pos`, `next`). Wrong slice bounds,
+  off-by-one errors, or inverted comparison operators are not caught.
+- **Handler dispatch sequence internals** — C arms containing handler dispatch
+  patterns are matched permissively against Rust's if-let pattern. The handler
+  call is verified, but surrounding C-specific operations are not compared.
 - **Side effects** are not tracked (the order of calls is checked, but not what
   data flows between them)
 
-This is intentional. The rewrite rules allow enough flexibility for C-to-Rust
-language differences while constraining the code tightly enough that, combined
-with behavioral testing, semantic divergences become unlikely.
+These are deliberate trade-offs. Full semantic comparison of expressions across
+languages (C pointer arithmetic vs Rust slice indexing, boolean operator
+differences) would require a semantic model of both. Instead, we constrain
+structure tightly, verify expression identity, and rely on behavioral testing
+(~750 tests) to catch expression-level bugs like wrong slice bounds.
 
 ## Rewrite rules
 

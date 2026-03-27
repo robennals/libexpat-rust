@@ -182,7 +182,10 @@ def _extract_case(node, sf: str) -> SkeletonNode:
     label = ""
     if value_node:
         raw_label = _node_text(value_node).strip()
-        label = _normalize_case_label(raw_label)
+        if raw_label == ":":
+            label = "_default"  # Misidentified default case
+        else:
+            label = _normalize_case_label(raw_label)
 
     # Extract body statements (everything after the colon)
     body_children = []

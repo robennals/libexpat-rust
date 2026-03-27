@@ -194,6 +194,77 @@
       "output": null,
       "justification": "C chains to externalEntityInitProcessor2 for the second phase. Rust inlines this logic.",
       "category": "structural_refactor"
+    },
+    {
+      "name": "negative_token_arm_removal",
+      "input":  { "kind": "arm", "label_regex": "^-XML_TOK_" },
+      "output": null,
+      "justification": "C uses negative token values (-XML_TOK_X) for trailing CR variants. Rust tokenizer returns proper enum variants (XmlTok::TrailingCr) directly, so negative-token arms don't exist in Rust. The equivalent handling is in the positive token arms.",
+      "category": "api_difference"
+    },
+    {
+      "name": "return_none_error_removal",
+      "input":  { "kind": "return", "label": "XmlError::None" },
+      "output": null,
+      "justification": "C returns XML_ERROR_NONE as a success sentinel. Rust uses different success patterns (Ok(()), break, implicit return, setting error_code) so XmlError::None does not appear as a return value.",
+      "category": "api_difference"
+    },
+    {
+      "name": "return_result_variable_removal",
+      "input":  { "kind": "return", "label_regex": "^result$" },
+      "output": null,
+      "justification": "C returns a local 'result' variable holding an error code. Rust stores errors in self.error_code and returns void, or uses Result<> return type. The error propagation is handled differently.",
+      "category": "api_difference"
+    },
+    {
+      "name": "pool_blocks_check_removal",
+      "input":  { "kind": "branch", "label_regex": "pool->blocks|pool\\.blocks" },
+      "output": null,
+      "justification": "C checks if pool has allocated blocks before using it. Rust uses Vec which manages its own capacity. No equivalent branch exists.",
+      "category": "memory_management"
+    },
+    {
+      "name": "next_ptr_check_removal",
+      "input":  { "kind": "branch", "label_regex": "next_ptr\\s*!=\\s*NULL|next_ptr\\s*!=" },
+      "output": null,
+      "justification": "C uses output pointer parameters (nextPtr) to return position. Rust returns positions in Result tuples, so there is no nextPtr to check.",
+      "category": "api_difference"
+    },
+    {
+      "name": "entity_text_bounds_check_removal",
+      "input":  { "kind": "branch", "label_regex": "entity_text_ptr\\s*>=\\s*entity_text_end" },
+      "output": null,
+      "justification": "C checks entityTextPtr >= entityTextEnd for early exit on empty entity value. Rust handles this implicitly: the tokenizer returns XmlTok::None for empty input.",
+      "category": "structural_refactor"
+    },
+    {
+      "name": "negative_token_check_removal",
+      "input":  { "kind": "branch", "label_regex": "tok\\s*<=\\s*0|tok\\s*<\\s*0" },
+      "output": null,
+      "justification": "C checks for negative token values (tok <= 0) which encode trailing CR variants. Rust tokenizer returns proper enum variants, so no negative-value check exists.",
+      "category": "api_difference"
+    },
+    {
+      "name": "handle_default_check_removal",
+      "input":  { "kind": "branch", "label_regex": "handle_default.*default_handler|default_handler.*handle_default" },
+      "output": null,
+      "justification": "C uses a local handleDefault flag combined with if(m_defaultHandler) at the end of each prolog iteration. Rust handles this inside handle_prolog_role returning a suppress_default bool, and checks default_handler at a different structural level.",
+      "category": "structural_refactor"
+    },
+    {
+      "name": "async_entity_return_removal",
+      "input":  { "kind": "return", "label": "XmlError::AsyncEntity" },
+      "output": null,
+      "justification": "C returns XML_ERROR_ASYNC_ENTITY when external entity processing is suspended. Rust does not support suspend/resume, so this error code is never returned.",
+      "category": "not_yet_ported",
+      "tracking_issue": "suspend/resume support"
+    },
+    {
+      "name": "default_handler_guard_removal",
+      "input":  { "kind": "branch", "label_regex": "^!?\\s*default_handler$" },
+      "output": null,
+      "justification": "C guards reportDefault calls with if(m_defaultHandler) checks. Rust calls report_default unconditionally; the handler existence check is inside report_default itself. The semantics are equivalent.",
+      "category": "structural_refactor"
     }
   ],
 
@@ -211,28 +282,195 @@
     }
   },
 
+  "expression_rewrites": [
+    {
+      "name": "c_parser_field_access",
+      "description": "Normalize C parser->m_field to field name in snake_case",
+      "side": "c",
+      "function": "*",
+      "match": "parser->m_(\\w+)",
+      "replace": "\\1",
+      "justification": "C accesses parser fields via parser->m_field. Rust uses self.field. Both sides should normalize to just the field name.",
+      "category": "language_syntax"
+    },
+    {
+      "name": "c_enc_field_access",
+      "description": "Normalize C enc->field to field name",
+      "side": "c",
+      "function": "*",
+      "match": "enc->(\\w+)",
+      "replace": "\\1",
+      "justification": "C accesses encoding fields via enc->field pointer. Rust uses method calls or direct field access.",
+      "category": "language_syntax"
+    },
+    {
+      "name": "rust_self_field_access",
+      "description": "Strip self. prefix from Rust field access",
+      "side": "r",
+      "function": "*",
+      "match": "self\\.(\\w+)",
+      "replace": "\\1",
+      "justification": "Rust explicit self.field access corresponds to C's parser->m_field. After normalization both are just the field name.",
+      "category": "language_syntax"
+    },
+    {
+      "name": "c_handler_arg_removal",
+      "description": "Remove C handlerArg/userData first argument to handler callbacks",
+      "side": "c",
+      "function": "*",
+      "match": "^handler_arg$",
+      "replace": null,
+      "justification": "C passes handlerArg (user data) as the first argument to every callback. Rust closures capture context, so this argument doesn't exist.",
+      "category": "idiom_difference"
+    },
+    {
+      "name": "c_parser_arg_removal",
+      "description": "Remove C 'parser' first argument passed to internal functions",
+      "side": "c",
+      "function": "*",
+      "match": "^parser$",
+      "replace": null,
+      "justification": "C passes the parser struct as the first argument to internal functions. Rust uses &mut self. The parser argument doesn't exist in Rust signatures.",
+      "category": "language_syntax"
+    },
+    {
+      "name": "c_sizeof_removal",
+      "description": "Remove C sizeof() expressions used in allocation sizing",
+      "side": "c",
+      "function": "*",
+      "match": "^sizeof\\(.*\\)$",
+      "replace": null,
+      "justification": "C passes sizeof(Type) to allocation functions. Rust handles sizing automatically via generics and type inference.",
+      "category": "language_difference"
+    },
+    {
+      "name": "c_cast_removal",
+      "description": "Strip C type casts from expressions",
+      "side": "c",
+      "function": "*",
+      "match": "^\\(\\w+\\s*\\*?\\)\\s*(.+)$",
+      "replace": "\\1",
+      "justification": "C uses explicit type casts like (XML_Char *)ptr. Rust uses type inference or 'as' casts which are normalized separately.",
+      "category": "language_syntax"
+    },
+    {
+      "name": "rust_as_cast_removal",
+      "description": "Strip Rust 'as Type' casts from expressions",
+      "side": "r",
+      "function": "*",
+      "match": "\\s+as\\s+\\w+.*$",
+      "replace": "",
+      "justification": "Rust 'as usize' or 'as *const u8' casts are type-level differences, not semantic differences.",
+      "category": "language_syntax"
+    },
+    {
+      "name": "c_null_literal",
+      "description": "Normalize C NULL to rust-style equivalent",
+      "side": "c",
+      "function": "*",
+      "match": "^NULL$",
+      "replace": null,
+      "justification": "C passes NULL for optional parameters. Rust uses Option::None or simply omits the parameter.",
+      "category": "language_difference"
+    },
+    {
+      "name": "c_next_pointer_removal",
+      "description": "Remove C '&next' output pointer argument (must be before c_address_of_removal)",
+      "side": "c",
+      "function": "*",
+      "match": "^&next$",
+      "replace": null,
+      "justification": "C tokenizer writes next position via output pointer (&next). Rust tokenizer returns next position in the return value.",
+      "category": "api_difference"
+    },
+    {
+      "name": "c_address_of_removal",
+      "description": "Strip C & (address-of) operator",
+      "side": "c",
+      "function": "*",
+      "match": "^&(.+)$",
+      "replace": "\\1",
+      "justification": "C passes pointers via &expr. Rust uses references (&expr or &mut expr) which are stripped on the Rust side too.",
+      "category": "language_syntax"
+    },
+    {
+      "name": "rust_borrow_removal",
+      "description": "Strip Rust & and &mut borrow operators",
+      "side": "r",
+      "function": "*",
+      "match": "^&(?:mut\\s+)?(.+)$",
+      "replace": "\\1",
+      "justification": "Rust borrows (&expr, &mut expr) correspond to C pointer passing. Both normalize to just the expression.",
+      "category": "language_syntax"
+    },
+    {
+      "name": "c_s_pointer_to_pos",
+      "description": "C 's' buffer pointer corresponds to Rust 'pos' offset",
+      "side": "c",
+      "function": "*",
+      "match": "^s$",
+      "replace": "pos",
+      "justification": "C uses 's' as a pointer into the data buffer. Rust uses 'pos' as an offset index. Both represent the current parse position.",
+      "category": "naming_difference"
+    },
+    {
+      "name": "c_end_pointer_to_end",
+      "description": "C 'end' pointer corresponds to Rust 'end' or 'len'",
+      "side": "c",
+      "function": "*",
+      "match": "^end$",
+      "replace": "end",
+      "justification": "C and Rust both use 'end' for buffer end position. Identity mapping for clarity.",
+      "category": "naming_difference"
+    },
+    {
+      "name": "c_encoding_to_enc",
+      "description": "C 'encoding' parameter corresponds to Rust 'enc'",
+      "side": "c",
+      "function": "*",
+      "match": "^encoding$",
+      "replace": "enc",
+      "justification": "C uses the longer name 'encoding' for the encoder parameter. Rust abbreviates to 'enc'.",
+      "category": "naming_difference"
+    },
+    {
+      "name": "normalize_lines_data_naming",
+      "description": "C 'data' in normalize_lines maps to Rust's descriptive variants",
+      "side": "c",
+      "function": "normalize_lines",
+      "match": "^data$",
+      "replace": null,
+      "justification": "C passes generic 'data' to normalizeLines. Rust uses descriptive names like 'comment_data' or 'pi_data_raw'. Same data, different variable name. Deleted to avoid false mismatch since the naming is a known difference.",
+      "category": "naming_difference"
+    }
+  ],
+
   "per_function_suppressions": {
     "description": "Structural mismatches that are accepted for specific function pairs because they represent deliberate architectural choices.",
 
     "epilog_processor": {
-      "suppressed_calls": ["accounting_diff_tolerated"],
-      "justification": "Accounting checked at parse() entry, not per-token."
+      "suppressed_calls": ["accounting_diff_tolerated", "prolog_tok"],
+      "suppressed_errors": ["UnclosedToken", "PartialChar"],
+      "suppressed_labels": ["parsing_status", "final_buffer"],
+      "justification": "Accounting checked at parse() entry, not per-token. prolog_tok call structure differs (Rust tokenizes inline). UnclosedToken/PartialChar returns are inside merged Partial|TrailingCr arms in Rust. parsing_status/finalBuffer checks are suspend/resume (not yet ported)."
     },
     "do_content": {
-      "suppressed_calls": ["accounting_diff_tolerated", "process_namespaces"],
+      "suppressed_calls": ["accounting_diff_tolerated", "process_namespaces", "content_tok", "char_data_handler"],
       "suppressed_errors": ["EntityDeclaredInPe", "AmplificationLimitBreach"],
-      "suppressed_labels": ["parsing_status"],
-      "justification": "Accounting at parse() entry. process_namespaces refactored. Suspend/resume (parsing_status) not yet ported."
+      "suppressed_labels": ["parsing_status", "char_data_handler"],
+      "justification": "Accounting at parse() entry. process_namespaces refactored. content_tok call structure differs. char_data_handler dispatch pattern differs (C uses local variable + MUST_CONVERT loop, Rust uses if-let directly). Suspend/resume (parsing_status) not yet ported."
     },
     "do_prolog": {
-      "suppressed_calls": ["accounting_diff_tolerated", "entity_tracking_on_open", "entity_tracking_on_close", "accounting_on_abort"],
+      "suppressed_calls": ["accounting_diff_tolerated", "entity_tracking_on_open", "entity_tracking_on_close", "accounting_on_abort", "xml_token_role"],
       "suppressed_errors": ["EntityDeclaredInPe", "NoElements", "UndefinedEntity", "AmplificationLimitBreach"],
-      "justification": "Accounting at parse() entry. Entity tracking in process_entity(). Role dispatch split."
+      "suppressed_labels": ["role"],
+      "justification": "Accounting at parse() entry. Entity tracking in process_entity(). Role dispatch split into handle_prolog_role. xml_token_role called at different structural level. match(role) is in handle_prolog_role in Rust."
     },
     "do_cdata_section": {
-      "suppressed_calls": ["accounting_diff_tolerated"],
+      "suppressed_calls": ["accounting_diff_tolerated", "cdata_section_tok", "char_data_handler"],
       "suppressed_errors": ["AmplificationLimitBreach"],
-      "justification": "Accounting at parse() entry."
+      "suppressed_labels": ["char_data_handler"],
+      "justification": "Accounting at parse() entry. cdata_section_tok call structure differs. char_data_handler dispatch pattern differs (C saves handler locally + MUST_CONVERT, Rust uses if-let)."
     },
     "content_processor": {
       "suppressed_calls": ["do_content", "store_raw_names"],
@@ -253,8 +491,15 @@
     },
     "handle_prolog_role": {
       "suppressed_calls": ["accounting_diff_tolerated"],
+      "suppressed_errors": ["AmplificationLimitBreach", "TextDecl"],
+      "suppressed_labels": ["XmlParseXmlDecl", "is_general_text_entity", "xml_decl_handler", "protocol_encoding_name", "stored_enc_name", "storedversion"],
+      "justification": "processXmlDecl inlined into handle_prolog_role. Full structural match not feasible for inlined function — C's processXmlDecl has 6 branches that are restructured in the Rust inline version. TextDecl handling in external_entity_init_processor3."
+    },
+    "store_entity_value": {
+      "suppressed_calls": ["accounting_diff_tolerated", "entity_tracking_on_open", "entity_tracking_on_close", "xml_entity_value_tok"],
       "suppressed_errors": ["AmplificationLimitBreach"],
-      "justification": "processXmlDecl inlined into handle_prolog_role. Full structural match not feasible for inlined function."
+      "suppressed_labels": ["tok"],
+      "justification": "Accounting and entity tracking in process_entity(). xml_entity_value_tok called at different structural nesting level in Rust (inside match on Ok result). match(tok) is nested inside match(tok_result) in Rust."
     },
     "external_entity_init_processor": {
       "suppressed_calls": ["initialize_encoding", "external_entity_init_processor_2"],

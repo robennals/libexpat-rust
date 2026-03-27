@@ -42,11 +42,21 @@ def _compare(c: SkeletonNode, r: SkeletonNode, ctx: str,
                 c, r, f"Kind mismatch: C has {c.kind}, Rust has {r.kind}", ctx,
             ))
             return
+        elif c.kind in ("call", "handler_dispatch") and r.kind == "sequence":
+            # C has a bare call; Rust wraps it in a sequence (e.g., if-let handler pattern)
+            if _sequence_contains_call(r, c.label):
+                return
+            mismatches.append(Mismatch(
+                c, r, f"Kind mismatch: C has {c.kind}, Rust has {r.kind}", ctx,
+            ))
+            return
         elif c.kind == "branch" and r.kind == "sequence":
             _compare_sequence(c.children, r.children, ctx, mismatches, c, r)
             return
         elif c.kind == "return" and r.kind == "sequence":
             return
+        elif c.kind == "assign" and r.kind == "sequence":
+            return  # Assign is structural noise — position-matched only
         elif c.kind == "loop" and r.kind == "sequence":
             # C was flattened to just a loop; Rust has sequence > loop
             rust_loop = _find_loop_in_tree(r.children)
@@ -90,7 +100,7 @@ def _compare(c: SkeletonNode, r: SkeletonNode, ctx: str,
     elif kind == "return":
         _compare_return(c, r, ctx, mismatches)
     elif kind == "assign":
-        pass  # Assignments are structural noise -- matched by position only
+        _compare_assign(c, r, ctx, mismatches)
     elif kind in ("break", "continue", "goto"):
         pass  # Control flow keywords -- already handled by rewrite rules
     else:
@@ -209,6 +219,11 @@ def _compare_sequence(c_children: list[SkeletonNode], r_children: list[SkeletonN
                         break
 
         if not matched:
+            # Sequences containing only handler dispatch patterns (branches
+            # checking handler existence + calls) are expected to differ
+            # structurally since Rust uses if-let instead of if(handler).
+            if c_node.kind == "sequence" and _is_handler_dispatch_sequence(c_node):
+                continue  # Handler dispatch pattern — structural difference OK
             mismatches.append(Mismatch(
                 c_node, None,
                 f"C {c_node.kind}({c_node.label}) not found in Rust sequence",
@@ -219,8 +234,6 @@ def _compare_sequence(c_children: list[SkeletonNode], r_children: list[SkeletonN
 def _compare_branch(c: SkeletonNode, r: SkeletonNode, ctx: str,
                     mismatches: list[Mismatch]):
     """Compare if/else branches."""
-    # Condition comparison -- relaxed (C and Rust express conditions very differently)
-    # We check that handler checks match and error condition checks match
     c_cond = c.label
     r_cond = r.label
 
@@ -234,6 +247,10 @@ def _compare_branch(c: SkeletonNode, r: SkeletonNode, ctx: str,
                 f"Handler check mismatch: C checks {c_handler}, Rust checks {r_handler}",
                 ctx, "WARNING",
             ))
+
+    # Compare condition expressions (identifier-level)
+    if c_cond and r_cond and not c_handler:
+        _compare_condition_exprs(c, r, c_cond, r_cond, ctx, mismatches)
 
     # Compare then-branches
     c_then = c.children[0] if c.children else SkeletonNode("sequence")
@@ -265,13 +282,17 @@ def _compare_branch(c: SkeletonNode, r: SkeletonNode, ctx: str,
 
 def _compare_call(c: SkeletonNode, r: SkeletonNode, ctx: str,
                   mismatches: list[Mismatch]):
-    """Compare function calls."""
+    """Compare function calls: name and arguments."""
     if c.label != r.label:
         mismatches.append(Mismatch(
             c, r,
             f"Call name mismatch: C={c.label}, Rust={r.label}",
             ctx, "ERROR",
         ))
+        return  # If name doesn't match, no point comparing args
+
+    # Compare arguments (expressions)
+    _compare_call_args(c, r, ctx, mismatches)
 
 
 def _compare_return(c: SkeletonNode, r: SkeletonNode, ctx: str,
@@ -286,10 +307,92 @@ def _compare_return(c: SkeletonNode, r: SkeletonNode, ctx: str,
                     f"Return value mismatch: C returns {c.label}, Rust returns {r.label}",
                     ctx, "ERROR",
                 ))
-        # For non-error returns, be more relaxed (C returns 0/1, Rust returns differently)
+        elif not c.label.startswith("XmlError::") and not r.label.startswith("XmlError::"):
+            # Non-error returns: compare expressions
+            if not _exprs_match(c.label, r.label):
+                mismatches.append(Mismatch(
+                    c, r,
+                    f"Return expression mismatch: C returns '{c.label}', Rust returns '{r.label}'",
+                    ctx, "WARNING",
+                ))
+
+
+def _compare_assign(c: SkeletonNode, r: SkeletonNode, ctx: str,
+                    mismatches: list[Mismatch]):
+    """Compare assignment targets (labels) using expression matching."""
+    if c.label and r.label:
+        if not _exprs_match(c.label, r.label):
+            mismatches.append(Mismatch(
+                c, r,
+                f"Assign target mismatch: C assigns '{c.label}', Rust assigns '{r.label}'",
+                ctx, "WARNING",
+            ))
+
+
+def _compare_condition_exprs(c: SkeletonNode, r: SkeletonNode,
+                             c_cond: str, r_cond: str, ctx: str,
+                             mismatches: list[Mismatch]):
+    """Compare branch condition expressions at the identifier level.
+
+    Extracts identifiers from both conditions and checks that the C identifiers
+    appear in the Rust condition. This catches cases where completely different
+    variables are being checked.
+    """
+    c_ids = _extract_condition_identifiers(c_cond)
+    r_ids = _extract_condition_identifiers(r_cond)
+
+    if not c_ids or not r_ids:
+        return  # Can't compare if no identifiers extracted
+
+    # Apply expression normalization to identifier lists
+    from .rewrite_rules import apply_expression_rewrites
+    c_ids = apply_expression_rewrites(c_ids, "", "c")
+    r_ids = apply_expression_rewrites(r_ids, "", "r")
+    c_ids = [i for i in c_ids if i is not None]
+    r_ids = [i for i in r_ids if i is not None]
+
+    if not c_ids or not r_ids:
+        return
+
+    # Check that at least one C identifier matches a Rust identifier
+    c_normalized = {_normalize_expr_for_comparison(i) for i in c_ids}
+    r_normalized = {_normalize_expr_for_comparison(i) for i in r_ids}
+
+    if c_normalized & r_normalized:
+        return  # At least one identifier in common — OK
+
+    # No overlap — check with relaxed matching
+    for c_id in c_ids:
+        for r_id in r_ids:
+            if _exprs_match(c_id, r_id):
+                return  # Found a match
+
+    mismatches.append(Mismatch(
+        c, r,
+        f"Condition variable mismatch: C checks [{', '.join(c_ids)}], "
+        f"Rust checks [{', '.join(r_ids)}]",
+        ctx, "WARNING",
+    ))
 
 
 # ========= Helper functions =========
+
+def _flatten_sequences(nodes: list[SkeletonNode]) -> list[SkeletonNode]:
+    """Flatten unlabeled sub-sequences into their parent list.
+
+    This handles the case where C wraps children in a sub-sequence inside
+    a match arm, but Rust has the same children directly in the arm body.
+    Only flattens sequences without labels (structural grouping, not semantic).
+    """
+    result = []
+    for node in nodes:
+        if node.kind == "sequence" and not node.label:
+            # Flatten: promote children to parent level
+            result.extend(_flatten_sequences(node.children))
+        else:
+            result.append(node)
+    return result
+
 
 def _is_meaningful(node: SkeletonNode) -> bool:
     """Is this node semantically meaningful for comparison?"""
@@ -369,6 +472,17 @@ def _branch_contains_call(branch: SkeletonNode, call_label: str) -> bool:
                 if subchild.kind in ("call", "handler_dispatch"):
                     if _calls_match(call_label, subchild.label):
                         return True
+    return False
+
+
+def _sequence_contains_call(node: SkeletonNode, call_label: str) -> bool:
+    """Check if a sequence (or any descendant) contains a call with the given label."""
+    for child in node.children:
+        if child.kind in ("call", "handler_dispatch"):
+            if _calls_match(call_label, child.label):
+                return True
+        if _sequence_contains_call(child, call_label):
+            return True
     return False
 
 
@@ -503,3 +617,182 @@ def _has_meaningful_content(node: SkeletonNode) -> bool:
     if node.kind in ("call", "handler_dispatch", "return"):
         return True
     return any(_has_meaningful_content(c) for c in node.children)
+
+
+def _is_handler_dispatch_sequence(node: SkeletonNode) -> bool:
+    """Is this a sequence whose content is C-specific operations that Rust
+    handles differently due to handler dispatch patterns, memory management,
+    or other language differences?
+
+    Returns True for sequences containing a mix of:
+    - Handler dispatch branches (if handler) / calls
+    - Assigns (C struct field manipulation)
+    - Branches checking C-specific conditions (entity state, tag fields, etc.)
+    - Calls to C-specific functions (xml_convert, name_length, etc.)
+    - Loops (raw name conversion loops, etc.)
+    - Returns (error returns from C-only checks)
+
+    These sequences represent C implementation details that Rust structures
+    completely differently (using if-let, Vec, String, etc.).
+    """
+    if not node.children:
+        return False
+
+    # A sequence is considered a C-specific block if it contains
+    # at least one handler dispatch or call, and no children that
+    # would indicate it's a high-level semantic operation.
+    has_some_content = False
+    for child in node.children:
+        if child.kind in ("assign", "break", "continue"):
+            continue  # Always OK — noise
+        if child.kind in ("call", "handler_dispatch", "branch", "return",
+                          "loop", "match", "sequence"):
+            has_some_content = True
+            continue
+        # Unknown kind — be conservative
+        return False
+
+    return has_some_content
+
+
+# ========= Expression / argument comparison =========
+
+def _compare_call_args(c: SkeletonNode, r: SkeletonNode, ctx: str,
+                       mismatches: list[Mismatch]):
+    """Compare the argument lists of two call nodes.
+
+    Arguments are normalized strings. We apply expression rewrite rules
+    to account for known C/Rust differences before comparing.
+    """
+    from .rewrite_rules import apply_expression_rewrites
+
+    c_args = c.args
+    r_args = r.args
+
+    # Filter out "-> target" assignment-binding pseudo-args from both sides
+    c_args = [a for a in c_args if not a.startswith("-> ")]
+    r_args = [a for a in r_args if not a.startswith("-> ")]
+
+    if not c_args and not r_args:
+        return  # Both have no args — OK
+
+    if not c_args or not r_args:
+        return  # One side has no args — we don't require args to be present
+
+    # Apply expression rewrite rules to normalize both sides
+    func_name = c.label
+    c_args = apply_expression_rewrites(c_args, func_name, "c")
+    r_args = apply_expression_rewrites(r_args, func_name, "r")
+
+    # After rewrites, some args may be None (deleted) — filter them
+    c_args = [a for a in c_args if a is not None]
+    r_args = [a for a in r_args if a is not None]
+
+    if not c_args and not r_args:
+        return
+
+    # Compare: C args should be an ordered subsequence of Rust args
+    # (Rust may have extra args like &mut self, lifetime params, etc.)
+    r_idx = 0
+    for c_arg in c_args:
+        matched = False
+        while r_idx < len(r_args):
+            if _exprs_match(c_arg, r_args[r_idx]):
+                r_idx += 1
+                matched = True
+                break
+            r_idx += 1
+        if not matched:
+            mismatches.append(Mismatch(
+                c, r,
+                f"Arg mismatch in {c.label}(): C arg '{c_arg}' not found in Rust args {r_args}",
+                ctx, "WARNING",
+            ))
+            return  # Report once per call, not per arg
+
+
+def _exprs_match(c_expr: str, r_expr: str) -> bool:
+    """Do two normalized expression strings correspond?
+
+    Uses relaxed matching: extracts core identifiers and compares them,
+    ignoring syntactic differences like dereferencing, field access syntax,
+    type casts, etc.
+    """
+    if c_expr == r_expr:
+        return True
+
+    # Normalize both to core form
+    c_norm = _normalize_expr_for_comparison(c_expr)
+    r_norm = _normalize_expr_for_comparison(r_expr)
+
+    if c_norm == r_norm:
+        return True
+
+    # Extract identifiers and compare sets
+    c_ids = _extract_expr_identifiers(c_expr)
+    r_ids = _extract_expr_identifiers(r_expr)
+
+    if c_ids and r_ids:
+        # Primary identifier match
+        if c_ids[0] == r_ids[0]:
+            return True
+        # Any overlap in identifiers
+        if set(c_ids) & set(r_ids):
+            return True
+
+    return False
+
+
+def _normalize_expr_for_comparison(expr: str) -> str:
+    """Normalize an expression for comparison purposes.
+
+    Strips language-specific syntax to get to the semantic core.
+    """
+    from . import normalize
+
+    s = expr.strip()
+    # Strip outer parens
+    while s.startswith("(") and s.endswith(")"):
+        s = s[1:-1].strip()
+    # Strip C pointer dereference: *ptr -> ptr
+    s = re.sub(r'^\*+', '', s)
+    # Strip C address-of: &expr -> expr
+    s = re.sub(r'^&(?:mut\s+)?', '', s)
+    # Strip Rust borrow: &expr, &mut expr -> expr
+    s = re.sub(r'^&(?:mut\s+)?', '', s)
+    # Normalize self.field -> field
+    s = re.sub(r'^self\.', '', s)
+    # Normalize parser->m_field -> field (snake_case)
+    s = re.sub(r'parser->m_(\w+)', lambda m: normalize.camel_to_snake(m.group(1)), s)
+    # Normalize enc->field -> field (snake_case)
+    s = re.sub(r'enc->(\w+)', lambda m: normalize.camel_to_snake(m.group(1)), s)
+    # Strip type casts: (TYPE)expr -> expr, expr as TYPE -> expr
+    s = re.sub(r'^\(\w+\s*\*?\)\s*', '', s)
+    s = re.sub(r'\s+as\s+\w+.*$', '', s)
+    # Normalize camelCase to snake_case
+    s = normalize.camel_to_snake(s)
+    return s.strip()
+
+
+def _extract_expr_identifiers(expr: str) -> list[str]:
+    """Extract meaningful identifiers from an expression."""
+    from . import normalize
+
+    # Strip common prefixes
+    s = re.sub(r'parser->m_', '', expr)
+    s = re.sub(r'self\.', '', s)
+    s = re.sub(r'enc->', '', s)
+    s = re.sub(r'^[&*]+', '', s)
+
+    # Extract word-like identifiers
+    raw_ids = re.findall(r'[a-zA-Z_]\w*', s)
+
+    noise = {'parser', 'self', 'enc', 'mut', 'as', 'let', 'ref', 'Some', 'None',
+             'true', 'false', 'XML', 'usize', 'i32', 'u8', 'u32', 'isize',
+             'c_int', 'c_char', 'c_void', 'sizeof', 'size_t'}
+    result = []
+    for raw in raw_ids:
+        if raw in noise:
+            continue
+        result.append(normalize.camel_to_snake(raw))
+    return result

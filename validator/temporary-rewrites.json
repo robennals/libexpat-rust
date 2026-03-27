@@ -22,9 +22,9 @@
     },
     {
       "name": "handler_check_to_if_let",
-      "input":  { "kind": "branch", "label_regex": "^!?\\s*(character_data_handler|char_data_handler|default_handler|start_element_handler|end_element_handler)" },
+      "input":  { "kind": "branch", "label_regex": "^!?\\s*(character_data_handler|char_data_handler|default_handler|start_element_handler|end_element_handler|end_cdata_section_handler|start_cdata_section_handler|comment_handler|processing_instruction_handler|skipped_entity_handler|xml_decl_handler|start_doctype_decl_handler|end_doctype_decl_handler|notation_decl_handler|entity_decl_handler|attlist_decl_handler|element_decl_handler|unparsed_entity_decl_handler|external_entity_ref_handler|not_standalone_handler|start_namespace_decl_handler|end_namespace_decl_handler)" },
       "output": { "kind": "branch", "label_regex": "let Some.*handler" },
-      "justification": "C checks handler pointer: if (charDataHandler) { handler(arg, data) }. Rust uses if-let: if let Some(handler) = &mut self.character_data_handler { handler(data) }. Both check the same handler and dispatch the same way. TEMPORARY: believed equivalent but the nested structures may differ.",
+      "justification": "C checks handler pointer: if (handler) { handler(arg, data) }. Rust uses if-let: if let Some(handler) = &mut self.*_handler { handler(data) }. Both check the same handler and dispatch the same way. TEMPORARY: believed equivalent but the nested structures may differ.",
       "risk": "Handler dispatch details (arguments, fallback to default handler) may differ within the branch body.",
       "status": "believed_equivalent"
     },
@@ -62,7 +62,7 @@
     },
     {
       "name": "wrapper_processor_delegating_call",
-      "input":  { "kind": "return", "label_regex": "do_prolog|do_content|external_entity_init_processor" },
+      "input":  { "kind": "return", "label_regex": "do[Pp]rolog|do[Cc]ontent|do_prolog|do_content|externalEntityInitProcessor|external_entity_init_processor" },
       "output": null,
       "justification": "C processor wrappers (prologProcessor, contentProcessor) return the result of calling the do* function directly. Rust inlines this differently. TEMPORARY: believed equivalent because the do* function is still called.",
       "risk": "Post-call processing (like storeRawNames) may be missing.",

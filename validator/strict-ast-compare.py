@@ -107,23 +107,28 @@ def compare_pair(c_func_name: str, r_func_name: str,
     func_sup = suppressions.get(r_func_name, {})
     suppressed_calls = set(func_sup.get("suppressed_calls", []))
     suppressed_errors = set(func_sup.get("suppressed_errors", []))
+    suppressed_labels = set(func_sup.get("suppressed_labels", []))
     # 2. From structural-rewrites.json (new)
     rewrite_sup = get_per_function_suppressions(r_func_name)
     suppressed_calls |= set(rewrite_sup.get("suppressed_calls", []))
     suppressed_errors |= set(rewrite_sup.get("suppressed_errors", []))
+    suppressed_labels |= set(rewrite_sup.get("suppressed_labels", []))
 
     filtered = []
     for m in mismatches:
         # Check if this mismatch is suppressed
-        if _is_suppressed(m, suppressed_calls, suppressed_errors):
+        if _is_suppressed(m, suppressed_calls, suppressed_errors, suppressed_labels):
             continue
         filtered.append(m)
 
     return filtered
 
 
-def _is_suppressed(m: Mismatch, suppressed_calls: set, suppressed_errors: set) -> bool:
+def _is_suppressed(m: Mismatch, suppressed_calls: set, suppressed_errors: set,
+                   suppressed_labels: set = None) -> bool:
     """Check if a mismatch is covered by per-function suppressions."""
+    if suppressed_labels is None:
+        suppressed_labels = set()
     if m.c_node:
         # Direct call suppression
         if m.c_node.kind == "call" and m.c_node.label in suppressed_calls:
@@ -133,11 +138,19 @@ def _is_suppressed(m: Mismatch, suppressed_calls: set, suppressed_errors: set) -
             error = m.c_node.label.replace("XmlError::", "")
             if error in suppressed_errors:
                 return True
-        # Branch whose condition mentions a suppressed call
+        # Branch whose condition mentions a suppressed call or label
         if m.c_node.kind == "branch":
             label = m.c_node.label
             for call in suppressed_calls:
                 if call in label:
+                    return True
+            for sup_label in suppressed_labels:
+                if sup_label in label:
+                    return True
+        # Check node label against suppressed labels
+        if m.c_node.label:
+            for sup_label in suppressed_labels:
+                if sup_label in m.c_node.label:
                     return True
     # Check if the reason text mentions a suppressed call or error
     reason = m.reason
