@@ -641,6 +641,9 @@ def _find_arm(r_arms: dict, c_label: str) -> SkeletonNode | None:
     for r_label, r_a in r_arms.items():
         if r_label.endswith(f"::{short_label}") or r_label == short_label:
             return r_a
+        # Prefix match: "Ok" matches "Ok(TokenResult { ... })"
+        if r_label.startswith(f"{c_label}(") or r_label.startswith(f"{short_label}("):
+            return r_a
     return None
 
 

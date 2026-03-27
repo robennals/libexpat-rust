@@ -268,6 +268,23 @@
     }
   ],
 
+  "tree_rewrite_rules": [
+    {
+      "name": "tokenizer_result_wrap",
+      "input_pattern": "call($tok_call where /.*_tok$/); match($tok_match)",
+      "output_pattern": "match(tok_result) { arm(Ok) { $tok_match } }",
+      "justification": "C calls tokenizer then switches on result: tok = XmlContentTok(...); switch(tok) { ... }. Rust wraps in Result: match content_tok(...) { Ok(result) => match result.token { ... } }. The token match arms are the same, just nested one level deeper in Rust.",
+      "category": "api_difference"
+    },
+    {
+      "name": "role_dispatch_wrap",
+      "input_pattern": "call($role_call where /xml_token_role/); match($role_match where /role/)",
+      "output_pattern": "match(role) { $role_match }",
+      "justification": "C calls XmlTokenRole then switches on result: role = XmlTokenRole(...); switch(role) { ... }. Rust calls xml_token_role inside match. Same dispatch, different nesting.",
+      "category": "structural_refactor"
+    }
+  ],
+
   "sequence_match_rules": {
     "description": "Rules for how sequences (ordered lists of statements) are matched between C and Rust.",
 
