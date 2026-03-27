@@ -237,11 +237,12 @@ def is_rust_noise(name: str) -> bool:
 
 # ========= Expression tree extraction (shared by C and Rust) =========
 
-# Comparison and logical operators recognized by tree-sitter in both C and Rust
+# Operators recognized by tree-sitter in both C and Rust
 _COMPARISON_OPS = {'==', '!=', '<', '>', '<=', '>='}
 _LOGICAL_OPS = {'&&', '||'}
+_ARITHMETIC_OPS = {'+', '-', '*', '/', '%'}
 _UNARY_OPS = {'!'}
-_ALL_OPS = _COMPARISON_OPS | _LOGICAL_OPS | _UNARY_OPS
+_ALL_OPS = _COMPARISON_OPS | _LOGICAL_OPS | _ARITHMETIC_OPS | _UNARY_OPS
 
 
 def extract_expr_info(ts_node, lang: str = "c") -> 'ExprInfo':
@@ -278,7 +279,7 @@ def extract_expr_info(ts_node, lang: str = "c") -> 'ExprInfo':
         found_op = False
         for child in children:
             child_text = child.text.decode().strip()
-            if child_text in (_COMPARISON_OPS | _LOGICAL_OPS):
+            if child_text in (_COMPARISON_OPS | _LOGICAL_OPS | _ARITHMETIC_OPS):
                 op = child_text
                 found_op = True
                 continue
@@ -294,6 +295,18 @@ def extract_expr_info(ts_node, lang: str = "c") -> 'ExprInfo':
                 right_expr = extract_expr_info(right_nodes[0], lang)
                 sub = [e for e in [left_expr, right_expr] if e]
                 return ExprInfo(operator=op, sub_exprs=sub)
+            elif op in _ARITHMETIC_OPS:
+                # Arithmetic: a + b — extract as sub-expressions to preserve structure
+                left_expr = extract_expr_info(left_nodes[0], lang)
+                right_expr = extract_expr_info(right_nodes[0], lang)
+                sub = [e for e in [left_expr, right_expr] if e]
+                # Also collect all identifiers and literals for flat comparison
+                left_info = _extract_atom(left_nodes[0], lang)
+                right_info = _extract_atom(right_nodes[0], lang)
+                ids = left_info["ids"] + right_info["ids"]
+                lits = left_info["lits"] + right_info["lits"]
+                return ExprInfo(operator=op, identifiers=ids, literals=lits,
+                                sub_exprs=sub)
             else:
                 # Comparison: a == b — extract identifiers and literals
                 left_info = _extract_atom(left_nodes[0], lang)

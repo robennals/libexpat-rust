@@ -375,11 +375,13 @@ def _extract_call(node, sf: str) -> SkeletonNode:
     name = _normalize_call_name(raw_name)
 
     args = []
+    arg_exprs = []
     if args_node:
         for child in args_node.children:
             if child.type in ("(", ")", ","):
                 continue
             args.append(_normalize_expr(_node_text(child)))
+            arg_exprs.append(normalize.extract_expr_info(child, "c"))
 
     # Check if this is a handler dispatch: parser->m_*Handler(...)
     if re.match(r'parser->m_\w+Handler', raw_name):
@@ -388,11 +390,12 @@ def _extract_call(node, sf: str) -> SkeletonNode:
         )
         return SkeletonNode(
             "handler_dispatch", label=handler_name, args=args[1:],  # skip handlerArg
+            arg_exprs=arg_exprs[1:],
             source_file=sf, source_start=_start_line(node), source_end=_end_line(node),
         )
 
     return SkeletonNode(
-        "call", label=name, args=args,
+        "call", label=name, args=args, arg_exprs=arg_exprs,
         source_file=sf, source_start=_start_line(node), source_end=_end_line(node),
     )
 

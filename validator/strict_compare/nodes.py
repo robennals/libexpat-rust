@@ -15,6 +15,7 @@ class SkeletonNode:
     kind: str  # sequence, match, arm, branch, loop, call, return, assign, handler_dispatch, break
     label: str = ""  # normalized name
     args: list[str] = field(default_factory=list)  # normalized arguments
+    arg_exprs: list[Optional['ExprInfo']] = field(default_factory=list)  # parsed arg expressions
     expr: Optional['ExprInfo'] = None  # parsed expression details (operators, literals)
     children: list['SkeletonNode'] = field(default_factory=list)
     source_file: str = ""

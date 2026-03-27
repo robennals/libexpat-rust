@@ -775,13 +775,23 @@ def _compare_call_args(c: SkeletonNode, r: SkeletonNode, ctx: str,
     if not c_args and not r_args:
         return
 
+    # Build index maps for ExprInfo lookup (before filtering)
+    # We need to map filtered arg positions back to original arg_exprs
+    c_expr_map = _build_arg_expr_map(c.args, c.arg_exprs, c_args)
+    r_expr_map = _build_arg_expr_map(r.args, r.arg_exprs, r_args)
+
     # Compare: C args should be an ordered subsequence of Rust args
     # (Rust may have extra args like &mut self, lifetime params, etc.)
     r_idx = 0
-    for c_arg in c_args:
+    for c_i, c_arg in enumerate(c_args):
         matched = False
         while r_idx < len(r_args):
             if _exprs_match(c_arg, r_args[r_idx]):
+                # Text match found — now do deep expression comparison
+                c_expr_info = c_expr_map.get(c_i)
+                r_expr_info = r_expr_map.get(r_idx)
+                if c_expr_info and r_expr_info:
+                    _compare_expr_info(c, r, c_expr_info, r_expr_info, ctx, mismatches)
                 r_idx += 1
                 matched = True
                 break
@@ -793,6 +803,25 @@ def _compare_call_args(c: SkeletonNode, r: SkeletonNode, ctx: str,
                 ctx, "WARNING",
             ))
             return  # Report once per call, not per arg
+
+
+def _build_arg_expr_map(orig_args, arg_exprs, filtered_args):
+    """Map filtered arg indices back to their ExprInfo from orig_args."""
+    if not arg_exprs:
+        return {}
+    result = {}
+    # Match filtered args to original args to find their ExprInfo
+    orig_idx = 0
+    for filt_idx, filt_arg in enumerate(filtered_args):
+        while orig_idx < len(orig_args):
+            if orig_idx < len(arg_exprs):
+                # Check if this original arg corresponds to the filtered one
+                # (after rewrite, they should have the same text or the filtered
+                # one is the rewritten version)
+                result[filt_idx] = arg_exprs[orig_idx]
+            orig_idx += 1
+            break
+    return result
 
 
 def _exprs_match(c_expr: str, r_expr: str) -> bool:
