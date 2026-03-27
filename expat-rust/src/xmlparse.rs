@@ -4874,6 +4874,7 @@ impl Parser {
                     // endianness based on byte patterns (e.g. 00 3C → UTF-16BE even
                     // if protocol says UTF-16LE). Match that behavior.
                     let mut is_be = enc_upper == "UTF-16BE";
+                    let mut override_to_utf8 = false;
                     if data.len() >= 2 {
                         let is_content = matches!(self.processor, Processor::ExternalEntity);
                         match crate::xmltok::init_scan(data, is_content) {
@@ -4885,39 +4886,48 @@ impl Parser {
                             | crate::xmltok::InitScanResult::Encoding(crate::xmltok::DetectedEncoding::Utf16LE) => {
                                 is_be = false;
                             }
+                            crate::xmltok::InitScanResult::Bom(crate::xmltok::DetectedEncoding::Utf8, bom_len) => {
+                                // UTF-8 BOM overrides UTF-16 protocol encoding
+                                override_to_utf8 = true;
+                                self.detected_encoding = Some("UTF-8".to_string());
+                                self.original_chunk_bom_len = bom_len;
+                                self.buffer = data[bom_len..].to_vec();
+                            }
                             _ => {} // keep as specified
                         }
                     }
-                    self.detected_encoding = Some(enc_upper);
-                    let input = if data.len() >= 2 {
-                        let has_bom = if is_be {
-                            data[0] == 0xFE && data[1] == 0xFF
-                        } else {
-                            data[0] == 0xFF && data[1] == 0xFE
-                        };
-                        if has_bom {
-                            &data[2..]
+                    if !override_to_utf8 {
+                        self.detected_encoding = Some(enc_upper);
+                        let input = if data.len() >= 2 {
+                            let has_bom = if is_be {
+                                data[0] == 0xFE && data[1] == 0xFF
+                            } else {
+                                data[0] == 0xFF && data[1] == 0xFE
+                            };
+                            if has_bom {
+                                &data[2..]
+                            } else {
+                                data
+                            }
                         } else {
                             data
-                        }
-                    } else {
-                        data
-                    };
-                    // Handle odd trailing byte
-                    let (to_transcode, leftover) = if input.len() % 2 != 0 {
-                        (&input[..input.len() - 1], Some(input[input.len() - 1]))
-                    } else {
-                        (input, None)
-                    };
-                    self.utf16_pending_byte = leftover;
-                    match self.transcode_utf16(to_transcode, is_be) {
-                        Ok(transcoded) => {
-                            self.buffer = transcoded;
-                        }
-                        Err(err) => {
-                            self.error_code = err;
-                            self.parsing_state = ParsingState::Finished;
-                            return XmlStatus::Error;
+                        };
+                        // Handle odd trailing byte
+                        let (to_transcode, leftover) = if input.len() % 2 != 0 {
+                            (&input[..input.len() - 1], Some(input[input.len() - 1]))
+                        } else {
+                            (input, None)
+                        };
+                        self.utf16_pending_byte = leftover;
+                        match self.transcode_utf16(to_transcode, is_be) {
+                            Ok(transcoded) => {
+                                self.buffer = transcoded;
+                            }
+                            Err(err) => {
+                                self.error_code = err;
+                                self.parsing_state = ParsingState::Finished;
+                                return XmlStatus::Error;
+                            }
                         }
                     }
                 } else if !is_known_encoding(&enc_upper) {
