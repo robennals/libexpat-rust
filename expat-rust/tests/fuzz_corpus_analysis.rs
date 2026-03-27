@@ -53,13 +53,17 @@ fn analyze_corpus(corpus_name: &str, encoding: Option<&str>) {
                 if rs == cs && re == ce {
                     pass += 1;
                 } else {
-                    let entry = patterns.entry((rs, re, cs, ce)).or_insert((0, file_name.clone()));
+                    let entry = patterns
+                        .entry((rs, re, cs, ce))
+                        .or_insert((0, file_name.clone()));
                     entry.0 += 1;
                 }
             }
             Err(_) => {
                 // Parser crashed - count as special pattern
-                let entry = patterns.entry((99, 99, 99, 99)).or_insert((0, file_name.clone()));
+                let entry = patterns
+                    .entry((99, 99, 99, 99))
+                    .or_insert((0, file_name.clone()));
                 entry.0 += 1;
             }
         }
@@ -72,12 +76,10 @@ fn analyze_corpus(corpus_name: &str, encoding: Option<&str>) {
     eprintln!("\nMismatch patterns (rust_status, rust_err -> c_status, c_err : count):");
 
     let mut sorted: Vec<_> = patterns.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.0.cmp(&a.1.0)); // Sort by count descending
+    sorted.sort_by(|a, b| b.1 .0.cmp(&a.1 .0)); // Sort by count descending
 
     for ((rs, re, cs, ce), (count, example)) in &sorted {
-        eprintln!(
-            "  Rust({rs},{re:>2}) vs C({cs},{ce:>2}): {count:>6} files  (e.g. {example})"
-        );
+        eprintln!("  Rust({rs},{re:>2}) vs C({cs},{ce:>2}): {count:>6} files  (e.g. {example})");
     }
 }
 

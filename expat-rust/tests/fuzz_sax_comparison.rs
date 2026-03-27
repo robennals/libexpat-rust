@@ -10,10 +10,15 @@ use std::ffi::{c_char, c_int, c_void, CStr};
 use std::path::Path;
 
 fn collect_corpus_files(dir: &Path) -> Vec<std::path::PathBuf> {
-    if !dir.is_dir() { return Vec::new(); }
-    let mut files: Vec<_> = std::fs::read_dir(dir).unwrap()
-        .filter_map(|e| e.ok()).map(|e| e.path())
-        .filter(|p| p.is_file()).collect();
+    if !dir.is_dir() {
+        return Vec::new();
+    }
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
     files.sort();
     files
 }
@@ -26,7 +31,9 @@ fn collect_rust_events(xml: &[u8], encoding: Option<&str>) -> (XmlStatus, Vec<St
 
     parser.set_start_element_handler(Some(Box::new(move |name, attrs| unsafe {
         let mut s = format!("SE:{}", name);
-        for (k, v) in attrs { s.push_str(&format!(" {}={}", k, v)); }
+        for (k, v) in attrs {
+            s.push_str(&format!(" {}={}", k, v));
+        }
         (*ev).borrow_mut().push(s);
     })));
     let ev2 = &events as *const RefCell<Vec<String>>;
@@ -56,14 +63,20 @@ fn collect_c_events(xml: &[u8], encoding: Option<&str>) -> (u32, Vec<String>) {
     let events: RefCell<Vec<String>> = RefCell::new(Vec::new());
     let c_parser = CParser::new(encoding).unwrap();
 
-    unsafe extern "C" fn c_start_el(ud: *mut c_void, name: *const c_char, atts: *mut *const c_char) {
+    unsafe extern "C" fn c_start_el(
+        ud: *mut c_void,
+        name: *const c_char,
+        atts: *mut *const c_char,
+    ) {
         let ev = &*(ud as *const RefCell<Vec<String>>);
         let n = CStr::from_ptr(name).to_string_lossy();
         let mut s = format!("SE:{}", n);
         let mut i = 0;
         loop {
             let key = *atts.add(i);
-            if key.is_null() { break; }
+            if key.is_null() {
+                break;
+            }
             let val = *atts.add(i + 1);
             let k = CStr::from_ptr(key).to_string_lossy();
             let v = CStr::from_ptr(val).to_string_lossy();
@@ -86,7 +99,11 @@ fn collect_c_events(xml: &[u8], encoding: Option<&str>) -> (u32, Vec<String>) {
     unsafe extern "C" fn c_pi(ud: *mut c_void, target: *const c_char, data: *const c_char) {
         let ev = &*(ud as *const RefCell<Vec<String>>);
         let t = CStr::from_ptr(target).to_string_lossy();
-        let d = if data.is_null() { "".into() } else { CStr::from_ptr(data).to_string_lossy() };
+        let d = if data.is_null() {
+            "".into()
+        } else {
+            CStr::from_ptr(data).to_string_lossy()
+        };
         ev.borrow_mut().push(format!("PI:{}:{}", t, d));
     }
     unsafe extern "C" fn c_comment(ud: *mut c_void, text: *const c_char) {
@@ -169,8 +186,11 @@ fn check_sax(corpus_name: &str, encoding: Option<&str>) {
                         let c_preview: Vec<_> = c_merged.iter().take(5).cloned().collect();
                         diffs.push(format!(
                             "{name} (len={}): Rust[{}]={:?}  C[{}]={:?}",
-                            data.len(), r_merged.len(), r_preview,
-                            c_merged.len(), c_preview
+                            data.len(),
+                            r_merged.len(),
+                            r_preview,
+                            c_merged.len(),
+                            c_preview
                         ));
                     }
                 }
@@ -183,10 +203,15 @@ fn check_sax(corpus_name: &str, encoding: Option<&str>) {
 
     if !diffs.is_empty() {
         eprintln!("SAX divergences (first {}):", diffs.len());
-        for d in &diffs { eprintln!("  {d}"); }
+        for d in &diffs {
+            eprintln!("  {d}");
+        }
     }
 
-    assert_eq!(sax_differ, 0, "{sax_differ} files had SAX event divergence on valid XML");
+    assert_eq!(
+        sax_differ, 0,
+        "{sax_differ} files had SAX event divergence on valid XML"
+    );
 }
 
 #[test]

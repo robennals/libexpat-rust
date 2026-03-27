@@ -4885,18 +4885,36 @@ impl Parser {
                     // if protocol says UTF-16LE). Match that behavior.
                     let mut is_be = enc_upper == "UTF-16BE";
                     let mut override_to_utf8 = false;
+                    let is_content = matches!(self.processor, Processor::ExternalEntity);
                     if data.len() >= 2 {
-                        let is_content = matches!(self.processor, Processor::ExternalEntity);
                         match crate::xmltok::init_scan(data, is_content) {
-                            crate::xmltok::InitScanResult::Bom(crate::xmltok::DetectedEncoding::Utf16BE, _)
-                            | crate::xmltok::InitScanResult::Encoding(crate::xmltok::DetectedEncoding::Utf16BE) => {
-                                is_be = true;
+                            crate::xmltok::InitScanResult::Bom(
+                                crate::xmltok::DetectedEncoding::Utf16BE,
+                                _,
+                            )
+                            | crate::xmltok::InitScanResult::Encoding(
+                                crate::xmltok::DetectedEncoding::Utf16BE,
+                            ) => {
+                                // In content state with explicit UTF-16LE, C's initScan
+                                // keeps UTF-16LE (line 1617: breaks for content + LE).
+                                // Only override if not in that situation.
+                                if !(is_content && enc_upper == "UTF-16LE") {
+                                    is_be = true;
+                                }
                             }
-                            crate::xmltok::InitScanResult::Bom(crate::xmltok::DetectedEncoding::Utf16LE, _)
-                            | crate::xmltok::InitScanResult::Encoding(crate::xmltok::DetectedEncoding::Utf16LE) => {
+                            crate::xmltok::InitScanResult::Bom(
+                                crate::xmltok::DetectedEncoding::Utf16LE,
+                                _,
+                            )
+                            | crate::xmltok::InitScanResult::Encoding(
+                                crate::xmltok::DetectedEncoding::Utf16LE,
+                            ) => {
                                 is_be = false;
                             }
-                            crate::xmltok::InitScanResult::Bom(crate::xmltok::DetectedEncoding::Utf8, bom_len) => {
+                            crate::xmltok::InitScanResult::Bom(
+                                crate::xmltok::DetectedEncoding::Utf8,
+                                bom_len,
+                            ) => {
                                 // UTF-8 BOM overrides UTF-16 protocol encoding
                                 override_to_utf8 = true;
                                 self.detected_encoding = Some("UTF-8".to_string());
@@ -4969,18 +4987,27 @@ impl Parser {
                     // characters (ÿþ), not a UTF-16 BOM.
                     self.detected_encoding = Some(enc_upper);
                     self.buffer = transcode_latin1_to_utf8(data);
-                } else if enc_upper == "UTF-8" || enc_upper == "US-ASCII" || enc_upper == "ASCII"
-                {
+                } else if enc_upper == "UTF-8" || enc_upper == "US-ASCII" || enc_upper == "ASCII" {
                     // UTF-8/ASCII encoding — but C's initScan still overrides to
                     // UTF-16 for null-byte patterns (00 3C → UTF-16BE, 3C 00 → UTF-16LE).
                     // Check init_scan first, then fall back to raw UTF-8.
                     let is_content = matches!(self.processor, Processor::ExternalEntity);
                     let detected_utf16 = if data.len() >= 2 {
                         match crate::xmltok::init_scan(data, is_content) {
-                            crate::xmltok::InitScanResult::Encoding(crate::xmltok::DetectedEncoding::Utf16BE) => Some(true),
-                            crate::xmltok::InitScanResult::Encoding(crate::xmltok::DetectedEncoding::Utf16LE) => Some(false),
-                            crate::xmltok::InitScanResult::Bom(crate::xmltok::DetectedEncoding::Utf16BE, _) => Some(true),
-                            crate::xmltok::InitScanResult::Bom(crate::xmltok::DetectedEncoding::Utf16LE, _) => Some(false),
+                            crate::xmltok::InitScanResult::Encoding(
+                                crate::xmltok::DetectedEncoding::Utf16BE,
+                            ) => Some(true),
+                            crate::xmltok::InitScanResult::Encoding(
+                                crate::xmltok::DetectedEncoding::Utf16LE,
+                            ) => Some(false),
+                            crate::xmltok::InitScanResult::Bom(
+                                crate::xmltok::DetectedEncoding::Utf16BE,
+                                _,
+                            ) => Some(true),
+                            crate::xmltok::InitScanResult::Bom(
+                                crate::xmltok::DetectedEncoding::Utf16LE,
+                                _,
+                            ) => Some(false),
                             _ => None,
                         }
                     } else {
@@ -4998,7 +5025,11 @@ impl Parser {
                             } else {
                                 data[0] == 0xFF && data[1] == 0xFE
                             };
-                            if has_bom { &data[2..] } else { data }
+                            if has_bom {
+                                &data[2..]
+                            } else {
+                                data
+                            }
                         } else {
                             data
                         };
@@ -5009,7 +5040,9 @@ impl Parser {
                         };
                         self.utf16_pending_byte = leftover;
                         match self.transcode_utf16(to_transcode, is_be) {
-                            Ok(transcoded) => { self.buffer = transcoded; }
+                            Ok(transcoded) => {
+                                self.buffer = transcoded;
+                            }
                             Err(err) => {
                                 self.error_code = err;
                                 self.parsing_state = ParsingState::Finished;
@@ -5019,7 +5052,8 @@ impl Parser {
                     } else {
                         // Genuine UTF-8 — consume BOM if present, use raw bytes
                         self.detected_encoding = Some(enc_upper);
-                        if data.len() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+                        if data.len() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF
+                        {
                             self.original_chunk_bom_len = 3;
                             self.buffer = data[3..].to_vec();
                         } else {

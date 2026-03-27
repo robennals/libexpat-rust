@@ -60,13 +60,19 @@ fn check_status_mismatches(corpus_name: &str, encoding: Option<&str>) {
 
     eprintln!("\n=== {corpus_name} ===");
     if !rust_ok_c_err.is_empty() {
-        eprintln!("Rust=OK but C=ERROR ({} files) — Rust accepts invalid XML:", rust_ok_c_err.len());
+        eprintln!(
+            "Rust=OK but C=ERROR ({} files) — Rust accepts invalid XML:",
+            rust_ok_c_err.len()
+        );
         for (name, c_err, len) in &rust_ok_c_err {
             eprintln!("  {name}  C_error={c_err}  len={len}");
         }
     }
     if !rust_err_c_ok.is_empty() {
-        eprintln!("Rust=ERROR but C=OK ({} files) — Rust rejects valid XML:", rust_err_c_ok.len());
+        eprintln!(
+            "Rust=ERROR but C=OK ({} files) — Rust rejects valid XML:",
+            rust_err_c_ok.len()
+        );
         for (name, r_err, len) in &rust_err_c_ok {
             eprintln!("  {name}  Rust_error={r_err}  len={len}");
         }
