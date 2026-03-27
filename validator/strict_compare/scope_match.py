@@ -61,22 +61,6 @@ def _compare_scope(c: ScopeNode, r: ScopeNode, path: str,
                    mismatches: list[Mismatch]):
     """Compare a matched pair of scoping nodes."""
 
-    # When one side is a block and the other isn't, recurse into the
-    # block's first matching child. This handles C/Rust blocks that
-    # are if/loop body wrappers.
-    if r.kind == "block" and c.kind != "block" and not r.label:
-        # Try to find c's match inside r's children
-        for child in r.children:
-            if _scopes_match(c, child):
-                _compare_scope(c, child, path, mismatches)
-                return
-        # No match found — compare content at this level anyway
-    if c.kind == "block" and r.kind != "block" and not c.label:
-        for child in c.children:
-            if _scopes_match(child, r):
-                _compare_scope(child, r, path, mismatches)
-                return
-
     # Compare content sets at this level
     _compare_content(c.content, r.content, path, c, r, mismatches)
 
