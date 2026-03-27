@@ -169,6 +169,41 @@ Excluding unreachable utilities, effective coverage of API-reachable code is app
 | `generated_comparison_tests.rs` | 109 | Generated: XML feature matrix with incremental byte-split testing |
 | `c_comparison_tests.rs` | 59 | Original: foundational status/error/handler comparison tests |
 
+## AST Structural Validation
+
+In addition to behavioral testing (same input → same output), we use an AST-based
+structural comparison tool to verify that the Rust code's structure matches the C
+code's structure function-by-function. This catches classes of bugs that behavioral
+tests can miss — for example, a missing error check that only triggers on inputs
+not covered by the test suite.
+
+The tool lives in `validator/` and uses tree-sitter to parse both C and Rust into
+ASTs, then compares:
+
+- **Match arm coverage**: every `case XML_TOK_*:` in C has a `XmlTok::*` arm in Rust
+- **Error codes**: every `XML_ERROR_*` in C has a `XmlError::*` in Rust
+- **Handler calls**: every `parser->m_*Handler` in C has a `self.*_handler` in Rust
+- **Function calls**: every function call in C has a Rust equivalent
+
+Every intentional difference is documented in `validator/deliberate-divergences.json`
+with a written justification. The tool refuses to silently suppress anything — if
+a C function call doesn't appear in Rust, it's either flagged as a divergence or
+explicitly justified in the divergences file.
+
+Security-critical features like amplification attack detection (`accountingDiffTolerated`,
+`entityTrackingOnOpen/Close`, `AmplificationLimitBreach`) are listed in the
+`NOT_SUPPRESSED` section and cannot be accidentally silenced.
+
+```bash
+# Run the structural comparison
+python3 validator/ast-compare.py --ci
+
+# See what's suppressed and why
+python3 validator/ast-compare.py --audit
+```
+
+See `validator/README.md` for full documentation.
+
 ## Note on Encoding
 
 The Rust parser transcodes all non-UTF-8 input to UTF-8 before tokenizing (unlike C, which tokenizes in the native encoding). This produces identical results for all inputs — see [design-decisions.md](design-decisions.md) for the rationale and [architecture.md](architecture.md) for details on byte offset handling.
