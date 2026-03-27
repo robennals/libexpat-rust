@@ -145,6 +145,24 @@
     }
   },
 
+  "inline_functions": [
+    {
+      "c_function": "get_attribute_id",
+      "c_original_name": "getAttributeId",
+      "justification": "C getAttributeId does hash lookup + pool allocation for attribute IDs. Rust uses HashMap::get directly in the caller."
+    },
+    {
+      "c_function": "get_element_type",
+      "c_original_name": "getElementType",
+      "justification": "C getElementType does hash lookup for element types. Rust uses HashMap::get directly."
+    },
+    {
+      "c_function": "store_attribute_value",
+      "c_original_name": "storeAttributeValue",
+      "justification": "C storeAttributeValue wraps appendAttributeValue with entity list management. Rust inlines into normalize_attribute_value."
+    }
+  ],
+
   "function_pairs": [
     {
       "c_function": "doContent",
@@ -226,7 +244,16 @@
     {
       "c_function": "storeAtts",
       "rust_function": "process_namespaces",
-      "notes": "Attribute processing and namespace resolution. C's storeAtts is 466 lines; Rust splits into process_namespaces (115 lines) + separate attribute handling."
+      "notes": "REIMPLEMENTED: C storeAtts (466 lines) was completely reimplemented as Rust process_namespaces (115 lines). Different data structures (hash table → HashMap, pool → Vec, flat array → Vec<(String,String)>), different control flow. 21 structural differences. NOT a transliteration — behavioral tests are the primary verification.",
+      "skip_structural": true,
+      "structural_errors": 21,
+      "error_categories": {
+        "c_data_structure_ops": "getAttributeId hash lookup, getElementType lookup, pool ops — replaced by HashMap/Vec",
+        "c_integer_overflow_guards": "INT_MAX checks — Rust uses usize, no overflow",
+        "c_memory_allocation": "realloc/malloc for attribute arrays — Rust Vec grows automatically",
+        "attribute_normalization": "C does non-CDATA normalization inside storeAtts; Rust does it in do_content after process_namespaces returns",
+        "namespace_uri_construction": "C builds URI strings with pool concatenation; Rust uses String::from + push_str"
+      }
     },
     {
       "c_function": "appendAttributeValue",

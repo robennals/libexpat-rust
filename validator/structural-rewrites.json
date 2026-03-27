@@ -522,14 +522,8 @@
       "justification": "processXmlDecl inlined. Tokenizer calls at different structural level. UnclosedToken/PartialChar inside merged partial-handling arms. parsing_status is suspend/resume (not ported). externalEntityContentProcessor return is a tail-call that Rust inlines."
     },
     "process_namespaces": {
-      "suppressed_calls": ["get_atts", "get_attribute_id", "get_element_type", "store_attribute_value", "add_binding"],
-      "suppressed_labels": ["n_default_atts", "atts_size", "INT_MAX", "element_type", "free_tag_list", "n >", "att_id", "prefix", "normalized", "ns_triplets", "n_prefixes", "prefix_len", "xmlns", "!ns", "id_att", "uri_len", "uri_alloc"],
-      "justification": "C storeAtts (466 lines) is completely restructured in Rust as process_namespaces (115 lines) + separate attribute handling. Inlined functions: getAttributeId (attribute ID hash lookup → HashMap), getElementType (element hash lookup → HashMap), addBinding (namespace binding → Vec push), storeAttributeValue (pool-based → Vec-based). Integer overflow guards (INT_MAX checks) are C-specific — Rust uses usize/checked arithmetic. Attribute normalization (!atts[i].normalized) is in normalize_attribute_value. ID attribute tracking (idAtt) uses id_attribute_index(). ns_triplets namespace serialization restructured. All verified by 750+ behavioral tests.",
-      "needs_investigation": [
-        "C@3959: !atts[i].normalized — attribute normalization for non-CDATA types. Verify Rust calls normalize_attribute_value for non-CDATA attributes.",
-        "C@4012: element_type->idAtt check — ID attribute index tracking. Verify Rust sets id_attribute_index correctly.",
-        "C@4224: element_type->prefix — element prefix namespace lookup. Verify Rust handles unprefixed elements in namespace mode."
-      ]
+      "suppressed_calls": ["get_atts", "add_binding"],
+      "justification": "C getAtts (XmlGetAttributes) is a tokenizer call at a different level. addBinding is 161 lines of namespace binding with pool management — Rust replaces with Vec push + HashMap insert. These are complete reimplementations, not simple refactors."
     },
     "normalize_attribute_value": {
       "suppressed_calls": ["xml_attribute_value_tok", "append_attribute_value"],
