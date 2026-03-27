@@ -271,6 +271,17 @@ temporary:
       C calls handler via function pointer. Rust uses if-let to unwrap
       Option handler. The handler call is inside the if-let body.
 
+  # Rust if-let handler dispatches that appear as extra (C handler call
+  # was already consumed by handler_dispatch rules). The if-let is
+  # Rust-idiomatic for calling Option<fn> handlers.
+  - name: rust_if_let_handler_dispatch
+    skip: r
+    r: "expr_stmt(if(let_condition($children...), $body))"
+    why: >
+      Rust if let Some(handler) = &mut self.*_handler { handler(data) }.
+      C's equivalent handler call was consumed by the handler_dispatch
+      rewrite. The if-let is Rust's idiomatic Option dispatch.
+
   - name: handler_dispatch_if_let
     c: "if(field(self, $handler), $body)"
     r: "if_let($pattern, $handler_expr, $body)"
