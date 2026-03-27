@@ -264,10 +264,11 @@ def _apply_tree_rule(skeleton: SkeletonNode,
     if not input_pattern or output_pattern is None:
         return skeleton
 
-    # Case 1: The input pattern matches the node itself
-    captures = {}
-    if _tree_matches(skeleton, input_pattern, captures):
-        return _build_tree(output_pattern, captures)
+    # Case 1: The input pattern matches the node itself (requires kind in pattern)
+    if "kind" in input_pattern:
+        captures = {}
+        if _tree_matches(skeleton, input_pattern, captures):
+            return _build_tree(output_pattern, captures)
 
     # Case 2: The input pattern has "children" — match against a contiguous
     # subsequence of this node's children
@@ -320,7 +321,26 @@ def _match_and_replace_in_children(
         if parent_label_regex and not re.search(parent_label_regex, parent.label):
             continue
 
-        # Build output
+        # Build output — the output_pattern may be:
+        # 1. A capture reference {"capture_ref": "name"} → substitute the captured node
+        # 2. A tree spec with kind/label/children → build new tree with captures
+        if "capture_ref" in output_pattern:
+            # Direct capture substitution — replace matched children with captured node
+            captured = captures.get(output_pattern["capture_ref"])
+            if captured:
+                new_children = children[:start_idx] + [captured] + children[start_idx + pattern_len:]
+            else:
+                new_children = children[:start_idx] + children[start_idx + pattern_len:]
+            return SkeletonNode(
+                kind=parent.kind, label=parent.label,
+                args=parent.args, arg_exprs=parent.arg_exprs,
+                expr=parent.expr, children=new_children,
+                source_file=parent.source_file,
+                source_start=parent.source_start,
+                source_end=parent.source_end,
+            )
+
+        # Build output nodes from tree spec
         output_children_spec = output_pattern.get("children", [])
         output_nodes = []
         for spec in output_children_spec:
@@ -328,12 +348,18 @@ def _match_and_replace_in_children(
             if node:
                 output_nodes.append(node)
 
+        # If output has no children spec but has kind, treat as a wrapper
+        if not output_children_spec and "kind" in output_pattern:
+            # The output is a single node wrapping captured content
+            output_node = _build_tree(output_pattern, captures)
+            if output_node:
+                output_nodes = [output_node]
+
         # Replace the matched subsequence
         new_children = children[:start_idx] + output_nodes + children[start_idx + pattern_len:]
 
         return SkeletonNode(
-            kind=output_pattern.get("kind", parent.kind),
-            label=output_pattern.get("label", parent.label),
+            kind=parent.kind, label=parent.label,
             args=parent.args, arg_exprs=parent.arg_exprs,
             expr=parent.expr, children=new_children,
             source_file=parent.source_file,

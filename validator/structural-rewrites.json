@@ -217,6 +217,13 @@
       "category": "api_difference"
     },
     {
+      "name": "pool_operation_branch_removal",
+      "input":  { "kind": "branch", "label_regex": "pool_(append|grow|store|copy|finish|start|length|chop|last|discard|clear)" },
+      "output": null,
+      "justification": "C checks if pool operations succeeded (null return = OOM). Rust uses Vec which panics on OOM. The entire branch (check + OOM error return) has no Rust equivalent.",
+      "category": "memory_management"
+    },
+    {
       "name": "pool_blocks_check_removal",
       "input":  { "kind": "branch", "label_regex": "pool->blocks|pool\\.blocks" },
       "output": null,
@@ -272,8 +279,8 @@
     {
       "name": "tokenizer_result_wrap",
       "input_pattern": "call($tok_call where /.*_tok$/); match($tok_match)",
-      "output_pattern": "match(tok_result) { arm(Ok) { $tok_match } }",
-      "justification": "C calls tokenizer then switches on result: tok = XmlContentTok(...); switch(tok) { ... }. Rust wraps in Result: match content_tok(...) { Ok(result) => match result.token { ... } }. The token match arms are the same, just nested one level deeper in Rust.",
+      "output_pattern": "$tok_match",
+      "justification": "C calls tokenizer then switches on token: tok = XmlContentTok(...); switch(tok) { ... }. Rust uses let-match to unwrap Result: let (tok, next) = match result { Ok => ..., Err => return }; match tok { ... }. The let-match becomes a separate skeleton node, and the token match is a sibling — so the C rewrite should just keep the token match directly. The tokenizer call is consumed (Rust has it as part of the let-match) and the token match becomes a top-level child that subsequence matching will find.",
       "category": "api_difference"
     },
     {
