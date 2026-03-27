@@ -145,7 +145,7 @@ principled:
 
   - name: c_next_ptr_check
     skip: c
-    c: "if(binary(!=, ident(next_ptr), $null), $body)"
+    c: "if(binary(ident(next_ptr), $null), $body)"
     why: >
       C checks if output pointer nextPtr is non-NULL before writing.
       Rust returns positions in tuples, no output pointers.
@@ -154,7 +154,7 @@ principled:
 
   - name: c_entity_text_bounds
     skip: c
-    c: "if(binary(>=, ident(entity_text_ptr), $end), $body)"
+    c: "if(binary(ident(entity_text_ptr), $end), $body)"
     why: >
       C checks entityTextPtr >= entityTextEnd for empty entity.
       Rust handles via tokenizer returning None for empty input.
@@ -258,6 +258,18 @@ temporary:
       C checks entity type (type == ENTITY_INTERNAL) for specific handling.
       Rust uses is_param bool and handles entity types differently.
     risk: Different entity type handling could affect recursive expansion.
+
+  # --- Rust if-let handler dispatch ---
+  # C calls handlers via function pointer: handler(handlerArg, data)
+  # Rust uses if-let: if let Some(handler) = &mut self.handler { handler(data) }
+  # The if-let is the Rust-idiomatic way to handle Option<fn> callbacks
+
+  - name: c_handler_call_is_rust_if_let
+    c: "call(field($obj, $handler), $args...)"
+    r: "if_let($pattern, $ref, $body)"
+    why: >
+      C calls handler via function pointer. Rust uses if-let to unwrap
+      Option handler. The handler call is inside the if-let body.
 
   - name: handler_dispatch_if_let
     c: "if(field(self, $handler), $body)"
