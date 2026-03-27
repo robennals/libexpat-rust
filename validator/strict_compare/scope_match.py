@@ -87,8 +87,10 @@ def _compare_content(c_content: ContentSet, r_content: ContentSet,
             continue
         # Map C call name to Rust equivalent
         r_call = c_to_r_call_map.get(c_call, c_call)
+        # Check current scope AND child scopes for the call
+        r_all_calls = _collect_all_calls(r_scope)
         if r_call in r_content.calls:
-            # Call exists in Rust — compare arg identifiers
+            # Call exists in Rust at same scope — compare arg identifiers
             r_args = r_content.calls[r_call]
             # Map C arg identifiers
             mapped_c_args = set()
@@ -107,10 +109,12 @@ def _compare_content(c_content: ContentSet, r_content: ContentSet,
                 ))
         elif r_call != c_call and c_call in r_content.calls:
             pass  # Original name found (mapping wasn't needed)
+        elif r_call in r_all_calls or c_call in r_all_calls:
+            pass  # Call exists in Rust but at a different scope level — OK
         else:
             mismatches.append(Mismatch(
                 "missing_call",
-                f"C calls {c_call}() but Rust doesn't (in this scope)",
+                f"C calls {c_call}() but Rust doesn't (in any scope)",
                 c_scope.line, r_scope.line, path,
             ))
 
@@ -292,6 +296,14 @@ def _flatten_loop_blocks(children: list[ScopeNode]) -> list[ScopeNode]:
     return children
 
 
+def _collect_all_calls(scope: ScopeNode) -> set[str]:
+    """Collect all call names from a scope and all its descendants."""
+    calls = set(scope.content.calls.keys())
+    for child in scope.children:
+        calls.update(_collect_all_calls(child))
+    return calls
+
+
 def _scopes_match(c: ScopeNode, r: ScopeNode) -> bool:
     """Do two scoping nodes correspond to each other?"""
     # Same kind
@@ -299,7 +311,6 @@ def _scopes_match(c: ScopeNode, r: ScopeNode) -> bool:
         if c.kind == "arm":
             return _arm_labels_match(c.label, r.label)
         if c.kind in ("if", "if_let"):
-            # Match if both are conditionals (if vs if_let is OK)
             return True
         return True
 

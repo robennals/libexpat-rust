@@ -113,6 +113,16 @@ skip_c_identifiers:
   - enc              # Often appears as extra arg in C
   - encoding         # C encoding parameter
   - dtd              # C DTD struct access pattern differs
+  - m_encoding       # C parser encoding field
+  - m_parent_parser  # C parent parser field
+  - m_parsing_status # C parsing status struct
+  - final_buffer     # C final buffer flag
+  - end_ptr          # C output pointer
+  - next_ptr         # C output pointer
+  - xml_account_direct  # C accounting constant
+  - xml_true         # C boolean constant
+  - xml_false
+  - __line__         # C __LINE__ macro for debugging
 
 # === Call name mapping (C name → Rust name) ===
 call_name_map:
@@ -162,6 +172,9 @@ call_name_map:
   trigger_reenter: trigger_reenter
   external_entity_init_processor2: external_entity_init_processor
   external_entity_content_processor: content_processor
+  xml_name_length: name_length
+  xml_skip_s: skip_s
+  xml_prolog_tok: prolog_tok
 
 # === Identifier mapping (C name → Rust name) ===
 identifier_map:

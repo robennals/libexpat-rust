@@ -97,15 +97,15 @@ def _extract_scope(ast: Node, current_scope: ScopeNode):
     """Recursively extract scoping structure and content."""
     for child in ast.children:
         if child.kind in SCOPING_KINDS:
-                # Named/labeled scope — create a child scope
-                child_scope = ScopeNode(
-                    kind=child.kind,
-                    label=_extract_scope_label(child),
-                    source_file=child.source_file,
-                    line=child.line,
-                )
-                current_scope.children.append(child_scope)
-                _extract_scope(child, child_scope)
+            # Create a child scope
+            child_scope = ScopeNode(
+                kind=child.kind,
+                label=_extract_scope_label(child),
+                source_file=child.source_file,
+                line=child.line,
+            )
+            current_scope.children.append(child_scope)
+            _extract_scope(child, child_scope)
         else:
             # Non-scoping node — collect content, then check for nested scopes
             _collect_content(child, current_scope.content)
