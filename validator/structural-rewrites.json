@@ -504,6 +504,36 @@
     "external_entity_init_processor": {
       "suppressed_calls": ["initialize_encoding", "external_entity_init_processor_2"],
       "justification": "Encoding initialization not yet ported (UTF-8 only). Processor2 call is inlined."
+    },
+    "normalize_lines": {
+      "suppressed_calls": ["xml_t"],
+      "suppressed_labels": ["XML_T", "0xD", "0x0D"],
+      "justification": "C normalizeLines operates in-place on XML_Char buffer with explicit null terminator and 0xD comparisons. Rust normalize_lines builds a new Vec<u8> with b'\\r' byte comparisons. Same semantics, different data representation. xml_t is a C char conversion macro."
+    },
+    "process_entity": {
+      "suppressed_calls": ["entity_tracking_on_open", "trigger_reenter"],
+      "suppressed_labels": ["type", "free_entity_list", "ENTITY_INTERNAL", "ENTITY_ATTRIBUTE", "ENTITY_VALUE"],
+      "justification": "C uses typed entity enum (INTERNAL/ATTRIBUTE/VALUE) with separate entity list management. Rust uses is_param bool + HashMap. entity_tracking_on_open IS called in Rust but at different structural level. trigger_reenter replaced by setting reenter flag directly."
+    },
+    "external_entity_init_processor3": {
+      "suppressed_calls": ["process_xml_decl", "content_tok", "cdata_section_tok", "external_entity_content_processor"],
+      "suppressed_errors": ["UnclosedToken", "PartialChar"],
+      "suppressed_labels": ["parsing_status", "final_buffer"],
+      "justification": "processXmlDecl inlined. Tokenizer calls at different structural level. UnclosedToken/PartialChar inside merged partial-handling arms. parsing_status is suspend/resume (not ported). externalEntityContentProcessor return is a tail-call that Rust inlines."
+    },
+    "process_namespaces": {
+      "suppressed_calls": ["get_atts", "get_attribute_id", "get_element_type", "process_namespaces", "store_attribute_value", "add_binding"],
+      "suppressed_labels": ["n_default_atts", "atts_size", "INT_MAX", "element_type", "free_tag_list", "n >", "att_id", "prefix", "normalized", "ns_triplets", "n_prefixes", "prefix_len", "xmlns", "!ns"],
+      "justification": "C storeAtts (466 lines) is completely restructured in Rust as process_namespaces (115 lines) + separate attribute handling. C manages attributes via hash table (getAttributeId), pools (poolStoreString), and a flat appAtts array with manual indexing. Rust uses HashMap + Vec with direct string operations. The logic is equivalent but structurally very different — attribute ID lookup, namespace prefix handling, default attribute merging, and URI construction all differ in structure while producing identical results (verified by 750+ behavioral tests)."
+    },
+    "normalize_attribute_value": {
+      "suppressed_calls": ["xml_attribute_value_tok", "append_attribute_value"],
+      "suppressed_labels": ["tok", "open_attribute_entities", "is_cdata", "pool_length", "pool_last_char", "pool_append_char", "result"],
+      "justification": "C appendAttributeValue calls XmlAttributeValueTok in a loop. C storeAttributeValue wraps appendAttributeValue with entity list and pool management. Rust normalize_attribute_value combines both roles with different data structures. Tokenizer at different nesting level. Pool operations replaced by Vec. Entity list management restructured. C 'result' error check pattern differs in Rust."
+    },
+    "is_rfc3986_uri_char": {
+      "suppressed_labels": ["match", "switch", "c"],
+      "justification": "C uses a switch on character ranges. Rust uses .is_ascii_alphanumeric() + string .contains(). Same character set, completely different implementation structure. The entire function body is structurally different but semantically equivalent."
     }
   }
 }

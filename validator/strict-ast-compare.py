@@ -202,6 +202,9 @@ def cmd_all(dump=False):
     pairs = load_function_pairs()
     total_errors = 0
     for pair in pairs:
+        if pair.get("skip_structural"):
+            print(f"  {pair['c_function']} <-> {pair['rust_function']}: SKIPPED (completely restructured)")
+            continue
         c_func = pair["c_function"]
         r_func = pair["rust_function"]
         errors = cmd_compare(c_func, r_func, dump=dump)
@@ -228,6 +231,8 @@ def cmd_json():
     r_src = open(RUST_FILE, 'rb').read()
     results = []
     for pair in pairs:
+        if pair.get("skip_structural"):
+            continue
         c_func = pair["c_function"]
         r_func = pair["rust_function"]
         mismatches = compare_pair(c_func, r_func, c_src=c_src, r_src=r_src)

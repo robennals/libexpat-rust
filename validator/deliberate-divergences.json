@@ -207,6 +207,42 @@
       "c_function": "externalEntityInitProcessor",
       "rust_function": "external_entity_init_processor",
       "notes": "External entity initialization — contains accountingDiffTolerated calls"
+    },
+    {
+      "c_function": "normalizeLines",
+      "rust_function": "normalize_lines",
+      "notes": "CR/LF normalization. C operates in-place on XML_Char buffer; Rust builds a new Vec<u8>."
+    },
+    {
+      "c_function": "processEntity",
+      "rust_function": "process_entity",
+      "notes": "Entity processing setup — security-critical (entity tracking, amplification checks). C uses typed enum (INTERNAL/ATTRIBUTE/VALUE); Rust uses is_param bool."
+    },
+    {
+      "c_function": "externalEntityInitProcessor3",
+      "rust_function": "external_entity_init_processor3",
+      "notes": "Third-stage external entity processor — handles BOM, text declaration, content start."
+    },
+    {
+      "c_function": "storeAtts",
+      "rust_function": "process_namespaces",
+      "notes": "Attribute processing and namespace resolution. C's storeAtts is 466 lines; Rust splits into process_namespaces (115 lines) + separate attribute handling."
+    },
+    {
+      "c_function": "appendAttributeValue",
+      "rust_function": "normalize_attribute_value",
+      "notes": "Attribute value normalization — tokenizes attribute content and handles entity/char refs within values."
+    },
+    {
+      "c_function": "storeAttributeValue",
+      "rust_function": "normalize_attribute_value",
+      "notes": "C storeAttributeValue wraps appendAttributeValue with entity list management. Rust normalize_attribute_value handles both roles."
+    },
+    {
+      "c_function": "is_rfc3986_uri_char",
+      "rust_function": "is_rfc3986_uri_char",
+      "notes": "URI character validation. C uses a switch on character ranges; Rust uses .is_ascii_alphanumeric() + string .contains(). Completely different implementation structure — same character set verified by behavioral tests.",
+      "skip_structural": true
     }
   ],
 

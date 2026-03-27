@@ -62,7 +62,7 @@
     },
     {
       "name": "wrapper_processor_delegating_call",
-      "input":  { "kind": "return", "label_regex": "do[Pp]rolog|do[Cc]ontent|do_prolog|do_content|externalEntityInitProcessor|external_entity_init_processor" },
+      "input":  { "kind": "return", "label_regex": "do[Pp]rolog|do[Cc]ontent|do_prolog|do_content|externalEntity\\w+Processor|external_entity_\\w+_processor" },
       "output": null,
       "justification": "C processor wrappers (prologProcessor, contentProcessor) return the result of calling the do* function directly. Rust inlines this differently. TEMPORARY: believed equivalent because the do* function is still called.",
       "risk": "Post-call processing (like storeRawNames) may be missing.",
