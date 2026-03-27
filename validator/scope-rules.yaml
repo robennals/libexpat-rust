@@ -1,0 +1,199 @@
+# Scoping-level match rules for C ↔ Rust comparison
+#
+# These rules handle known principled differences between C and Rust
+# at the scope level (control flow) and content level (calls, identifiers).
+
+# === C calls to skip (no Rust equivalent) ===
+# These are C functions that have no Rust call equivalent because Rust
+# uses different abstractions (RAII, type system, etc.)
+
+skip_c_calls:
+  # Memory management — Rust uses RAII
+  - pool_store_string
+  - pool_clear
+  - pool_discard
+  - pool_init
+  - pool_grow
+  - pool_finish
+  - pool_start
+  - pool_length
+  - pool_last_string
+  - pool_bytes_to_allocate_for
+  - pool_chop
+  - pool_copy_string
+  - pool_copy_string_no_finish
+  - pool_append
+  - pool_append_string
+  - pool_append_char
+  - realloc
+  - malloc
+  - free
+  - REALLOC
+  - MALLOC
+  - FREE
+  # Hash table — Rust uses HashMap
+  - lookup
+  - hash
+  - hash_table_init
+  - hash_table_destroy
+  - hash_table_iter_init
+  - hash_table_iter_next
+  # Entropy — Rust uses std RandomState
+  - generate_hash_secret_salt
+  - gather_time_entropy
+  # C string/memory ops — Rust uses slice operations
+  - memcpy
+  - memset
+  - strcmp
+  - strncmp
+  - strlen
+  - memmove
+  # C type macros — Rust type system handles
+  - ENTITY
+  - ELEMENT_TYPE
+  - ATTRIBUTE_ID
+  - CONTENT_SCAFFOLD
+  - PREFIX
+  - DEFAULT_ATTRIBUTE
+  - NS_ATT
+  - TAG
+  # C internal macros
+  - must_convert
+  - MUST_CONVERT
+  - get_context
+  - set_context
+  - parser_busy
+  - UNUSED_P
+  - unused_p
+  # C encoding
+  - initialize_encoding
+  - xml_convert
+  - xml_encode
+  - xml_t
+  # C position tracking
+  - store_raw_names
+  # C accounting (Rust does at parse() entry)
+  - accounting_diff_tolerated
+  - accounting_on_abort
+
+# === Rust calls to skip (no C equivalent) ===
+skip_r_calls:
+  - with_capacity    # Vec::with_capacity — allocation hint
+  - to_vec           # slice.to_vec() — clone
+  - to_string        # String conversion
+  - unwrap_or_default
+  - unwrap_or
+  - take             # std::mem::take — ownership
+  - borrow           # RefCell::borrow
+  - borrow_mut
+  - is_empty         # Rust emptiness check
+  - extend_from_slice
+  - push             # Vec::push
+  - encode_utf8      # char encoding
+  - len              # .len() — Rust collection length
+  - is_none          # Option::is_none
+  - is_some          # Option::is_some
+  - insert           # HashMap::insert
+  - new              # Constructor
+  - from_utf8        # String::from_utf8
+  - ok               # Result::ok
+  - min_bytes_per_char  # Encoding method — C accesses as struct field
+  - "std::mem::take"    # Rust ownership transfer
+  - from_utf8           # String::from_utf8
+  - Vec::new            # Constructor
+  - Vec::with_capacity  # Constructor with hint
+  - String::from_utf8   # String conversion
+  - Ok                  # Result::Ok constructor
+  - unwrap_or_default   # Unwrap with default
+
+# === C identifiers to skip ===
+skip_c_identifiers:
+  - handler_arg      # C passes handlerArg to callbacks; Rust closures capture
+  - parser           # C passes parser struct; Rust uses &mut self
+  - enc              # Often appears as extra arg in C
+  - encoding         # C encoding parameter
+  - dtd              # C DTD struct access pattern differs
+
+# === Call name mapping (C name → Rust name) ===
+call_name_map:
+  # C tokenizer macros → Rust direct calls
+  xml_content_tok: content_tok
+  xml_prolog_tok: prolog_tok
+  xml_cdata_section_tok: cdata_section_tok
+  xml_attribute_value_tok: attribute_value_tok
+  xml_entity_value_tok: entity_value_tok
+  xml_name_length: name_length
+  xml_skip_s: skip_s
+  xml_char_ref_number: char_ref_number
+  # C handler calls → Rust method names
+  m_comment_handler: handler
+  m_default_handler: handler
+  m_processing_instruction_handler: handler
+  m_character_data_handler: handler
+  m_start_element_handler: handler
+  m_end_element_handler: handler
+  m_start_cdata_section_handler: handler
+  m_end_cdata_section_handler: handler
+  m_skipped_entity_handler: handler
+  m_xml_decl_handler: handler
+  m_start_doctype_decl_handler: handler
+  m_end_doctype_decl_handler: handler
+  m_entity_decl_handler: handler
+  m_notation_decl_handler: handler
+  m_attlist_decl_handler: handler
+  m_element_decl_handler: handler
+  m_unparsed_entity_decl_handler: handler
+  m_external_entity_ref_handler: handler
+  m_not_standalone_handler: handler
+  # Other mappings
+  content_tok: content_tok
+  prolog_tok: prolog_tok
+  cdata_section_tok: cdata_section_tok
+  char_ref_number: char_ref_number
+  name_length: name_length
+  normalize_lines: normalize_lines
+  report_default: report_default
+  report_comment: report_comment
+  report_processing_instruction: report_processing_instruction
+  process_entity: process_entity
+  do_content: do_content
+  do_prolog: do_prolog
+  do_cdata_section: do_cdata_section
+  trigger_reenter: trigger_reenter
+  external_entity_init_processor2: external_entity_init_processor
+  external_entity_content_processor: content_processor
+
+# === Identifier mapping (C name → Rust name) ===
+identifier_map:
+  s: pos
+  next: next_pos
+  end: end
+  start: start
+  event_pp: event_pos
+  event_end_pp: event_pos
+
+# === C error codes to skip ===
+skip_c_errors:
+  - xml_error_none        # C success sentinel — Rust uses different success pattern
+  - xml_error_no_memory   # Rust panics on OOM
+
+# === C scoping labels to skip (scope-level patterns that Rust handles differently) ===
+skip_c_scope_labels:
+  - must_convert    # C MUST_CONVERT encoding check — Rust is UTF-8 only
+  - MUST_CONVERT
+  - accounting_diff_tolerated  # C per-token accounting — Rust at parse() entry
+  - accountingDiffTolerated
+  - m_encoding      # C encoding pointer selection — Rust single encoding
+
+# === C scoping kinds to skip ===
+skip_c_scope_kinds: []
+
+# === Rust scoping labels to skip ===
+skip_r_scope_labels:
+  - iterations    # Rust MAX_ITERATIONS stall detection
+  - Err           # Rust Result::Err arms — C doesn't have Result type
+  - MAX_ITERATIONS  # Rust stall detection constant
+
+# === Transparent Rust scopes ===
+flatten_r_scopes: []
+
