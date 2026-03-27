@@ -332,6 +332,9 @@ def _arm_labels_match(c_label: str, r_label: str) -> bool:
     r_short = r_label.split("::")[-1] if "::" in r_label else r_label
     if c_short == r_short:
         return True
+    # Case-insensitive comparison (C ALL_CAPS vs Rust PascalCase)
+    if c_short.replace("_", "").lower() == r_short.replace("_", "").lower():
+        return True
     # Prefix match: "Ok" matches "Ok(TokenResult ...)"
     if r_label.startswith(f"{c_label}(") or c_label.startswith(f"{r_label}("):
         return True
@@ -351,22 +354,12 @@ def _match_arms(c_arms: list[ScopeNode], r_arms: list[ScopeNode],
     for c_arm in c_arms:
         if not c_arm.label:
             continue
-        # Find matching Rust arm
-        r_arm = r_arm_map.get(c_arm.label)
-        if not r_arm:
-            # Try short label
-            c_short = c_arm.label.split("::")[-1]
-            for r_label, r_a in r_arm_map.items():
-                r_short = r_label.split("::")[-1]
-                if c_short == r_short:
-                    r_arm = r_a
-                    break
-        if not r_arm:
-            # Try prefix
-            for r_label, r_a in r_arm_map.items():
-                if r_label.startswith(f"{c_arm.label}("):
-                    r_arm = r_a
-                    break
+        # Find matching Rust arm using _arm_labels_match
+        r_arm = None
+        for r_label, r_a in r_arm_map.items():
+            if _arm_labels_match(c_arm.label, r_label):
+                r_arm = r_a
+                break
 
         if r_arm:
             matched_r.add(id(r_arm))
