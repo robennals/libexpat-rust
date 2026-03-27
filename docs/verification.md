@@ -1,18 +1,109 @@
-# Behavioral Verification
+# Verification
 
-How we confirm that `expat-rust` exactly matches libexpat's behavior.
+How we build confidence that `expat-rust` faithfully reproduces libexpat's behavior.
 
-## Approach: C Is the Ground Truth
+## Approach: Three Complementary Layers
 
-Our verification strategy is simple: **run the same XML through both parsers and confirm identical output**. We don't write expected outputs by hand — we let the C library define what "correct" means, then verify the Rust parser produces the same result.
+No single verification technique can guarantee that a cross-language port is correct.
+Instead, we use three independent layers that reinforce each other:
 
-This means:
-- If C returns `XML_STATUS_OK`, Rust must return `XmlStatus::Ok`
-- If C returns `XML_ERROR_INVALID_TOKEN`, Rust must return `XmlError::InvalidToken`
-- If C fires `startElement("root", ["id", "1"])`, Rust must fire `startElement("root", [("id", "1")])`
-- If C normalizes `\t` in an attribute value to a space, Rust must do the same
+1. **AST structural comparison** — verifies the Rust code's *structure* matches the C
+   code, function-by-function, with every difference explicitly justified
+2. **Original C test suite** — the same 291 tests libexpat uses, compiled against
+   the Rust parser's C FFI layer
+3. **Behavioral comparison tests** — 463 tests that run identical XML through both
+   parsers and confirm identical SAX event traces, error codes, and parse results
 
-Every test is a comparison, not an assertion against a hardcoded expected value.
+Each layer catches different classes of bugs:
+
+- The AST comparison catches **structural omissions** — a missing error check, a
+  forgotten handler call, a dropped match arm — even if no test input triggers the
+  missing path. It won't catch subtle semantic differences within structurally
+  similar code.
+- The C test suite catches **behavioral regressions** against libexpat's own quality
+  bar, including edge cases the expat maintainers specifically wrote tests for.
+- The comparison tests catch **behavioral divergences** on a broad corpus of inputs,
+  including SAX event ordering, attribute normalization, encoding, and incremental
+  parsing boundaries.
+
+Together, these make behavioral differences *unlikely* without guaranteeing their
+absence. The AST comparison constrains the code to be structurally very close to C,
+the original tests verify known-important behaviors, and the comparison tests sweep
+a wide input space. A bug would need to hide from all three.
+
+## Layer 1: AST Structural Comparison
+
+See [../validator/README.md](../validator/README.md) for full tool documentation.
+
+The strict AST verifier (`validator/strict-ast-compare.py`) parses both C and Rust
+with tree-sitter, converts them into a common "skeleton" intermediate representation,
+and structurally compares them. Every C operation (function call, error return,
+handler dispatch, branch condition, match arm) must have a corresponding Rust
+operation in the same structural position.
+
+Language differences are handled by **explicit rewrite rules** stored in JSON:
+
+- **`structural-rewrites.json`** — Verified rules for known language differences
+  (e.g., C `break` removed in Rust match arms, C pool operations replaced by
+  Rust Vec, C position tracking via output pointers replaced by Rust return tuples).
+  Each rule has an input pattern, output pattern, and justification.
+
+- **`temporary-rewrites.json`** — Rules for patterns we *believe* are equivalent
+  but haven't fully verified (e.g., C OOM return checks vs Rust panic-on-OOM,
+  C `MUST_CONVERT` encoding branches vs Rust UTF-8-only assumption). These are
+  tracked separately so they can be reviewed and either promoted or fixed.
+
+The tool currently validates 12 function pairs covering the main parser loop,
+content/prolog/epilog/CDATA processors, handler dispatch, and entity processing.
+
+```bash
+# Run the strict structural comparison
+python3 validator/strict-ast-compare.py --ci
+
+# Dump skeletons for a specific function pair (debugging)
+python3 validator/strict-ast-compare.py --dump doContent do_content
+```
+
+### What the AST comparison does NOT guarantee
+
+The AST comparison is a necessary but not sufficient condition for correctness.
+It verifies structural correspondence — that the same operations appear in the
+same places — but cannot verify:
+
+- **Argument correctness**: A call to `handler(data)` is matched by label, but
+  the actual data passed may differ (e.g., wrong slice bounds)
+- **Expression semantics**: `if (tag_level == 0)` structurally matches any branch
+  checking `tag_level`, even if the comparison operator or threshold differs
+- **Completeness of rewrites**: A temporary rewrite rule that suppresses a C
+  operation may be masking a real bug, not an equivalent pattern
+
+This is by design. Verifying exact semantic equivalence across languages would
+require formal methods. Instead, we constrain the structure tightly enough that,
+combined with behavioral testing, semantic differences become unlikely.
+
+### Value for AI-assisted porting
+
+The AST comparison tool significantly simplifies AI-assisted porting work. When an
+agent needs to port a C function to Rust, the tool provides:
+
+- **Exactly which operations are missing** — specific call names, error codes,
+  match arms, and handler dispatches that exist in C but not in Rust
+- **Structural context** — where in the control flow each missing operation belongs
+  (which match arm, which branch, what nesting level)
+- **Prompt generation** — `--prompt` mode produces targeted porting instructions
+  for each divergent function pair
+
+This turns "port doContent to Rust" (a ~500-line function with ~50 match arms)
+into a series of precise, verifiable tasks: "add XmlError::AsyncEntity return in
+the TrailingCr arm after the tag_level check."
+
+## Layer 2: Original C Test Suite
+
+## Layer 3: Behavioral Comparison Tests
+
+C is the ground truth. We run the same XML through both parsers and confirm
+identical output. We don't write expected outputs by hand — we let the C library
+define what "correct" means, then verify the Rust parser produces the same result.
 
 ## What We Compare
 
@@ -169,41 +260,39 @@ Excluding unreachable utilities, effective coverage of API-reachable code is app
 | `generated_comparison_tests.rs` | 109 | Generated: XML feature matrix with incremental byte-split testing |
 | `c_comparison_tests.rs` | 59 | Original: foundational status/error/handler comparison tests |
 
-## AST Structural Validation
-
-In addition to behavioral testing (same input → same output), we use an AST-based
-structural comparison tool to verify that the Rust code's structure matches the C
-code's structure function-by-function. This catches classes of bugs that behavioral
-tests can miss — for example, a missing error check that only triggers on inputs
-not covered by the test suite.
-
-The tool lives in `validator/` and uses tree-sitter to parse both C and Rust into
-ASTs, then compares:
-
-- **Match arm coverage**: every `case XML_TOK_*:` in C has a `XmlTok::*` arm in Rust
-- **Error codes**: every `XML_ERROR_*` in C has a `XmlError::*` in Rust
-- **Handler calls**: every `parser->m_*Handler` in C has a `self.*_handler` in Rust
-- **Function calls**: every function call in C has a Rust equivalent
-
-Every intentional difference is documented in `validator/deliberate-divergences.json`
-with a written justification. The tool refuses to silently suppress anything — if
-a C function call doesn't appear in Rust, it's either flagged as a divergence or
-explicitly justified in the divergences file.
-
-Security-critical features like amplification attack detection (`accountingDiffTolerated`,
-`entityTrackingOnOpen/Close`, `AmplificationLimitBreach`) are listed in the
-`NOT_SUPPRESSED` section and cannot be accidentally silenced.
-
-```bash
-# Run the structural comparison
-python3 validator/ast-compare.py --ci
-
-# See what's suppressed and why
-python3 validator/ast-compare.py --audit
-```
-
-See `validator/README.md` for full documentation.
-
 ## Note on Encoding
 
 The Rust parser transcodes all non-UTF-8 input to UTF-8 before tokenizing (unlike C, which tokenizes in the native encoding). This produces identical results for all inputs — see [design-decisions.md](design-decisions.md) for the rationale and [architecture.md](architecture.md) for details on byte offset handling.
+
+## Limitations and Honest Assessment
+
+This verification approach builds high confidence but does not constitute a proof
+of equivalence. Known limitations:
+
+1. **The AST comparison allows documented gaps.** The rewrite rules in
+   `structural-rewrites.json` and `temporary-rewrites.json` suppress real
+   structural differences. Each is justified, but the justifications could be
+   wrong — particularly the temporary rules. For example, the rule that suppresses
+   C's OOM return checks assumes Rust's panic-on-OOM is acceptable; if graceful
+   OOM handling matters, this is a real behavioral difference.
+
+2. **Behavioral tests cover a finite input space.** 463 comparison tests is a lot,
+   but XML is infinitely varied. A bug that only manifests with a specific combination
+   of DTD declarations, entity nesting, and encoding is unlikely to be caught by
+   the test corpus.
+
+3. **Some C features are not yet ported.** Suspend/resume (`XML_StopParser` /
+   `XML_ResumeParser`) and multi-encoding external entity parsing are not
+   implemented. The AST tool flags these as temporary suppressions rather than
+   verified equivalences.
+
+4. **The three layers are not fully independent.** The same developer wrote the
+   Rust code, the comparison tests, and the rewrite rules. A systematic
+   misunderstanding of C's semantics could propagate through all three.
+
+Despite these limitations, the combination of structural constraint + behavioral
+testing makes accidental divergence unlikely. The AST tool ensures the Rust code
+is structurally very close to C, the behavioral tests verify outputs match across
+a wide input space, and the original C test suite provides an independent quality
+bar. A bug would need to hide in a structural gap that's also not exercised by
+any of ~750 tests.

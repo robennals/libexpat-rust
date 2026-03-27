@@ -94,21 +94,30 @@ The parser cannot produce memory safety violations regardless of input — malfo
 
 The FFI layer (`expat-ffi`) necessarily uses `unsafe` for the C ABI boundary, but all unsafety is confined there — the core parser is entirely safe Rust.
 
+## Verification
+
+Correctness is verified by three complementary layers, none sufficient alone but
+strong in combination:
+
+1. **AST structural comparison** — A [strict verifier](validator/) parses both C and Rust with tree-sitter, converts them to a common "skeleton" IR, and structurally compares them function-by-function. Every C operation (call, error return, handler dispatch, match arm) must have a corresponding Rust operation, or be covered by an explicit rewrite rule with a justification. This catches missing error checks, forgotten handler calls, and dropped match arms — even if no test input triggers the gap. It does **not** guarantee semantic equivalence; it constrains the code to be structurally very close to C.
+
+2. **Original C test suite** — The 291 tests from libexpat's own test suite (`basic_tests.c`, `ns_tests.c`, `misc_tests.c`, `acc_tests.c`) are compiled and linked against the Rust parser's C FFI layer — 288 pass, 3 skipped for C-specific custom allocator APIs.
+
+3. **Behavioral comparison tests** — 463 tests run identical XML through both the C library and the Rust port, comparing full SAX event traces (handler calls, error codes, attribute values, byte positions) for exact equivalence. This catches any behavioral divergence on the tested inputs. See [docs/verification.md](docs/verification.md) for details.
+
+Together, these make behavioral differences unlikely: the AST tool ensures the Rust code stays structurally close to C, the behavioral tests verify identical outputs across a wide input space, and the original test suite provides an independent quality bar. A bug would need to hide in a structural gap that is also not exercised by ~750 tests. See [docs/verification.md](docs/verification.md) for an honest assessment of limitations.
+
 ## How It Was Built
 
-This port was created using an AI-assisted methodology with rigorous automated verification:
+This port was created using an AI-assisted methodology:
 
 1. **Architecture analysis**: The C codebase (~9,200 lines) was analyzed to map module boundaries, data flows, and state machine transitions.
 
-2. **Bottom-up porting**: Starting from leaf modules (ASCII tables, character classification, SipHash) and working up through the tokenizer, role state machine, and finally the main parser — ensuring each layer was solid before building on it.
+2. **Bottom-up porting**: Starting from leaf modules (ASCII tables, character classification, SipHash) and working up through the tokenizer, role state machine, and finally the main parser.
 
-3. **Structural verification**: An [AST-based structural validator](validator/) compares each Rust function to its C counterpart using tree-sitter — same switch/match arms, same error codes, same handler calls, same function calls. Every tolerated difference has a written justification in [`validator/deliberate-divergences.json`](validator/deliberate-divergences.json). Security-critical features (amplification attack detection, entity tracking) are protected from accidental suppression. This runs in CI.
+3. **Continuous structural verification**: The AST comparison tool guided the porting process, providing agents with exactly which operations were missing, where they belonged in the control flow, and what the C code did. This turned large porting tasks into sequences of precise, verifiable steps. Rewrite rules accumulated as language differences were encountered and justified.
 
-4. **Original test suite**: The 291 tests from libexpat's own C test suite (`basic_tests.c`, `ns_tests.c`, `misc_tests.c`, `acc_tests.c`) are compiled and linked against the Rust parser's C FFI layer — 288 pass, with 3 skipped for testing C-specific custom allocator APIs.
-
-5. **Behavioral verification**: 463 additional FFI comparison tests run identical XML inputs through both the C library and the Rust port, comparing full SAX event traces (handler calls, error codes, attribute values) for exact equivalence. See [docs/verification.md](docs/verification.md) for the detailed methodology.
-
-6. **C2Rust reference**: The C2Rust transpiler produced a mechanically-correct (but unsafe) Rust translation, used as a reference when C behavior was ambiguous due to preprocessor macros or implicit conversions.
+4. **C2Rust reference**: The C2Rust transpiler produced a mechanically-correct (but unsafe) Rust translation, used as a reference when C behavior was ambiguous due to preprocessor macros or implicit conversions.
 
 For the full story, see [docs/porting-process.md](docs/porting-process.md).
 

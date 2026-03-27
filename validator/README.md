@@ -1,22 +1,87 @@
 # AST Structural Validator
 
-This tool is the primary mechanism for verifying that the Rust port of libexpat
-faithfully replicates the C implementation's behavior. It uses tree-sitter to
-parse both C and Rust source code into ASTs, then structurally compares them
-function-by-function.
+Verifies that the Rust port structurally corresponds to the C original,
+function-by-function. Uses tree-sitter to parse both languages into ASTs,
+converts them to a common "skeleton" IR, and compares with explicit rewrite
+rules for known language differences.
 
-## Why this matters
+## How it works
 
-A line-by-line C-to-Rust port is only trustworthy if you can demonstrate that
-every switch case, error code, handler call, and function call in the C code has
-a corresponding construct in the Rust code. This tool automates that comparison.
+The verifier has two tools:
 
-Every difference between C and Rust is either:
-- **Flagged as a divergence** that needs to be fixed, or
-- **Explicitly suppressed** with a written justification in `deliberate-divergences.json`
+- **`strict-ast-compare.py`** (recommended) — Skeleton-based structural comparison.
+  Converts both ASTs to a language-agnostic intermediate representation, applies
+  rewrite rules for known C/Rust differences, and does ordered structural matching.
+  Every difference must be covered by a rewrite rule or it's reported as a mismatch.
 
-There are no silent filters. If a C function call doesn't appear in Rust, the
-tool will flag it unless the divergences file explains why.
+- **`ast-compare.py`** (legacy) — Name-set comparison. Checks that the same error
+  codes, handler calls, function calls, and match arm labels appear in both languages.
+  Less precise but useful for quick audits.
+
+### What the strict verifier checks
+
+For each tracked function pair, the skeleton comparison verifies:
+
+1. **Match arm correspondence** — every `case XML_TOK_*:` in C has a `XmlTok::*`
+   arm in Rust, and the arm bodies structurally match
+2. **Call ordering** — function calls, handler dispatches, and error returns appear
+   in the same structural positions (ordered subsequence within each scope)
+3. **Branch structure** — if/else branches correspond by the condition being checked
+   (handler null checks, variable comparisons, etc.)
+4. **Loop structure** — C `for(;;)` loops match Rust `loop {}` at the same nesting
+5. **Return values** — error returns match (`XmlError::InvalidToken` in both)
+
+### What it does NOT check
+
+The verifier ensures structural correspondence, not semantic equivalence:
+
+- **Argument values** are not compared (a call to `handler(data)` matches any
+  call to `handler(...)`)
+- **Expression details** within conditions are normalized but not fully parsed
+  (e.g., `tag_level == 0` matches any branch checking `tag_level`)
+- **Side effects** are not tracked (the order of calls is checked, but not what
+  data flows between them)
+
+This is intentional. The rewrite rules allow enough flexibility for C-to-Rust
+language differences while constraining the code tightly enough that, combined
+with behavioral testing, semantic divergences become unlikely.
+
+## Rewrite rules
+
+Language differences are handled by explicit rewrite rules in three files:
+
+| File | Purpose | Review status |
+|------|---------|---------------|
+| `structural-rewrites.json` | Verified rules for known language differences | Confirmed correct |
+| `temporary-rewrites.json` | Rules believed equivalent but not fully verified | Needs review |
+| `deliberate-divergences.json` | Per-function suppressions and legacy name-set rules | Legacy + accepted |
+
+Each rule in the JSON files has:
+- **`input`** — what the C skeleton looks like (pattern to match)
+- **`output`** — what the Rust equivalent looks like (`null` = deleted)
+- **`justification`** — why this difference is acceptable
+- **`category`** — what kind of difference (language_syntax, memory_management, etc.)
+
+Example rules:
+
+```json
+{
+  "name": "break_removal",
+  "input": { "kind": "break" },
+  "output": null,
+  "justification": "C switch cases need explicit break; Rust match arms end implicitly."
+}
+
+{
+  "name": "pool_store_string_removal",
+  "input": { "kind": "call", "label_regex": "^pool_store_string$" },
+  "output": null,
+  "justification": "C allocates from a pool via poolStoreString(). Rust indexes the buffer slice directly."
+}
+```
+
+Temporary rules are tracked separately so they can be reviewed and either promoted
+to `structural-rewrites.json` (confirmed correct) or removed (found to be a real bug).
 
 ## Quick start
 
@@ -27,108 +92,93 @@ pip install tree-sitter tree-sitter-c tree-sitter-rust
 # Initialize the C source (needed for comparison)
 git submodule update --init
 
-# Run the full comparison
+# Run the strict structural comparison (recommended)
+python3 validator/strict-ast-compare.py --ci
+
+# Run the legacy name-set comparison
 python3 validator/ast-compare.py --ci
 
-# See what's suppressed and why
+# See what's suppressed and why (legacy tool)
 python3 validator/ast-compare.py --audit
 ```
 
 ## Commands
 
+### strict-ast-compare.py
+
 | Command | Purpose |
 |---------|---------|
-| `--ci` | Compare all function pairs, exit 1 on any divergence. Used in CI. |
+| `--ci` | Compare all function pairs, exit 1 on any mismatch. |
 | `--all` | Compare all function pairs, print report. |
-| `--audit` | Show every suppression with its justification. |
-| `<c_func> <rust_func>` | Compare a specific function pair. |
-| `--list-cases <func> c\|rust` | List switch/match cases in a function. |
+| `--json` | Output results as JSON. |
+| `--dump <c_func> <rust_func>` | Show both skeletons and comparison. |
+| `--dump-c <func>` | Show C skeleton (raw + after rewrites). |
+| `--dump-rust <func>` | Show Rust skeleton. |
+| `<c_func> <rust_func>` | Compare a specific pair. |
+
+### ast-compare.py (legacy)
+
+| Command | Purpose |
+|---------|---------|
+| `--ci` | Compare all pairs, exit 1 on divergence. |
+| `--all` | Compare all pairs, print report. |
+| `--audit` | Show all suppressions with justifications. |
 | `--prompt <c_func> <rust_func>` | Generate an AI porting prompt for divergences. |
 | `--prompt-all` | Generate prompts for all divergent pairs. |
 | `--missing-functions` | List C functions with no Rust equivalent. |
-| `--json` | Output comparison results as JSON (add to any pair comparison). |
 
-## What it compares
+## Value for AI-assisted porting
 
-For each tracked function pair (C function vs Rust function):
+The AST comparison tool significantly simplifies AI-assisted porting. When an agent
+needs to port or fix a C function in Rust, the tool provides:
 
-1. **Error codes** — every `XML_ERROR_*` in C should have a corresponding `XmlError::*` in Rust
-2. **Handler calls** — every `parser->m_*Handler` in C should have a corresponding `self.*_handler` in Rust
-3. **Match arm coverage** — every `case XML_TOK_*:` in C should have a corresponding `XmlTok::*` arm in Rust
-4. **Function calls** — every function call in C should have a Rust equivalent (auto-converts camelCase to snake_case)
-5. **Per-case detail** — checks errors, handlers, and calls within each individual case/arm
+- **Exactly which operations are missing** — specific call names, error codes,
+  match arms, and handler dispatches, with source line numbers in both files
+- **Structural context** — where each missing operation belongs (which match arm,
+  which branch, what nesting level)
+- **Prompt generation** — `ast-compare.py --prompt` produces targeted porting
+  instructions with the relevant C code, Rust code, file paths, line numbers,
+  and a description of what needs to change
 
-## Suppression system
+This turns "port this 500-line function" into a series of precise tasks like
+"add XmlError::AsyncEntity return after the tag_level check in the TrailingCr arm
+of do_content (C line 3363, Rust line 3166)."
 
-All suppressions live in `deliberate-divergences.json`. Every suppression must have:
+## Safety mechanism: NOT_SUPPRESSED
 
-- **`justification`** — why this difference is acceptable
-- **`status`** — `"accepted"` (suppressed) or `"must_port"` (not suppressed, tracked as work to do)
-- **`category`** — what kind of difference this is
+The divergences file has a `NOT_SUPPRESSED` section listing security-critical
+calls and errors that must never be suppressed:
 
-### Safety mechanism: NOT_SUPPRESSED
+- `accountingDiffTolerated`, `accountingOnAbort`, `accountingReportDiff`,
+  `accountingGetCurrentAmplification` — amplification attack detection
+- `entityTrackingOnOpen`, `entityTrackingOnClose`, `entityTrackingReportStats`
+  — entity expansion tracking
+- `AmplificationLimitBreach` error code
 
-The divergences file has a `NOT_SUPPRESSED` section listing calls and errors that
-must NEVER be suppressed. If anyone adds one of these to a suppression category,
-the tool exits with a `FATAL` error. This prevents accidental re-suppression of
-security-critical features like the accounting system.
-
-Currently protected:
-- `accountingDiffTolerated`, `accountingOnAbort`, `accountingReportDiff`, `accountingGetCurrentAmplification` — byte-counting amplification detection
-- `entityTrackingOnOpen`, `entityTrackingOnClose`, `entityTrackingReportStats` — entity expansion tracking
-- `AmplificationLimitBreach` error code — returned when amplification attack is detected
-
-### Suppression categories
-
-| Category | Count | Why suppressed |
-|----------|-------|----------------|
-| `memory_management` | 25 | C pools/malloc → Rust Vec/String |
-| `hash_tables` | 5 | C hash tables → Rust HashMap |
-| `entropy` | 2 | C manual entropy → Rust RandomState |
-| `c_string_ops` | 10 | memcpy/strcmp → Rust slice ops |
-| `c_type_system` | 7 | C casting macros → Rust types |
-| `c_internal_macros` | 8 | C-specific helpers |
-| `content_model_building` | 2 | C scaffold array → Rust ContentNode stack |
-| `c_preprocessor_macros` | ~15 | Regex noise from C macros |
-| `allocator_tracking` | 5 | C MALLOC_TRACKER (allocator-specific) |
-
-### Adding a new suppression
-
-1. Edit `deliberate-divergences.json`
-2. Add the call to an existing category, or create a new one
-3. Include a `justification` explaining why this is acceptable
-4. Set `status: "accepted"`
-5. Run `python3 validator/ast-compare.py --audit` to verify
-6. If the call is in `NOT_SUPPRESSED`, the tool will refuse — you must remove it from `NOT_SUPPRESSED` first (and have a very good reason)
+If anyone adds one of these to a suppression category, both tools exit with
+a `FATAL` error.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `ast-compare.py` | The comparison tool (single-file, ~1100 lines) |
-| `deliberate-divergences.json` | All suppressions, function pairs, and must-port items |
-| `README.md` | This file |
+| `strict-ast-compare.py` | Strict skeleton-based structural comparison |
+| `ast-compare.py` | Legacy name-set comparison |
+| `strict_compare/` | Python package: skeleton extraction, rewrite engine, matcher |
+| `structural-rewrites.json` | Verified rewrite rules (input/output patterns) |
+| `temporary-rewrites.json` | Temporary rewrite rules (believed but unverified) |
+| `deliberate-divergences.json` | Per-function suppressions and legacy config |
 
 ## CI integration
 
-The AST validator runs as part of CI in `.github/workflows/ci.yml`:
+Both tools run in CI (`.github/workflows/ci.yml`):
 
 ```yaml
 ast-validator:
-  name: AST Structural Validation
-  runs-on: ubuntu-latest
   steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: true
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
     - run: pip install tree-sitter tree-sitter-c tree-sitter-rust
+    - run: python3 validator/strict-ast-compare.py --ci
     - run: python3 validator/ast-compare.py --ci
     - run: python3 validator/ast-compare.py --audit
       if: always()
 ```
-
-The `--ci` step fails the build if any divergences are found. The `--audit` step
-always runs to provide a complete suppression report in the build log.
