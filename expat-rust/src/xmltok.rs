@@ -118,6 +118,14 @@ fn parse_pseudo_attribute(
         return (0, 0, 0, pos, true);
     }
 
+    // C's parsePseudoAttribute requires leading whitespace (line 1070 of xmltok.c)
+    // If first char is not whitespace, fail — this catches missing spaces between
+    // pseudo-attributes like version="1.0"encoding="UTF-8"
+    let first_c = to_ascii(enc, data, pos, end);
+    if first_c == -1 || !is_space(first_c as u8) {
+        return (0, 0, 0, pos, false);
+    }
+
     // Skip whitespace
     while pos < end {
         let c = to_ascii(enc, data, pos, end);
