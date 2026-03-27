@@ -5075,6 +5075,13 @@ impl Parser {
             self.event_pos = self.position_pos;
         }
 
+        // Free parse_data now that position tracking is complete.
+        // This prevents holding a full copy of the buffer between parse() calls.
+        // (original_chunk is NOT cleared here — it's used by current_byte_index()
+        // and get_input_context() which may be called after parse() returns.)
+        self.parse_data.clear();
+        self.parse_data.shrink_to_fit();
+
         // Track total byte offset (for XML_GetCurrentByteIndex)
         self.byte_offset += data.len() as u64;
 
@@ -5622,9 +5629,6 @@ impl Parser {
     pub fn current_byte_index(&self) -> i64 {
         if self.parsing_state == ParsingState::Initialized {
             return -1; // Before any parsing, C returns -1
-        }
-        if self.parse_data.is_empty() || self.event_pos > self.parse_data.len() {
-            return -1;
         }
 
         let utf8_event_pos = self.event_pos;
