@@ -132,6 +132,49 @@ principled:
       C checks enc == parser->m_encoding to select event pointer pair.
       Rust uses a single encoding model. No equivalent branch.
 
+  - name: c_enc_selection_no_else
+    skip: c
+    c: "if(binary(==, ident(enc), $other), $then)"
+    why: Same as above but without else branch.
+
+  # --- C success returns ---
+
+  - name: c_return_result_variable
+    skip: c
+    c: "return(ident(result))"
+    why: >
+      C returns a 'result' variable holding error code. Rust uses
+      Result return type or stores error in self.error_code.
+
+  # --- C output pointer checks ---
+
+  - name: c_next_ptr_check
+    skip: c
+    c: "if(binary(!=, ident(next_ptr), $null), $body)"
+    why: >
+      C checks if output pointer nextPtr is non-NULL before writing.
+      Rust returns positions in tuples, no output pointers.
+
+  # --- C entity text bounds check ---
+
+  - name: c_entity_text_bounds
+    skip: c
+    c: "if(binary(>=, ident(entity_text_ptr), $end), $body)"
+    why: >
+      C checks entityTextPtr >= entityTextEnd for empty entity.
+      Rust handles via tokenizer returning None for empty input.
+
+  # --- C position tracking via struct fields ---
+
+  - name: c_event_ptr_field_assign
+    skip: c
+    c: "assign(=, field($obj, $field), $value)"
+    why: >
+      C assigns event pointer fields (m_eventPtr, m_eventEndPtr).
+      Rust tracks position via return values, not struct mutations.
+    # NOTE: This is more specific than "skip all assigns" — it only
+    # matches assigns to struct fields, not local variable assigns.
+
   # --- Encoding (Rust is UTF-8 only) ---
 
   - name: must_convert
@@ -186,6 +229,29 @@ principled:
 # ==================================================================
 
 temporary:
+
+  # --- C for(;;) vs Rust while loop with setup ---
+
+  - name: c_infinite_loop_is_rust_while_with_setup
+    c_children:
+      - "loop($body)"
+    r_children:
+      - "let($idx_decl...)"
+      - "let($bound_decl...)"
+      - "loop($cond, $body)"
+    why: >
+      C uses for(;;) with break/return inside. Rust declares loop
+      variables (let mut pos = 0; let len = data.len()) then uses
+      while pos < len. Same iteration, body must still match.
+    risk: Loop variable initialization might differ from C's for-init.
+
+  - name: c_infinite_loop_is_rust_while
+    c: "loop($body)"
+    r: "loop($cond, $body)"
+    why: >
+      C for(;;) = Rust while (without preceding let declarations).
+      Body must still match.
+    risk: Loop condition may not be equivalent to C's break condition.
 
   - name: handler_dispatch_if_let
     c: "if(field(self, $handler), $body)"
