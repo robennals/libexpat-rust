@@ -16,6 +16,9 @@ from .nodes import SkeletonNode
 _REWRITES_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "structural-rewrites.json"
 )
+_TEMP_REWRITES_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "temporary-rewrites.json"
+)
 
 _loaded_rules = None
 _loaded_suppressions = None
@@ -29,6 +32,16 @@ def _load_config():
         config = json.load(f)
     _loaded_rules = config.get("rewrite_rules", [])
     _loaded_suppressions = config.get("per_function_suppressions", {})
+
+    # Also load temporary rules (marked with temporary=True)
+    try:
+        with open(_TEMP_REWRITES_FILE) as f:
+            temp_config = json.load(f)
+        for rule in temp_config.get("temporary_rules", []):
+            rule["_temporary"] = True
+            _loaded_rules.append(rule)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
 
 
 def get_per_function_suppressions(func_name: str) -> dict:

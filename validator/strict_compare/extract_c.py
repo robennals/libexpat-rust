@@ -512,6 +512,8 @@ def _normalize_condition(raw: str) -> str:
     # Normalize handler null checks: !parser->m_*Handler -> !handler
     raw = re.sub(r'!\s*parser->m_(\w+)', lambda m: f"!{normalize.camel_to_snake(m.group(1))}", raw)
     raw = re.sub(r'parser->m_(\w+)', lambda m: normalize.camel_to_snake(m.group(1)), raw)
+    # Normalize camelCase local variables to snake_case
+    raw = re.sub(r'\b([a-z][a-zA-Z]+)\b', lambda m: normalize.camel_to_snake(m.group(1)), raw)
 
     return raw
 

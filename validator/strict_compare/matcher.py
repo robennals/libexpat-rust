@@ -373,33 +373,58 @@ def _branch_contains_call(branch: SkeletonNode, call_label: str) -> bool:
 
 
 def _conditions_correspond(c_cond: str, r_cond: str) -> bool:
-    """Do two condition expressions correspond?"""
+    """Do two condition expressions correspond?
+
+    Compares condition expressions by extracting core identifiers and
+    normalizing naming conventions (camelCase -> snake_case).
+    """
     if not c_cond or not r_cond:
-        return True  # If either is unknown, assume match
+        return True
 
-    # Extract the core variable/field being checked
-    c_core = _extract_condition_core(c_cond)
-    r_core = _extract_condition_core(r_cond)
+    # Extract all identifiers from both conditions and normalize to snake_case
+    c_ids = _extract_condition_identifiers(c_cond)
+    r_ids = _extract_condition_identifiers(r_cond)
 
-    if c_core and r_core:
-        return c_core == r_core
+    if not c_ids or not r_ids:
+        return True
 
-    # Fallback: check for common substrings
-    # This is intentionally loose -- conditions vary a lot between C and Rust
-    return True
+    # Check if the primary identifier matches
+    # (first significant identifier, ignoring negation/let/Some)
+    c_primary = c_ids[0]
+    r_primary = r_ids[0]
+
+    if c_primary == r_primary:
+        return True
+
+    # Check if any C identifier matches any Rust identifier
+    return bool(set(c_ids) & set(r_ids))
 
 
-def _extract_condition_core(cond: str) -> str:
-    """Extract the core variable from a condition."""
-    # Handler check: !comment_handler or let Some(handler) = comment_handler
-    m = re.search(r'(\w+_handler)', cond)
-    if m:
-        return m.group(1)
-    # Variable check: have_more, tag_level == start_tag_level, etc.
-    m = re.match(r'!?\s*(\w+)', cond)
-    if m:
-        return m.group(1)
-    return ""
+def _extract_condition_identifiers(cond: str) -> list[str]:
+    """Extract and normalize all meaningful identifiers from a condition."""
+    from . import normalize
+
+    # Strip if-let pattern prefix: "let Some(handler) = &mut X" -> "X"
+    cond = re.sub(r'^let\s+\w+\(?\w*\)?\s*=\s*&?(?:mut\s+)?', '', cond)
+    # Strip negation
+    cond = re.sub(r'^!\s*', '', cond)
+    # Strip parentheses
+    cond = cond.strip('()')
+
+    # Extract all word-like identifiers
+    raw_ids = re.findall(r'[a-zA-Z_]\w*', cond)
+
+    # Normalize to snake_case and filter noise
+    noise = {'if', 'let', 'Some', 'None', 'mut', 'ref', 'self', 'true', 'false',
+             'parser', 'XML', 'TOK', 'ROLE', 'ERROR', 'parsing', 'status'}
+    result = []
+    for raw in raw_ids:
+        if raw in noise:
+            continue
+        normalized = normalize.camel_to_snake(raw)
+        result.append(normalized)
+
+    return result
 
 
 def _extract_handler_from_condition(cond: str) -> str:
