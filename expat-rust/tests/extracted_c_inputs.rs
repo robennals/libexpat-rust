@@ -1,21 +1,9 @@
 //! Tests extracted from C basic_tests.c - compare Rust vs C on real test inputs.
-//! Auto-generated. DO NOT EDIT.
+//!
+//! Every test compares full SAX event sequences (not just status codes).
 
-use expat_rust::xmlparse::Parser;
-use expat_sys::CParser;
-
-fn compare(xml: &[u8], desc: &str) {
-    let mut r_parser = Parser::new(None).unwrap();
-    let r_status = r_parser.parse(xml, true) as u32;
-    let r_error = r_parser.error_code() as u32;
-
-    let c_parser = CParser::new(None).unwrap();
-    let (c_status, c_error) = c_parser.parse(xml, true);
-
-    assert!(r_status == c_status && r_error == c_error,
-        "MISMATCH {desc}: Rust status={r_status} err={r_error}, C status={c_status} err={c_error}, input={:?}",
-        std::str::from_utf8(xml).unwrap_or("<binary>"));
-}
+mod sax_compare;
+use sax_compare::compare;
 
 #[test]
 fn c_nul_byte() {

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.70"
 license = "MIT"
+authors = ["Rob Ennals <rob@ennals.org>"]
 description = "A memory-safe, idiomatic Rust reimplementation of libexpat XML parser"
 homepage = "https://github.com/robennals/libexpat-rust"
 repository = "https://github.com/robennals/libexpat-rust"
@@ -22,4 +23,8 @@ libc = "0.2"
 
 [[bench]]
 name = "parse_benchmark"
+harness = false
+
+[[bench]]
+name = "pathological_benchmark"
 harness = false

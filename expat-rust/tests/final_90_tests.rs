@@ -1,47 +1,12 @@
 //! Final push to 90% line coverage. All tests compare C and Rust.
+//!
+//! Every test compares full SAX event sequences (not just status codes).
+
+mod sax_compare;
+use sax_compare::{compare, compare_incr};
 
 use expat_rust::xmlparse::{Parser, XmlError, XmlStatus};
 use expat_sys::CParser;
-use std::ffi::{c_char, c_void};
-
-fn compare(xml: &[u8], desc: &str) {
-    let mut r = Parser::new(None).unwrap();
-    let rs = r.parse(xml, true) as u32;
-    let re = r.error_code() as u32;
-    let c = CParser::new(None).unwrap();
-    let (cs, ce) = c.parse(xml, true);
-    assert!(
-        rs == cs && re == ce,
-        "MISMATCH {desc}: R s={rs} e={re}, C s={cs} e={ce}"
-    );
-}
-
-fn compare_incr(xml: &[u8], desc: &str) {
-    compare(xml, desc);
-    for split in 1..xml.len() {
-        let mut r = Parser::new(None).unwrap();
-        let r1 = r.parse(&xml[..split], false);
-        let rf = if r1 == XmlStatus::Ok {
-            r.parse(&xml[split..], true)
-        } else {
-            r1
-        };
-        let re = r.error_code();
-        let c = CParser::new(None).unwrap();
-        let (c1, _) = c.parse(&xml[..split], false);
-        let (cf, ce) = if c1 == 1 {
-            c.parse(&xml[split..], true)
-        } else {
-            (c1, c.parse(&xml[split..], true).1)
-        };
-        assert!(
-            rf as u32 == cf && re as u32 == ce,
-            "INCR {desc} @{split}: R s={} e={}, C s={cf} e={ce}",
-            rf as u32,
-            re as u32
-        );
-    }
-}
 
 // 1. stop() API — exercise without handler callback (can't call stop from inside handler
 // due to borrow rules, but can call before/after parsing)

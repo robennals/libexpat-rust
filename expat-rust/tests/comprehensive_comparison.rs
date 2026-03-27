@@ -1,50 +1,10 @@
 //! Comprehensive comparison tests: systematically generate XML inputs
 //! and compare Rust vs C parser behavior on each one.
+//!
+//! Every test compares full SAX event sequences (not just status codes).
 
-use expat_rust::xmlparse::Parser;
-use expat_sys::CParser;
-
-fn compare(xml: &[u8], desc: &str) {
-    let mut r_parser = Parser::new(None).unwrap();
-    let r_status = r_parser.parse(xml, true) as u32;
-    let r_error = r_parser.error_code() as u32;
-
-    let c_parser = CParser::new(None).unwrap();
-    let (c_status, c_error) = c_parser.parse(xml, true);
-
-    assert!(r_status == c_status && r_error == c_error,
-        "MISMATCH {desc}: Rust status={r_status} err={r_error}, C status={c_status} err={c_error}, input={:?}",
-        std::str::from_utf8(xml).unwrap_or("<binary>"));
-}
-
-fn compare_incremental(xml: &[u8], desc: &str) {
-    compare(xml, desc);
-    for split in 1..xml.len() {
-        let mut r_parser = Parser::new(None).unwrap();
-        let r1 = r_parser.parse(&xml[..split], false);
-        let r_final = if r1 == expat_rust::xmlparse::XmlStatus::Ok {
-            r_parser.parse(&xml[split..], true)
-        } else {
-            r1
-        };
-        let r_err = r_parser.error_code();
-
-        let c_parser = CParser::new(None).unwrap();
-        let (c1, _) = c_parser.parse(&xml[..split], false);
-        let (c_final, c_err) = if c1 == 1 {
-            c_parser.parse(&xml[split..], true)
-        } else {
-            (c1, c_parser.parse(&xml[split..], true).1)
-        };
-
-        assert!(
-            r_final as u32 == c_final && r_err as u32 == c_err,
-            "INCR MISMATCH {desc} split@{split}: Rust s={} e={}, C s={c_final} e={c_err}",
-            r_final as u32,
-            r_err as u32
-        );
-    }
-}
+mod sax_compare;
+use sax_compare::{compare, compare_incremental};
 
 // ======================== DTD Entity Storage & Expansion ========================
 #[test]

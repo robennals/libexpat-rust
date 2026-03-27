@@ -162,6 +162,18 @@ impl XmlError {
     }
 }
 
+/// Accounting mode for amplification attack detection.
+/// Determines which byte counter is updated when tracking token processing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum XmlAccount {
+    /// Bytes from the primary XML input (not entity expansion)
+    Direct,
+    /// Bytes from entity expansion
+    EntityExpansion,
+    /// Skip accounting (used for structural operations like attribute storage)
+    None,
+}
+
 /// Content type enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentType {
@@ -322,6 +334,13 @@ pub struct AttrInfo {
 pub struct Parser {
     /// Parse buffer for incremental parsing
     buffer: Vec<u8>,
+    /// Reparse deferral: number of bytes available when the last partial token
+    /// was encountered. On the next parse() call, we skip re-tokenization unless
+    /// the buffer has grown to at least 2x this size (or we're near a realloc).
+    /// This matches C libexpat's m_partialTokenBytesBefore heuristic, preventing
+    /// O(n²) re-scanning of long incomplete tokens (comments, PIs, attributes).
+    /// See C xmlparse.c callProcessor() lines 1258-1321.
+    partial_token_bytes_before: usize,
     /// Buffer for XML_GetBuffer/XML_ParseBuffer two-phase API
     get_buffer_data: Vec<u8>,
     /// Data remaining when parser was suspended (for resume)
@@ -451,6 +470,16 @@ pub struct Parser {
     billion_laughs_max_amplification: f32,
     /// Billion laughs: activation threshold in bytes (0 = use default)
     billion_laughs_activation_threshold: u64,
+    /// Accounting: bytes parsed from direct input (not entity expansion)
+    accounting_bytes_direct: u64,
+    /// Accounting: bytes parsed from entity expansion
+    accounting_bytes_indirect: u64,
+    /// Entity tracking: current entity nesting depth
+    entity_tracking_depth: u32,
+    /// Entity tracking: maximum nesting depth seen
+    entity_tracking_max_depth: u32,
+    /// Entity tracking: total entities opened
+    entity_tracking_count: u64,
     /// XML role state machine for prolog parsing
     prolog_state: XmlRoleState,
     /// Current element declaration name being processed
@@ -519,6 +548,7 @@ impl Parser {
     pub fn new(encoding: Option<&str>) -> Option<Parser> {
         Some(Parser {
             buffer: Vec::new(),
+            partial_token_bytes_before: 0,
             get_buffer_data: Vec::new(),
             suspended_data: Vec::new(),
             suspended_is_final: false,
@@ -539,7 +569,7 @@ impl Parser {
             hash_salt: 0,
             base_uri: None,
             param_entity_parsing: ParamEntityParsing::Never,
-            reparse_deferral_enabled: false,
+            reparse_deferral_enabled: true,
             tag_stack: Vec::new(),
             tag_triplet_flags: Vec::new(),
             seen_root: false,
@@ -582,6 +612,11 @@ impl Parser {
             is_subordinate: false,
             billion_laughs_max_amplification: 0.0,
             billion_laughs_activation_threshold: 0,
+            accounting_bytes_direct: 0,
+            accounting_bytes_indirect: 0,
+            entity_tracking_depth: 0,
+            entity_tracking_max_depth: 0,
+            entity_tracking_count: 0,
             prolog_state: XmlRoleState::new(),
             current_element_decl_name: None,
             content_model_stack: Vec::new(),
@@ -634,6 +669,7 @@ impl Parser {
 
         Some(Parser {
             buffer: Vec::new(),
+            partial_token_bytes_before: 0,
             get_buffer_data: Vec::new(),
             suspended_data: Vec::new(),
             suspended_is_final: false,
@@ -654,7 +690,7 @@ impl Parser {
             hash_salt: 0,
             base_uri: None,
             param_entity_parsing: ParamEntityParsing::Never,
-            reparse_deferral_enabled: false,
+            reparse_deferral_enabled: true,
             tag_stack: Vec::new(),
             tag_triplet_flags: Vec::new(),
             seen_root: false,
@@ -697,6 +733,11 @@ impl Parser {
             is_subordinate: false,
             billion_laughs_max_amplification: 0.0,
             billion_laughs_activation_threshold: 0,
+            accounting_bytes_direct: 0,
+            accounting_bytes_indirect: 0,
+            entity_tracking_depth: 0,
+            entity_tracking_max_depth: 0,
+            entity_tracking_count: 0,
             prolog_state: XmlRoleState::new(),
             current_element_decl_name: None,
             content_model_stack: Vec::new(),
@@ -790,6 +831,12 @@ impl Parser {
         }
         self.ns_triplets = false;
         self.content_start_tag_level = 0;
+        // Reset accounting state
+        self.accounting_bytes_direct = 0;
+        self.accounting_bytes_indirect = 0;
+        self.entity_tracking_depth = 0;
+        self.entity_tracking_max_depth = 0;
+        self.entity_tracking_count = 0;
         // Clear all handlers (matches C parserInit behavior)
         self.start_element_handler = None;
         self.end_element_handler = None;
@@ -819,7 +866,7 @@ impl Parser {
         true
     }
 
-    /// Run the current processor on the buffered data
+    /// Run the current processor on the buffered data.
     fn run_processor(&mut self) {
         // Take buffer once — matches C where parse() passes data to the processor
         let mut data = std::mem::take(&mut self.buffer);
@@ -997,9 +1044,26 @@ impl Parser {
                 continue;
             }
 
-            // Buffer remaining data
+            // Buffer remaining data — avoid copying when no progress was made.
+            //
+            // In C libexpat, leftover data stays in-place (pointer arithmetic).
+            // In Rust, we must copy the leftover into self.buffer for the next
+            // parse() call. When no progress was made (next_pos == 0), we can
+            // move the entire Vec back in O(1) — this is the key optimization
+            // for long incomplete tokens. When progress was made, we copy the
+            // remainder (O(remaining)) and return the full data for position
+            // tracking.
             if next_pos < end {
-                self.buffer = data[next_pos..end].to_vec();
+                if next_pos == 0 && end == data.len() {
+                    // No data consumed — move entire Vec back (O(1) instead of O(n)).
+                    // No events were generated, so parse_data can be empty.
+                    self.buffer = data;
+                    return;
+                } else {
+                    // Some data consumed or end < data.len() — copy the remainder.
+                    // Return full data for position tracking (events were generated).
+                    self.buffer = data[next_pos..end].to_vec();
+                }
             }
 
             // Set event_pos for position tracking
@@ -1412,9 +1476,8 @@ impl Parser {
                     // Check if this is a partial UTF-8 character at the end
                     if Self::is_partial_utf8_sequence(data, err_pos) {
                         if have_more {
-                            // Save the remaining data for next parse call
-                            self.buffer = data[err_pos..].to_vec();
-                            return (XmlError::None, end);
+                            // Signal caller to save remaining data (run_processor handles it)
+                            return (XmlError::None, err_pos);
                         }
                         // Final buffer with partial char → PartialChar error (C: XML_ERROR_PARTIAL_CHAR)
                         return (XmlError::PartialChar, pos);
@@ -1434,8 +1497,7 @@ impl Parser {
                 XmlTok::Bom => {
                     // BOM — skip it and continue
                     if next == end && have_more {
-                        self.buffer = data[next..].to_vec();
-                        return (XmlError::None, end);
+                        return (XmlError::None, next);
                     }
                     pos = next;
                     continue;
@@ -1447,24 +1509,21 @@ impl Parser {
                 XmlTok::Partial => {
                     // Incomplete token — need more data
                     if have_more {
-                        self.buffer = data[pos..].to_vec();
-                        return (XmlError::None, end);
+                        return (XmlError::None, pos);
                     }
                     return (XmlError::UnclosedToken, pos);
                 }
                 XmlTok::PartialChar => {
                     // Incomplete UTF-8 character
                     if have_more {
-                        self.buffer = data[pos..].to_vec();
-                        return (XmlError::None, end);
+                        return (XmlError::None, pos);
                     }
                     return (XmlError::PartialChar, pos);
                 }
                 XmlTok::TrailingCr => {
                     // Trailing CR in prolog
                     if have_more {
-                        self.buffer = data[pos..].to_vec();
-                        return (XmlError::None, end);
+                        return (XmlError::None, pos);
                     }
                     // Final buffer with trailing CR: convert to newline and continue
                     // This handles DTD content that ends with \r followed by EOF
@@ -1494,8 +1553,7 @@ impl Parser {
                                 | XmlTok::CloseBracket
                         )
                     {
-                        self.buffer = data[pos..].to_vec();
-                        return (XmlError::None, end);
+                        return (XmlError::None, pos);
                     }
 
                     // Convert token type to role token type
@@ -2370,8 +2428,11 @@ impl Parser {
                 if let (Some(ref elem), Some(ref attr)) =
                     (&self.current_attlist_element, &self.current_attlist_attr)
                 {
-                    let entities = self.dtd.borrow().internal_entities.clone();
-                    let value = Self::normalize_attribute_value(tok_text, &entities);
+                    let dtd_ref = self.dtd.borrow();
+                    let entities = dtd_ref.internal_entities.clone();
+                    let skip_unknown = dtd_ref.has_param_entity_refs && !dtd_ref.standalone;
+                    drop(dtd_ref);
+                    let value = Self::normalize_attribute_value(tok_text, &entities, skip_unknown);
                     {
                         let mut dtd = self.dtd.borrow_mut();
                         let defaults = dtd.attlist_defaults.entry(elem.clone()).or_default();
@@ -2402,8 +2463,11 @@ impl Parser {
                 if let (Some(ref elem), Some(ref attr)) =
                     (&self.current_attlist_element, &self.current_attlist_attr)
                 {
-                    let entities = self.dtd.borrow().internal_entities.clone();
-                    let value = Self::normalize_attribute_value(tok_text, &entities);
+                    let dtd_ref = self.dtd.borrow();
+                    let entities = dtd_ref.internal_entities.clone();
+                    let skip_unknown = dtd_ref.has_param_entity_refs && !dtd_ref.standalone;
+                    drop(dtd_ref);
+                    let value = Self::normalize_attribute_value(tok_text, &entities, skip_unknown);
                     {
                         let mut dtd = self.dtd.borrow_mut();
                         let defaults = dtd.attlist_defaults.entry(elem.clone()).or_default();
@@ -2624,9 +2688,11 @@ impl Parser {
                     }
                 }
             }
-            _ => {
-                // Other roles — ignore for now
-                (XmlError::None, false)
+            xmlrole::Role::None => {
+                // C: XML_ROLE_NONE — suppress default handler for BOM tokens,
+                // otherwise let default handler run
+                let suppress_default = matches!(tok, XmlTok::Bom);
+                (XmlError::None, suppress_default)
             }
         }
     }
@@ -2883,6 +2949,9 @@ impl Parser {
         // Pass 2: cleanup — entity is fully processed
         let closed = self.open_internal_entities.pop().unwrap();
 
+        // Track entity closing for amplification detection
+        self.entity_tracking_on_close();
+
         // Mark entity as closed
         if closed.is_param {
             if let Some(pe) = self
@@ -2946,6 +3015,17 @@ impl Parser {
             self.open_entities.insert(entity_name.to_string());
         }
 
+        // Track entity opening for amplification detection
+        self.entity_tracking_on_open();
+
+        // Account for entity expansion bytes (indirect — these bytes come from
+        // expanding an entity, not from direct input)
+        if !entity_text.is_empty()
+            && !self.accounting_diff_tolerated(entity_text.len(), XmlAccount::EntityExpansion)
+        {
+            return XmlError::AmplificationLimitBreach;
+        }
+
         self.open_internal_entities.push(open);
         self.processor = Processor::InternalEntity;
         self.reenter = true;
@@ -2955,7 +3035,7 @@ impl Parser {
     /// Epilog processor — corresponds to C epilogProcessor()
     /// After root element, only whitespace, comments, and PIs are allowed
     fn epilog_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
+        let mut data = std::mem::take(&mut self.buffer);
         let have_more = !self.is_final;
         let enc = xmltok::Utf8Encoding;
         let len = data.len();
@@ -2982,7 +3062,11 @@ impl Parser {
                     }
                     XmlTok::Partial | XmlTok::TrailingCr => {
                         if have_more {
-                            self.buffer = data[pos..].to_vec();
+                            // Efficiently save remaining data — reuse allocation
+                            if pos > 0 {
+                                data.drain(..pos);
+                            }
+                            self.buffer = data;
                             return;
                         }
                         self.error_code = XmlError::UnclosedToken;
@@ -2990,7 +3074,10 @@ impl Parser {
                     }
                     XmlTok::PartialChar => {
                         if have_more {
-                            self.buffer = data[pos..].to_vec();
+                            if pos > 0 {
+                                data.drain(..pos);
+                            }
+                            self.buffer = data;
                             return;
                         }
                         self.error_code = XmlError::PartialChar;
@@ -3009,7 +3096,10 @@ impl Parser {
                     // Check if this is a partial UTF-8 character at the end
                     if Self::is_partial_utf8_sequence(&data, err_pos) {
                         if have_more {
-                            self.buffer = data[err_pos..].to_vec();
+                            if err_pos > 0 {
+                                data.drain(..err_pos);
+                            }
+                            self.buffer = data;
                             return;
                         }
                         // Final buffer with partial char — matches C epilogProcessor
@@ -3747,14 +3837,12 @@ impl Parser {
                     return (XmlError::UnclosedCdataSection, pos);
                 }
                 XmlTok::TrailingRsqb => {
-                    // Trailing ]] — need more data to determine if ]]>
+                    // Trailing ] or ]] — need more data to determine if ]]>
                     if have_more {
                         return (XmlError::None, pos);
                     }
-                    // Final buffer — deliver the ]] as character data
-                    if let Some(handler) = &mut self.character_data_handler {
-                        handler(&data[pos..next]);
-                    }
+                    // Final buffer — C does NOT deliver trailing ] in CDATA.
+                    // The next iteration will return None → UnclosedCdataSection.
                 }
                 _ => {}
             }
@@ -3985,8 +4073,11 @@ impl Parser {
                 .to_string();
             let raw_value = &data[attr.value_ptr..attr.value_end];
             // Always normalize: expand refs, normalize \t \n \r → space
+            let dtd = self.dtd.borrow();
+            let skip_unknown = dtd.has_param_entity_refs && !dtd.standalone;
             let value =
-                Self::normalize_attribute_value(raw_value, &self.dtd.borrow().internal_entities);
+                Self::normalize_attribute_value(raw_value, &dtd.internal_entities, skip_unknown);
+            drop(dtd);
             if value.contains('\x00') {
                 return Err(XmlError::RecursiveEntityRef);
             }
@@ -4050,6 +4141,7 @@ impl Parser {
     fn normalize_attribute_value(
         raw: &[u8],
         entities: &std::collections::HashMap<String, String>,
+        skip_unknown: bool,
     ) -> String {
         let mut result = Vec::with_capacity(raw.len());
         let mut i = 0;
@@ -4105,12 +4197,16 @@ impl Parser {
                                         let expanded = Self::normalize_attribute_value(
                                             value.as_bytes(),
                                             entities,
+                                            skip_unknown,
                                         );
                                         result.extend_from_slice(expanded.as_bytes());
-                                    } else {
-                                        // Unknown entity — keep as-is
+                                    } else if !skip_unknown {
+                                        // Unknown entity — keep as-is (only when not skipping)
                                         result.extend_from_slice(&raw[i..i + 2 + semi_offset]);
                                     }
+                                    // When skip_unknown is true, unknown entities are
+                                    // silently dropped (C behavior when external subset
+                                    // may define them)
                                 }
                             }
                         }
@@ -4149,6 +4245,12 @@ impl Parser {
         start: usize,
         end: usize,
     ) {
+        if self.processing_instruction_handler.is_none() {
+            if self.default_handler.is_some() {
+                self.report_default(enc, data, start, end);
+            }
+            return;
+        }
         let minbpc = enc.min_bytes_per_char();
         // PI format: <?target data?>
         let target_start = start + minbpc * 2; // skip '<?'
@@ -4160,21 +4262,47 @@ impl Parser {
         let mut data_start = target_start + target_len;
         let pi_end = end - minbpc * 2; // before '?>'
         data_start = xmltok_impl::skip_s(enc, data, data_start);
-        let pi_data = if data_start < pi_end {
-            std::str::from_utf8(&data[data_start..pi_end]).unwrap_or("")
+        let pi_data_raw = if data_start < pi_end {
+            &data[data_start..pi_end]
         } else {
-            ""
+            &[]
         };
+        let normalized = Self::normalize_lines(pi_data_raw);
+        let pi_data = std::str::from_utf8(&normalized).unwrap_or("");
 
         if let Some(handler) = &mut self.processing_instruction_handler {
             handler(target, pi_data);
-        } else if let Some(handler) = &mut self.default_handler {
-            handler(&data[start..end]);
         }
+    }
+
+    /// Normalize line endings in text: \r\n -> \n, bare \r -> \n
+    /// Corresponds to C normalizeLines()
+    fn normalize_lines(input: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(input.len());
+        let mut i = 0;
+        while i < input.len() {
+            if input[i] == b'\r' {
+                out.push(b'\n');
+                // Skip \n after \r (CRLF -> single LF)
+                if i + 1 < input.len() && input[i + 1] == b'\n' {
+                    i += 1;
+                }
+            } else {
+                out.push(input[i]);
+            }
+            i += 1;
+        }
+        out
     }
 
     /// Report a comment — corresponds to C reportComment()
     fn report_comment<E: Encoding>(&mut self, enc: &E, data: &[u8], start: usize, end: usize) {
+        if self.comment_handler.is_none() {
+            if self.default_handler.is_some() {
+                self.report_default(enc, data, start, end);
+            }
+            return;
+        }
         let minbpc = enc.min_bytes_per_char();
         // Comment format: <!--data-->
         let comment_start = start + minbpc * 4; // skip '<!--'
@@ -4184,10 +4312,9 @@ impl Parser {
         } else {
             &[]
         };
+        let normalized = Self::normalize_lines(comment_data);
         if let Some(handler) = &mut self.comment_handler {
-            handler(comment_data);
-        } else if let Some(handler) = &mut self.default_handler {
-            handler(&data[start..end]);
+            handler(&normalized);
         }
     }
 
@@ -4693,6 +4820,23 @@ impl Parser {
             self.parsing_state = ParsingState::Parsing;
         }
 
+        // Amplification tracking: account for bytes entering the parser.
+        // Root parser bytes are "direct"; subordinate (child) parser bytes are "indirect".
+        if !data.is_empty() {
+            let is_direct = !self.is_subordinate;
+            if !self.accounting_diff_tolerated(
+                data.len(),
+                if is_direct {
+                    XmlAccount::Direct
+                } else {
+                    XmlAccount::EntityExpansion
+                },
+            ) {
+                self.error_code = XmlError::AmplificationLimitBreach;
+                return XmlStatus::Error;
+            }
+        }
+
         // Store the is_final flag
         self.is_final = is_final;
 
@@ -4882,14 +5026,53 @@ impl Parser {
             self.buffer.extend_from_slice(data);
         }
 
-        // Store parse data and base position for lazy error position calculation
-        // (corresponds to C's m_positionPtr / m_eventPtr pattern)
+        // Reparse deferral: if a previous parse() call found an incomplete token,
+        // skip re-tokenization until the buffer has grown significantly (2x).
+        // This matches C libexpat's callProcessor() heuristic (xmlparse.c:1258-1321)
+        // and prevents O(n²) behavior for long incomplete tokens like comments, PIs,
+        // and attribute values.
+        //
+        // Without this, each parse() call would clone the buffer (for position
+        // tracking) and re-scan the entire accumulated data through the tokenizer,
+        // both O(buffer_size) per call → O(n²) total.
+        if self.reparse_deferral_enabled && self.partial_token_bytes_before > 0 && !self.is_final {
+            let have_now = self.buffer.len();
+            let had_before = self.partial_token_bytes_before;
+            // Only re-parse if data has at least doubled since last attempt
+            if have_now < 2 * had_before {
+                return XmlStatus::Ok;
+            }
+        }
+
+        // Store parse data and base position for lazy error position calculation.
+        // The clone is needed because handlers inside run_processor() may call
+        // current_line_number() etc., which read parse_data. The reparse deferral
+        // above ensures this clone only runs when the tokenizer actually needs to
+        // process data (not on every chunk of a long token).
+        let buf_len_before = self.buffer.len();
         self.parse_data = self.buffer.clone();
         self.position_pos = 0;
         self.event_pos = self.buffer.len(); // default: end of buffer
 
         // Run the current processor
         self.run_processor();
+
+        // Reparse deferral tracking: if the processor consumed nothing (buffer
+        // still has data and no error), remember how much data was available.
+        // On the next parse() call, we'll skip re-tokenization until the buffer
+        // has grown significantly. This matches C's m_partialTokenBytesBefore.
+        if self.error_code == XmlError::None && !self.buffer.is_empty() {
+            let consumed = buf_len_before.saturating_sub(self.buffer.len());
+            if consumed == 0 {
+                // No progress — remember buffer size for deferral
+                self.partial_token_bytes_before = buf_len_before;
+            } else {
+                // Some progress — reset deferral
+                self.partial_token_bytes_before = 0;
+            }
+        } else {
+            self.partial_token_bytes_before = 0;
+        }
 
         // Reset event byte count and data (only valid during handler callbacks)
         self.event_cur_byte_count = 0;
@@ -4960,6 +5143,13 @@ impl Parser {
             // Mark position as fully up-to-date so lazy getters just return stored values
             self.event_pos = self.position_pos;
         }
+
+        // Free parse_data now that position tracking is complete.
+        // This prevents holding a full copy of the buffer between parse() calls.
+        // (original_chunk is NOT cleared here — it's used by current_byte_index()
+        // and get_input_context() which may be called after parse() returns.)
+        self.parse_data.clear();
+        self.parse_data.shrink_to_fit();
 
         // Track total byte offset (for XML_GetCurrentByteIndex)
         self.byte_offset += data.len() as u64;
@@ -5509,9 +5699,6 @@ impl Parser {
         if self.parsing_state == ParsingState::Initialized {
             return -1; // Before any parsing, C returns -1
         }
-        if self.parse_data.is_empty() || self.event_pos > self.parse_data.len() {
-            return -1;
-        }
 
         let utf8_event_pos = self.event_pos;
 
@@ -5918,7 +6105,16 @@ impl Parser {
         &mut self,
         factor: f32,
     ) -> bool {
-        if factor < 1.0 && factor != 0.0 {
+        // C: reject subordinate (child) parsers — only root parser can set limits
+        if self.is_subordinate {
+            return false;
+        }
+        // Reject NaN and values in range (0, 1.0)
+        if factor.is_nan() || (factor > 0.0 && factor < 1.0) {
+            return false;
+        }
+        // Reject negative values
+        if factor < 0.0 {
             return false;
         }
         self.billion_laughs_max_amplification = factor;
@@ -5933,8 +6129,82 @@ impl Parser {
         &mut self,
         threshold: u64,
     ) -> bool {
+        // C: reject subordinate (child) parsers
+        if self.is_subordinate {
+            return false;
+        }
         self.billion_laughs_activation_threshold = threshold;
         true
+    }
+
+    /// Check if the amplification from processing bytes between `before` and `after`
+    /// is within acceptable limits. Returns true if tolerated, false if amplification
+    /// limit is breached.
+    ///
+    /// This is the core of billion laughs attack protection. It counts bytes processed
+    /// from direct input vs entity expansion, and checks whether the expansion ratio
+    /// exceeds the configured maximum amplification factor.
+    ///
+    /// Equivalent to accountingDiffTolerated in C libexpat.
+    fn accounting_diff_tolerated(&mut self, bytes_consumed: usize, account: XmlAccount) -> bool {
+        if account == XmlAccount::None {
+            return true;
+        }
+
+        let bytes_more = bytes_consumed as u64;
+
+        // Determine if this is direct input or entity expansion
+        let is_direct = account == XmlAccount::Direct && !self.is_subordinate;
+
+        if is_direct {
+            self.accounting_bytes_direct = self.accounting_bytes_direct.saturating_add(bytes_more);
+        } else {
+            self.accounting_bytes_indirect =
+                self.accounting_bytes_indirect.saturating_add(bytes_more);
+        }
+
+        // Check amplification
+        let total = self.accounting_bytes_direct + self.accounting_bytes_indirect;
+        let threshold = if self.billion_laughs_activation_threshold > 0 {
+            self.billion_laughs_activation_threshold
+        } else {
+            8_388_608 // Default: 8 MB
+        };
+
+        if total < threshold {
+            return true; // Below threshold, always tolerated
+        }
+
+        if self.accounting_bytes_direct == 0 {
+            return false; // Infinite amplification
+        }
+
+        let max_factor = if self.billion_laughs_max_amplification > 0.0 {
+            self.billion_laughs_max_amplification
+        } else {
+            100.0 // Default: 100x
+        };
+
+        let amplification = total as f64 / self.accounting_bytes_direct as f64;
+        amplification <= max_factor as f64
+    }
+
+    /// Track entity opening for recursion detection.
+    /// Equivalent to entityTrackingOnOpen in C libexpat.
+    fn entity_tracking_on_open(&mut self) {
+        self.entity_tracking_count += 1;
+        self.entity_tracking_depth += 1;
+        if self.entity_tracking_depth > self.entity_tracking_max_depth {
+            self.entity_tracking_max_depth = self.entity_tracking_depth;
+        }
+    }
+
+    /// Track entity closing.
+    /// Equivalent to entityTrackingOnClose in C libexpat.
+    fn entity_tracking_on_close(&mut self) {
+        if self.entity_tracking_depth > 0 {
+            self.entity_tracking_depth -= 1;
+        }
     }
 
     /// Set the alloc tracker maximum amplification
@@ -5981,6 +6251,9 @@ impl Parser {
             child.dtd = Rc::new(RefCell::new(self.dtd.borrow().clone()));
         }
         child.param_entity_parsing = self.param_entity_parsing;
+        // Inherit amplification protection settings from parent
+        child.billion_laughs_max_amplification = self.billion_laughs_max_amplification;
+        child.billion_laughs_activation_threshold = self.billion_laughs_activation_threshold;
         // Foreign DTD subset (empty context) is treated as document entity
         // General entities (non-empty context) are not
         child.prolog_state.document_entity = context.is_empty();

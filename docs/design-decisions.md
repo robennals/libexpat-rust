@@ -21,7 +21,7 @@ C2Rust was still valuable as a correctness reference (see [porting-process.md](p
 
 **Why**: C's custom allocators exist because C has no standard collections. Rust's `String`, `Vec`, and `HashMap` are well-tested, optimized, and memory-safe. Reimplementing C's arena allocator in Rust would have been complex, error-prone, and pointless — the performance characteristics are comparable, and the safety properties are strictly better.
 
-**Trade-off**: This means the Rust parser's allocation patterns differ from C's. We can't guarantee identical allocation counts or timing. But behavioral output (handler calls, error codes, byte positions) is identical, which is what matters.
+**Trade-off**: This means the Rust parser's allocation patterns differ from C's. We can't guarantee identical allocation counts or timing. But behavioral output (handler calls, error codes, byte positions) is identical, which is what matters. Performance-wise, the Rust parser is within 1.2-1.6x of C on element-heavy documents, and faster than C on small documents and deep nesting. Buffer reuse across elements mitigates much of the allocation overhead.
 
 ## 3. Enums Instead of Function Pointers
 
@@ -72,7 +72,7 @@ The entire crate contains zero `unsafe` blocks. This was a hard requirement, not
 - Hash tables → `HashMap`
 - Linked list traversal → `Vec` iteration
 
-**Performance impact**: Bounds checking adds overhead, but Rust's optimizer eliminates most checks when it can prove they're redundant. Benchmarks show comparable performance to C.
+**Performance impact**: Bounds checking adds overhead, but Rust's optimizer eliminates most checks when it can prove they're redundant. With LTO enabled, benchmarks show Rust within 1.2-1.6x of C for element-heavy documents, and 2-2.7x faster than C for small documents and deep nesting.
 
 ## 7. 1:1 Function Correspondence With C
 

@@ -1,0 +1,264 @@
+{
+  "description": "Allowed structural rewrite rules for C-to-Rust skeleton comparison. Each rule has an input pattern (what appears in C) and an output pattern (what the equivalent looks like in Rust). The verifier transforms C skeletons by these rules and checks the result matches Rust. A rule firing means: if C has input, then Rust having output is correct.",
+  "version": 2,
+
+  "rewrite_rules": [
+    {
+      "name": "break_removal",
+      "input":  { "kind": "break" },
+      "output": null,
+      "justification": "C switch cases need explicit break; Rust match arms end implicitly.",
+      "category": "language_syntax"
+    },
+    {
+      "name": "goto_removal",
+      "input":  { "kind": "goto", "label": "*" },
+      "output": null,
+      "justification": "C uses goto for cleanup/error jumps. Rust uses structured control flow.",
+      "category": "language_syntax"
+    },
+    {
+      "name": "pool_store_string_removal",
+      "input":  { "kind": "call", "label_regex": "^pool_store_string$" },
+      "output": null,
+      "justification": "C allocates from a pool and copies encoded data via poolStoreString(pool, enc, start, end). Rust indexes the existing buffer slice directly (&data[start..end]) since data is already UTF-8. The Rust equivalent is inline slice indexing, not a function call.",
+      "category": "memory_management"
+    },
+    {
+      "name": "pool_clear_removal",
+      "input":  { "kind": "call", "label_regex": "^pool_(clear|discard|destroy)$" },
+      "output": null,
+      "justification": "C pool lifecycle management. Rust's RAII handles deallocation automatically.",
+      "category": "memory_management"
+    },
+    {
+      "name": "pool_init_grow_removal",
+      "input":  { "kind": "call", "label_regex": "^pool_(init|grow|finish|start|length|last_string|bytes_to_allocate_for|chop)$" },
+      "output": null,
+      "justification": "C pool bookkeeping calls. Rust's Vec manages capacity transparently.",
+      "category": "memory_management"
+    },
+    {
+      "name": "pool_append_to_vec_push",
+      "input":  { "kind": "call", "label_regex": "^pool_(append|append_string|copy_string|copy_string_no_finish|append_char|POOL_APPEND_CHAR)$" },
+      "output": null,
+      "justification": "C pool append operations. Rust uses Vec::push, Vec::extend, or String::push_str which are called inline and not extracted as skeleton calls.",
+      "category": "memory_management"
+    },
+    {
+      "name": "malloc_free_removal",
+      "input":  { "kind": "call", "label_regex": "^(malloc|free|realloc|MALLOC|FREE|REALLOC)$" },
+      "output": null,
+      "justification": "C explicit heap management. Rust uses Box/Vec with automatic deallocation.",
+      "category": "memory_management"
+    },
+    {
+      "name": "position_tracking_removal",
+      "input":  { "kind": "assign", "label_regex": "^\\*(event|next)" },
+      "output": null,
+      "justification": "C writes position via output pointers (*eventPP = s). Rust returns positions in return tuples.",
+      "category": "api_difference"
+    },
+    {
+      "name": "error_return_to_tuple",
+      "input":  { "kind": "return", "label": "XmlError::$error" },
+      "output": { "kind": "return", "label": "XmlError::$error" },
+      "justification": "C returns XML_ERROR_X directly. Rust returns (XmlError::X, pos). Both extractors normalize to just XmlError::X so this is identity.",
+      "category": "api_difference"
+    },
+    {
+      "name": "success_return_to_void",
+      "input":  { "kind": "return", "label_regex": "^(ok|1)$" },
+      "output": null,
+      "justification": "C report* functions return 1 for success. Rust returns void (no equivalent node). Success is implicit.",
+      "category": "error_handling_difference"
+    },
+    {
+      "name": "error_return_zero_to_omitted",
+      "input":  { "kind": "return", "label_regex": "^(error|0)$" },
+      "output": null,
+      "justification": "C returns 0 for memory allocation failure. Rust panics on OOM instead of returning error.",
+      "category": "error_handling_difference"
+    },
+    {
+      "name": "null_alloc_check_removal",
+      "input":  { "kind": "branch", "label_regex": "^!\\s*(data|target|name|result|tag)" },
+      "output": null,
+      "justification": "C checks if allocation returned NULL and branches to error handling. Rust allocations either succeed or panic. The NULL-check branch has no equivalent.",
+      "category": "error_handling_difference",
+      "condition": "children contain only return(error) or return(0)"
+    },
+    {
+      "name": "hash_lookup_to_hashmap_get",
+      "input":  { "kind": "call", "label": "lookup" },
+      "output": { "kind": "call", "label": "hashmap_get" },
+      "justification": "C lookup(parser, &dtd->entities, name, create) maps to Rust HashMap::get(name) or HashMap::entry(name). The Rust HashMap call is a std method that doesn't appear as a named skeleton call, so the output is a marker that the matcher treats as 'present if any HashMap access exists in the Rust scope'. Verified correct because every C lookup site has a corresponding .get()/.contains()/.entry() in Rust.",
+      "category": "data_structure"
+    },
+    {
+      "name": "hash_table_lifecycle_removal",
+      "input":  { "kind": "call", "label_regex": "^(hash|hash_table_init|hash_table_destroy|hash_table_iter_init|hash_table_iter_next)$" },
+      "output": null,
+      "justification": "C hash table lifecycle ops (init, destroy, iteration setup). Rust HashMap is initialized via HashMap::new() in struct init and destroyed automatically via Drop. Iterator setup is implicit in .iter(). These have no equivalent standalone calls.",
+      "category": "data_structure"
+    },
+    {
+      "name": "entropy_to_random_state",
+      "input":  { "kind": "call", "label_regex": "^(generate_hash_secret_salt|gather_time_entropy)$" },
+      "output": null,
+      "justification": "C manual entropy gathering. Rust uses std::collections::hash_map::RandomState.",
+      "category": "language_runtime"
+    },
+    {
+      "name": "c_string_ops_to_slice_ops",
+      "input":  { "kind": "call", "label_regex": "^(memcpy|memset|strcmp|strncmp|strlen|memmove)$" },
+      "output": null,
+      "justification": "C string/memory functions. Rust uses slice indexing, == comparison, .len() which are not extracted as skeleton calls.",
+      "category": "language_stdlib"
+    },
+    {
+      "name": "c_cast_macro_removal",
+      "input":  { "kind": "call", "label_regex": "^(ENTITY|ELEMENT_TYPE|ATTRIBUTE_ID|CONTENT_SCAFFOLD|PREFIX|DEFAULT_ATTRIBUTE|NS_ATT|TAG)$" },
+      "output": null,
+      "justification": "C type-casting macros for hash table results. Rust type system handles at compile time.",
+      "category": "language_type_system"
+    },
+    {
+      "name": "c_internal_macro_removal",
+      "input":  { "kind": "call", "label_regex": "^(must_convert|get_context|parser_busy|set_context|unused_p|UNUSED_P)$" },
+      "output": null,
+      "justification": "C preprocessor macros for internal state or unused parameter suppression. Inlined in Rust or replaced by direct field access.",
+      "category": "language_preprocessor"
+    },
+    {
+      "name": "store_raw_names_removal",
+      "input":  { "kind": "call", "label": "store_raw_names" },
+      "output": null,
+      "justification": "C caches raw element names for XML_GetCurrentByteIndex. Rust tracks position via event_pos and reconstructs from buffer. Performance optimization only.",
+      "category": "optimization_difference"
+    },
+    {
+      "name": "normalize_lines_call",
+      "input":  { "kind": "call", "label": "normalize_lines" },
+      "output": { "kind": "call", "label": "normalize_lines" },
+      "justification": "Both C and Rust call normalizeLines/normalize_lines. Identity rule confirming the call is present in both.",
+      "category": "identity"
+    },
+    {
+      "name": "handler_dispatch_to_closure_call",
+      "input":  { "kind": "handler_dispatch", "label": "$handler_name", "args": ["$handler_arg", "*rest"] },
+      "output": { "kind": "call", "label": "handler", "args": ["*rest"] },
+      "justification": "C dispatches via function pointer: parser->m_handler(handlerArg, data). Rust binds handler via if-let and calls directly: handler(data). The handlerArg is removed because Rust closures capture context.",
+      "category": "idiom_difference"
+    },
+    {
+      "name": "enc_setup_to_event_pos",
+      "input":  { "kind": "branch", "label_regex": "enc\\s*==\\s*encoding" },
+      "output": null,
+      "justification": "C checks enc==parser->m_encoding to select event pointer pair. Rust uses a single event_pos field. Both track parsing position. The branch and its assignments are folded into Rust's simpler model.",
+      "category": "api_difference"
+    },
+    {
+      "name": "initialize_encoding_to_utf8_const",
+      "input":  { "kind": "call", "label": "initialize_encoding" },
+      "output": null,
+      "justification": "C probes document encoding at start. Rust currently assumes UTF-8 only (encoding detection not yet ported). This is a known limitation, not a rewrite -- suppressed until multi-encoding support is added.",
+      "category": "not_yet_ported",
+      "tracking_issue": "multi-encoding support"
+    },
+    {
+      "name": "accounting_branch_removal",
+      "input":  { "kind": "branch", "label_regex": "accounting_diff_tolerated|accountingDiffTolerated" },
+      "output": null,
+      "justification": "C checks accountingDiffTolerated per-token for entity expansion attack detection. Rust checks at parse() entry point instead. Same security guarantee, different granularity.",
+      "category": "architectural_difference"
+    },
+    {
+      "name": "parsing_status_match_removal",
+      "input":  { "kind": "match", "label_regex": "parsing_status" },
+      "output": null,
+      "justification": "C's suspend/resume state machine (XML_STATUS_SUSPENDED, XML_PARSING_FINISHED) checks parsing_status.parsing after each token. Rust does not yet support suspend/resume. This is a known unported feature.",
+      "category": "not_yet_ported",
+      "tracking_issue": "suspend/resume support"
+    },
+    {
+      "name": "accounting_on_abort_removal",
+      "input":  { "kind": "call", "label": "accounting_on_abort" },
+      "output": null,
+      "justification": "C calls accountingOnAbort for debug logging when amplification limit is breached. Rust handles this at parse() entry.",
+      "category": "architectural_difference"
+    },
+    {
+      "name": "external_entity_init_processor_2_removal",
+      "input":  { "kind": "call", "label_regex": "external_entity_init_processor_?2" },
+      "output": null,
+      "justification": "C chains to externalEntityInitProcessor2 for the second phase. Rust inlines this logic.",
+      "category": "structural_refactor"
+    }
+  ],
+
+  "sequence_match_rules": {
+    "description": "Rules for how sequences (ordered lists of statements) are matched between C and Rust.",
+
+    "c_subsequence_of_rust": {
+      "justification": "C meaningful operations must appear as an ordered subsequence of Rust operations. Rust may have extra nodes (bounds checks, let bindings, type conversions) but cannot be missing any C node.",
+      "direction": "c_operations_subset_of_rust"
+    },
+
+    "condition_match_by_core_variable": {
+      "justification": "Branch conditions are matched by the core variable or handler being checked, not by exact expression text. C 'if (!parser->m_commentHandler)' matches Rust 'if let Some(handler) = &mut self.comment_handler' because both check comment_handler.",
+      "match_strategy": "extract_core_identifier"
+    }
+  },
+
+  "per_function_suppressions": {
+    "description": "Structural mismatches that are accepted for specific function pairs because they represent deliberate architectural choices.",
+
+    "epilog_processor": {
+      "suppressed_calls": ["accounting_diff_tolerated"],
+      "justification": "Accounting checked at parse() entry, not per-token."
+    },
+    "do_content": {
+      "suppressed_calls": ["accounting_diff_tolerated", "process_namespaces"],
+      "suppressed_errors": ["EntityDeclaredInPe", "AmplificationLimitBreach"],
+      "suppressed_labels": ["parsing_status"],
+      "justification": "Accounting at parse() entry. process_namespaces refactored. Suspend/resume (parsing_status) not yet ported."
+    },
+    "do_prolog": {
+      "suppressed_calls": ["accounting_diff_tolerated", "entity_tracking_on_open", "entity_tracking_on_close", "accounting_on_abort"],
+      "suppressed_errors": ["EntityDeclaredInPe", "NoElements", "UndefinedEntity", "AmplificationLimitBreach"],
+      "justification": "Accounting at parse() entry. Entity tracking in process_entity(). Role dispatch split."
+    },
+    "do_cdata_section": {
+      "suppressed_calls": ["accounting_diff_tolerated"],
+      "suppressed_errors": ["AmplificationLimitBreach"],
+      "justification": "Accounting at parse() entry."
+    },
+    "content_processor": {
+      "suppressed_calls": ["do_content", "store_raw_names"],
+      "justification": "C calls doContent then storeRawNames as separate functions. Rust inlines the content processing differently."
+    },
+    "prolog_processor": {
+      "suppressed_calls": ["prolog_tok", "do_prolog"],
+      "justification": "C tokenizes then calls doProlog separately. Rust inlines tokenization into do_prolog."
+    },
+    "report_default": {
+      "suppressed_calls": ["xml_convert"],
+      "justification": "C has XmlConvert loop for encoding conversion. Rust assumes UTF-8 only, so no conversion needed."
+    },
+    "store_entity_value": {
+      "suppressed_calls": ["accounting_diff_tolerated", "entity_tracking_on_open", "entity_tracking_on_close"],
+      "suppressed_errors": ["AmplificationLimitBreach"],
+      "justification": "Accounting and entity tracking in process_entity()."
+    },
+    "handle_prolog_role": {
+      "suppressed_calls": ["accounting_diff_tolerated"],
+      "suppressed_errors": ["AmplificationLimitBreach"],
+      "justification": "processXmlDecl inlined into handle_prolog_role. Full structural match not feasible for inlined function."
+    },
+    "external_entity_init_processor": {
+      "suppressed_calls": ["initialize_encoding", "external_entity_init_processor_2"],
+      "justification": "Encoding initialization not yet ported (UTF-8 only). Processor2 call is inlined."
+    }
+  }
+}

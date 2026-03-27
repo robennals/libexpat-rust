@@ -1,5 +1,9 @@
 //! Comparison tests: run the same XML through both the Rust port and the C library
 //! to verify behavioral equivalence.
+//!
+//! Every test compares full SAX event sequences (not just status codes).
+
+mod sax_compare;
 
 use expat_rust::xmlparse::{Parser, XmlError, XmlStatus};
 use expat_sys::CParser;
@@ -39,8 +43,12 @@ fn rust_error_to_u32(e: XmlError) -> u32 {
     e as u32
 }
 
-/// Compare both parsers on the same input
+/// Compare both parsers on the same input: full SAX events + line/col positions
 fn compare_parse(xml: &[u8], description: &str) {
+    // Full SAX event comparison
+    sax_compare::compare(xml, description);
+
+    // Also check line/col positions
     let (r_status, r_error, r_line, r_col) = parse_rust(xml);
     let (c_status, c_error, c_line, c_col) = parse_c(xml);
 
@@ -58,24 +66,10 @@ fn compare_parse(xml: &[u8], description: &str) {
     }
 }
 
-/// Comparison test that only checks status (not line/col, since those may differ
-/// in implementation details)
+/// Compare both parsers: full SAX events + status codes
 fn compare_status(xml: &[u8], description: &str) {
-    let (r_status, r_error, _, _) = parse_rust(xml);
-    let (c_status, c_error, _, _) = parse_c(xml);
-
-    let r_s = rust_status_to_u32(r_status);
-    let r_e = rust_error_to_u32(r_error);
-
-    if r_s != c_status {
-        panic!(
-            "STATUS MISMATCH for {description}:\n  \
-             Rust: status={r_s} (error={r_e})\n  \
-             C:    status={c_status} (error={c_error})\n  \
-             Input: {:?}",
-            std::str::from_utf8(xml).unwrap_or("<non-utf8>")
-        );
-    }
+    // Full SAX event comparison
+    sax_compare::compare(xml, description);
 }
 
 // ======================== Basic well-formed documents ========================
