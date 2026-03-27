@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "C-compatible FFI layer for expat-rust — drop-in replacement for libexpat"
 license = "MIT"
+authors = ["Rob Ennals <rob@ennals.org>"]
+repository = "https://github.com/robennals/libexpat-rust"
+homepage = "https://github.com/robennals/libexpat-rust"
+keywords = ["xml", "parser", "expat", "ffi", "c-compatible"]
+categories = ["parser-implementations", "external-ffi-bindings"]
+readme = "../README.md"
 
 [lib]
 name = "expat"

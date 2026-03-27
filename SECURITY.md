@@ -13,7 +13,7 @@ We will respond within 7 days and aim to release a fix within 30 days of confirm
 
 ## Safety Guarantees
 
-`expat-rust` contains **zero `unsafe` blocks**. This means:
+The core parser (`expat-rust`) contains **zero `unsafe` blocks** — enforced by `#![forbid(unsafe_code)]` at the crate root. This means:
 
 - **No buffer overflows**: All buffer access is bounds-checked by the Rust compiler
 - **No use-after-free**: Rust's ownership system prevents accessing freed memory
@@ -25,9 +25,13 @@ We will respond within 7 days and aim to release a fix within 30 days of confirm
 
 The parser includes the same denial-of-service protections as libexpat:
 
-- **Billion laughs attack protection**: Limits entity expansion amplification
-- **Entity expansion depth limits**: Prevents deeply nested entity references
+- **Billion laughs attack protection**: Tracks the amplification ratio (bytes produced by entity expansion vs. bytes of direct input). When the ratio exceeds a configurable maximum (default 100x) and total output exceeds an activation threshold (default 8 MiB), parsing is aborted with `AmplificationLimitBreach`. This protection extends across external entity sub-parsers — parent and child parsers share the same accounting.
+- **Recursive entity detection**: Prevents infinite loops from self-referencing entities (e.g., `&a;` defined as `&a;`)
 - **Configurable limits**: `set_billion_laughs_attack_protection_maximum_amplification()` and `set_billion_laughs_attack_protection_activation_threshold()`
+
+Both the billion laughs API tests and the amplification enforcement tests from the original C test suite pass against the Rust implementation.
+
+The FFI layer (`expat-ffi`) necessarily uses `unsafe` for the C ABI boundary, but all unsafety is confined there — the core parser is entirely safe Rust.
 
 ## Scope
 

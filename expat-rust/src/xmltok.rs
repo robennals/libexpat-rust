@@ -1,3 +1,31 @@
+// Rust port of expat's xmltok.c / xmltok_ns.c
+//
+// Original C code:
+//   Copyright (c) 1997-2000 Thai Open Source Software Center Ltd
+//   Copyright (c) 2000      Clark Cooper <coopercc@users.sourceforge.net>
+//   Copyright (c) 2001-2003 Fred L. Drake, Jr. <fdrake@users.sourceforge.net>
+//   Copyright (c) 2002      Greg Stein <gstein@users.sourceforge.net>
+//   Copyright (c) 2002-2016 Karl Waclawek <karl@waclawek.net>
+//   Copyright (c) 2005-2009 Steven Solie <steven@solie.ca>
+//   Copyright (c) 2016-2026 Sebastian Pipping <sebastian@pipping.org>
+//   Copyright (c) 2016      Pascal Cuoq <cuoq@trust-in-soft.com>
+//   Copyright (c) 2016      Don Lewis <truckman@apache.org>
+//   Copyright (c) 2017      Rhodri James <rhodri@wildebeest.org.uk>
+//   Copyright (c) 2017      Alexander Bluhm <alexander.bluhm@gmx.net>
+//   Copyright (c) 2017      Benbuck Nason <bnason@netflix.com>
+//   Copyright (c) 2017      José Gutiérrez de la Concha <jose@zeroc.com>
+//   Copyright (c) 2019      David Loffredo <loffredo@steptools.com>
+//   Copyright (c) 2021      Donghee Na <donghee.na@python.org>
+//   Copyright (c) 2022      Martin Ettl <ettl.martin78@googlemail.com>
+//   Copyright (c) 2022      Sean McBride <sean@rogue-research.com>
+//   Copyright (c) 2023      Hanno Böck <hanno@gentoo.org>
+//   Copyright (c) 2025      Alfonso Gregory <gfunni234@gmail.com>
+//
+// Rust port:
+//   Copyright (c) 2026 Rob Ennals <rob@ennals.org>
+//
+// Licensed under the MIT license (see LICENSE file).
+
 //! Token types, encoding detection, and XML declaration parsing.
 //!
 //! Ported from expat's `xmltok.c` / `xmltok_ns.c`. This module provides the
@@ -14,6 +42,7 @@ use crate::xmltok_impl::Encoding;
 pub struct Utf8Encoding;
 
 impl Encoding for Utf8Encoding {
+    #[inline(always)]
     fn byte_type(&self, data: &[u8], pos: usize) -> ByteType {
         if pos >= data.len() {
             return ByteType::NONXML;
@@ -26,6 +55,7 @@ impl Encoding for Utf8Encoding {
         }
     }
 
+    #[inline(always)]
     fn char_matches(&self, data: &[u8], pos: usize, c: u8) -> bool {
         if pos >= data.len() {
             return false;
@@ -33,10 +63,12 @@ impl Encoding for Utf8Encoding {
         data[pos] == c
     }
 
+    #[inline(always)]
     fn min_bytes_per_char(&self) -> usize {
         1
     }
 
+    #[inline(always)]
     fn byte_to_ascii(&self, data: &[u8], pos: usize) -> u8 {
         if pos >= data.len() {
             0

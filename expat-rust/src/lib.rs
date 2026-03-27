@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! A safe, idiomatic Rust port of the [libexpat](https://libexpat.github.io/) XML parser.
 //!
 //! This crate provides a streaming (SAX-style) XML parser with callback-based event handling.

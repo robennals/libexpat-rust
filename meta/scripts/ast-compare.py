@@ -1,1 +1,0 @@
-../../validator/ast-compare.py

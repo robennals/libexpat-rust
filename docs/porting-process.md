@@ -93,8 +93,6 @@ AI (Claude) was used throughout the porting process as a development accelerator
 - **Bottom-up trust**: AI ported leaf modules first. Only after those were verified did it work on higher-level modules that depended on them.
 - **Specialized agents**: Different AI agent configurations were used for different tasks — leaf module porting, state machine translation, test translation — each with task-specific instructions and constraints.
 
-The agent prompts and tooling are preserved in [`meta/agents/`](../meta/agents/) and [`meta/scripts/`](../meta/scripts/).
-
 ## Statistics
 
 | Metric | Value |

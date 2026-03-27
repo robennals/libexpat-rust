@@ -97,7 +97,7 @@ The C libexpat API includes `XML_MemMalloc`, `XML_MemRealloc`, and `XML_MemFree`
 
 In our Rust implementation, the parser uses Rust's standard allocator — there is no custom allocator support. The `XML_MemMalloc`/`XML_MemRealloc`/`XML_MemFree` functions are implemented in the FFI layer by forwarding directly to libc `malloc`/`realloc`/`free`. They exist solely for C API compatibility (some C code, including libexpat's own test suite, calls them). The Rust `Parser` struct has no knowledge of these functions.
 
-Similarly, `XML_ParserCreate_MM` accepts a `XML_Memory_Handling_Suite` parameter but ignores it — the Rust parser always uses its own allocator. The 5 C test failures related to custom allocators (`test_misc_alloc_*`, `test_accounting_*`, `test_amplification_*`) are expected and documented as not applicable.
+Similarly, `XML_ParserCreate_MM` accepts a `XML_Memory_Handling_Suite` parameter but ignores it — the Rust parser always uses its own allocator. The 3 C test failures related to custom allocators (`test_misc_alloc_create_parser`, `test_misc_alloc_create_parser_with_encoding`, `test_accounting_precision`) are expected and documented as not applicable — they test C-specific allocator hooks and a C-internal byte counter.
 
 ### ParserHandle layout
 
