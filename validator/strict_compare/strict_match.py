@@ -42,16 +42,10 @@ _match_rules: list[dict] = None
 
 
 def load_match_rules(config_file: str = None):
-    """Load match rules from JSON config."""
+    """Load match rules from YAML config."""
     global _match_rules
-    if config_file is None:
-        config_file = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "..", "match-rules.json"
-        )
-    with open(config_file) as f:
-        config = json.load(f)
-    _match_rules = config.get("match_rules", [])
+    from .parse_match_rules import parse_rules_file
+    _match_rules = parse_rules_file(config_file)
     return _match_rules
 
 

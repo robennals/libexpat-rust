@@ -1,0 +1,181 @@
+# Match rules for C ↔ Rust structural comparison
+#
+# Syntax:
+#   RULE <name> [principled|temporary]
+#   C: <pattern>
+#   R: <pattern>
+#   ---
+#   <justification>
+#   ===
+#
+# Skip rules (node exists on one side only):
+#   SKIP_C <name> [principled|temporary]
+#   C: <pattern>
+#   ---
+#   <justification>
+#   ===
+#
+# Pattern syntax:
+#   kind(child1, child2, ...)     — match node with children
+#   kind(value)                   — match leaf with value
+#   $var                          — capture anything, bind to $var
+#   $var...                       — capture rest of children
+#   ident(name)                   — match identifier
+#   literal(value)                — match literal
+#   *                             — match anything (don't bind)
+
+# =========================================================
+# PRINCIPLED: Language-level differences (always valid)
+# =========================================================
+
+SKIP_C c_break principled
+C: break
+---
+C switch cases need explicit break. Rust match arms end implicitly.
+===
+
+SKIP_C c_let_type_decl principled
+C: let($type, $name)
+---
+C local variable declarations at top of block. Rust initializes
+at point of use with let bindings. No semantic equivalent.
+===
+
+SKIP_C c_pool_clear principled
+C: expr_stmt(call(ident(pool_clear), $args...))
+---
+C pool lifecycle management. Rust Vec/String are RAII.
+===
+
+SKIP_C c_pool_discard principled
+C: expr_stmt(call(ident(pool_discard), $args...))
+---
+C pool discard. Rust RAII.
+===
+
+SKIP_C c_position_tracking principled
+C: expr_stmt(assign(=, ptr(*, $eventPP), $pos))
+---
+C writes parse position via output pointers (*eventPP = s).
+Rust returns position in return tuples.
+===
+
+SKIP_C c_preproc principled
+C: preproc($children...)
+---
+C preprocessor conditionals (#if XML_GE, etc). The active branch
+content is promoted; the preprocessor node itself is dropped.
+===
+
+SKIP_C c_comment principled
+C: comment
+---
+Comments are not semantic.
+===
+
+SKIP_R r_comment principled
+R: //
+---
+Comments are not semantic.
+===
+
+RULE c_return_1_is_void principled
+C: return(literal(1))
+R: return
+---
+C returns 1 for success. Rust returns void (unit type).
+===
+
+RULE c_return_0_is_skip principled
+C: return(literal(0))
+R: return
+---
+C returns 0 for OOM failure. Rust panics on OOM.
+===
+
+RULE c_handler_call_strip_handler_arg principled
+C: call(field(self, $handler), field(self, handler_arg), $args...)
+R: call(ident(handler), $args...)
+---
+C dispatches handlers with handlerArg as first argument.
+Rust closures capture context, so handlerArg doesn't exist.
+===
+
+RULE c_null_check_is_is_none principled
+C: unary(!, field(self, $handler))
+R: call(field(field(self, $handler), ident(is_none)))
+---
+C !handler (null pointer check) = Rust handler.is_none().
+===
+
+RULE c_exists_check_is_is_some principled
+C: field(self, $handler)
+R: call(field(field(self, $handler), ident(is_some)))
+---
+C handler (truthy pointer check) = Rust handler.is_some().
+===
+
+# =========================================================
+# PRINCIPLED: Memory management differences
+# =========================================================
+
+SKIP_C c_pool_store_string principled
+C: expr_stmt(assign(=, $target, call(ident(pool_store_string), $args...)))
+---
+C poolStoreString allocates from pool and copies encoded data.
+Rust indexes the existing buffer slice directly. The Rust equivalent
+is inline slice indexing, not a function call.
+===
+
+SKIP_C c_null_alloc_check principled
+C: if(unary(!, $ptr), $error_body)
+---
+C checks if allocation returned NULL. Rust allocations either
+succeed or panic. Only matches when error_body is a return(0)
+or return(XmlError::NoMemory).
+===
+
+SKIP_C c_malloc_realloc principled
+C: expr_stmt(call(ident(realloc), $args...))
+---
+C explicit heap management. Rust Vec grows automatically.
+===
+
+# =========================================================
+# PRINCIPLED: Encoding differences (Rust is UTF-8 only)
+# =========================================================
+
+SKIP_C c_must_convert principled
+C: if(call(ident(must_convert), $args...), $body)
+---
+C MUST_CONVERT checks if encoding conversion is needed.
+Rust works in UTF-8 natively, no conversion ever needed.
+===
+
+SKIP_C c_xml_convert principled
+C: expr_stmt(call(ident(xml_convert), $args...))
+---
+C XmlConvert does encoding conversion. Rust UTF-8 only.
+===
+
+# =========================================================
+# TEMPORARY: Structural differences to be fixed
+# =========================================================
+
+RULE c_if_handler_is_rust_if_let temporary
+C: if(field(self, $handler), $body)
+R: if_let($pattern, $handler_expr, $body)
+---
+C: if (handler) { handler(args) }
+Rust: if let Some(h) = &mut self.handler { h(args) }
+The handler check + dispatch pattern. TEMPORARY: body details
+may differ.
+===
+
+RULE c_parsing_status_is_rust_is_final temporary
+C: if(binary(!, field(self, parsing_status)), $body)
+R: if(unary(!, field(self, is_final)), $body)
+---
+C checks !parsing_status.finalBuffer. Rust checks !self.is_final.
+TEMPORARY: suspend/resume semantics may differ.
+===
