@@ -206,6 +206,34 @@ skip_r_scope_labels:
   - iterations    # Rust MAX_ITERATIONS stall detection
   - Err           # Rust Result::Err arms — C doesn't have Result type
   - MAX_ITERATIONS  # Rust stall detection constant
+  # Rust if-let handler dispatch — C calls handler directly via function pointer
+  - default_handler
+  - comment_handler
+  - character_data_handler
+  - processing_instruction_handler
+  - start_element_handler
+  - end_element_handler
+  - start_cdata_section_handler
+  - end_cdata_section_handler
+  - start_doctype_decl_handler
+  - end_doctype_decl_handler
+  - xml_decl_handler
+  - skipped_entity_handler
+  - entity_decl_handler
+  - notation_decl_handler
+  - attlist_decl_handler
+  - element_decl_handler
+  - unparsed_entity_decl_handler
+  - external_entity_ref_handler
+  - not_standalone_handler
+  - default_handler_expand
+  # Rust-specific checks
+  - is_none           # Option::is_none check
+  - is_some           # Option::is_some check
+  - is_partial_utf8   # Rust-specific UTF-8 check
+  - is_internal_entity  # Rust-specific entity check
+  - is_latin1_encoding  # Rust-specific encoding check
+  - custom_encoding_map # Rust custom encoding
 
 # === Transparent Rust scopes ===
 flatten_r_scopes: []
