@@ -61,6 +61,22 @@ def _compare_scope(c: ScopeNode, r: ScopeNode, path: str,
                    mismatches: list[Mismatch]):
     """Compare a matched pair of scoping nodes."""
 
+    # When one side is a block and the other isn't, recurse into the
+    # block's first matching child. This handles C/Rust blocks that
+    # are if/loop body wrappers.
+    if r.kind == "block" and c.kind != "block" and not r.label:
+        # Try to find c's match inside r's children
+        for child in r.children:
+            if _scopes_match(c, child):
+                _compare_scope(c, child, path, mismatches)
+                return
+        # No match found — compare content at this level anyway
+    if c.kind == "block" and r.kind != "block" and not c.label:
+        for child in c.children:
+            if _scopes_match(child, r):
+                _compare_scope(child, r, path, mismatches)
+                return
+
     # Compare content sets at this level
     _compare_content(c.content, r.content, path, c, r, mismatches)
 
@@ -179,6 +195,16 @@ def _compare_scope_children(c_children: list[ScopeNode], r_children: list[ScopeN
             continue
         if any(pat in c.label for pat in skip_c_scope_labels):
             continue
+        # Unwind bare C blocks: replace with their children.
+        # C wraps switch/loop/if bodies in block nodes that Rust doesn't have.
+        if c.kind == "block" and not c.label:
+            for bc in c.children:
+                if bc.kind in skip_c_scope_kinds:
+                    continue
+                if any(pat in bc.label for pat in skip_c_scope_labels):
+                    continue
+                c_effective.append(bc)
+            continue
         c_effective.append(c)
 
     r_effective = []
@@ -186,7 +212,6 @@ def _compare_scope_children(c_children: list[ScopeNode], r_children: list[ScopeN
         if any(pat in r.label for pat in skip_r_scope_labels):
             continue
         if should_flatten_r(r):
-            # Promote children, recursively filtering
             for child in r.children:
                 if any(pat in child.label for pat in skip_r_scope_labels):
                     continue
