@@ -1,0 +1,11 @@
+[package]
+name = "xmlwf"
+version = "0.1.0"
+edition = "2021"
+description = "C xmlwf tool linked against expat-rust via expat-ffi, for W3C XML Test Suite"
+
+[dependencies]
+expat-ffi = { path = "../expat-ffi" }
+
+[build-dependencies]
+cc = "1"

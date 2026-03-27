@@ -561,32 +561,18 @@ pub fn scan_pi<E: Encoding>(
 
     let target = pos;
     match enc.byte_type(data, pos) {
-        ByteType::LEAD2 => {
-            if end - pos < 2 {
-                return Ok(TokenResult {
-                    token: XmlTok::Partial,
-                    next_pos: pos,
-                });
+        bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+            let n = lead_byte_len(bt);
+            match check_lead_nmstrt(data, pos, end, n) {
+                Err(()) => {
+                    return Ok(TokenResult {
+                        token: XmlTok::PartialChar,
+                        next_pos: pos,
+                    })
+                }
+                Ok(false) => return Err(pos),
+                Ok(true) => pos += n,
             }
-            pos += 2;
-        }
-        ByteType::LEAD3 => {
-            if end - pos < 3 {
-                return Ok(TokenResult {
-                    token: XmlTok::Partial,
-                    next_pos: pos,
-                });
-            }
-            pos += 3;
-        }
-        ByteType::LEAD4 => {
-            if end - pos < 4 {
-                return Ok(TokenResult {
-                    token: XmlTok::Partial,
-                    next_pos: pos,
-                });
-            }
-            pos += 4;
         }
         bt if is_nmstrt_char(bt) => {
             pos += enc.min_bytes_per_char();
@@ -682,32 +668,18 @@ pub fn scan_pi<E: Encoding>(
                 }
                 return Err(pos);
             }
-            ByteType::LEAD2 => {
-                if end - pos < 2 {
-                    return Ok(TokenResult {
-                        token: XmlTok::Partial,
-                        next_pos: pos,
-                    });
+            bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+                let n = lead_byte_len(bt);
+                match check_lead_name(data, pos, end, n) {
+                    Err(()) => {
+                        return Ok(TokenResult {
+                            token: XmlTok::PartialChar,
+                            next_pos: pos,
+                        })
+                    }
+                    Ok(false) => return Err(pos),
+                    Ok(true) => pos += n,
                 }
-                pos += 2;
-            }
-            ByteType::LEAD3 => {
-                if end - pos < 3 {
-                    return Ok(TokenResult {
-                        token: XmlTok::Partial,
-                        next_pos: pos,
-                    });
-                }
-                pos += 3;
-            }
-            ByteType::LEAD4 => {
-                if end - pos < 4 {
-                    return Ok(TokenResult {
-                        token: XmlTok::Partial,
-                        next_pos: pos,
-                    });
-                }
-                pos += 4;
             }
             _ if is_name_char(enc.byte_type(data, pos)) => {
                 pos += enc.min_bytes_per_char();
@@ -924,32 +896,18 @@ pub fn scan_end_tag<E: Encoding>(
 
     // Name start character (including multi-byte UTF-8)
     match enc.byte_type(data, pos) {
-        ByteType::LEAD2 => {
-            if end - pos < 2 {
-                return Ok(TokenResult {
-                    token: XmlTok::PartialChar,
-                    next_pos: pos,
-                });
+        bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+            let n = lead_byte_len(bt);
+            match check_lead_nmstrt(data, pos, end, n) {
+                Err(()) => {
+                    return Ok(TokenResult {
+                        token: XmlTok::PartialChar,
+                        next_pos: pos,
+                    })
+                }
+                Ok(false) => return Err(pos),
+                Ok(true) => pos += n,
             }
-            pos += 2;
-        }
-        ByteType::LEAD3 => {
-            if end - pos < 3 {
-                return Ok(TokenResult {
-                    token: XmlTok::PartialChar,
-                    next_pos: pos,
-                });
-            }
-            pos += 3;
-        }
-        ByteType::LEAD4 => {
-            if end - pos < 4 {
-                return Ok(TokenResult {
-                    token: XmlTok::PartialChar,
-                    next_pos: pos,
-                });
-            }
-            pos += 4;
         }
         _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
             pos += enc.min_bytes_per_char();
@@ -990,27 +948,18 @@ pub fn scan_end_tag<E: Encoding>(
                     next_pos: pos + enc.min_bytes_per_char(),
                 });
             }
-            ByteType::LEAD2 => {
-                if end - pos < 2 {
-                    return Ok(TokenResult {
-                        token: XmlTok::PartialChar,
-                        next_pos: pos,
-                    });
+            bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+                let n = lead_byte_len(bt);
+                match check_lead_name(data, pos, end, n) {
+                    Err(()) => {
+                        return Ok(TokenResult {
+                            token: XmlTok::PartialChar,
+                            next_pos: pos,
+                        })
+                    }
+                    Ok(false) => return Err(pos),
+                    Ok(true) => pos += n,
                 }
-                pos += 2;
-            }
-            ByteType::LEAD3 => {
-                if end - pos < 3 {
-                    return Ok(TokenResult {
-                        token: XmlTok::PartialChar,
-                        next_pos: pos,
-                    });
-                }
-                pos += 3;
-            }
-            ByteType::LEAD4 => {
-                // 4-byte UTF-8 = U+10000+, not valid as XML name character
-                return Err(pos);
             }
             ByteType::COLON => {
                 pos += enc.min_bytes_per_char();
@@ -1412,7 +1361,8 @@ fn scan_attr_value<E: Encoding>(
             }
             Ok(pos) // return to outer loop to handle GT/SOL/name
         }
-        _ => Ok(pos), // GT/SOL/name — return to outer loop
+        ByteType::SOL | ByteType::GT => Ok(pos), // end of tag — return to outer loop
+        _ => Err(pos), // no whitespace between attributes — invalid
     }
 }
 
@@ -1457,28 +1407,18 @@ pub fn scan_lt<E: Encoding>(
         ByteType::SOL => {
             return scan_end_tag(enc, data, pos + enc.min_bytes_per_char(), end);
         }
-        ByteType::LEAD2 => {
-            if end - pos < 2 {
-                return Ok(TokenResult {
-                    token: XmlTok::PartialChar,
-                    next_pos: pos,
-                });
+        bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+            let n = lead_byte_len(bt);
+            match check_lead_nmstrt(data, pos, end, n) {
+                Err(()) => {
+                    return Ok(TokenResult {
+                        token: XmlTok::PartialChar,
+                        next_pos: pos,
+                    })
+                }
+                Ok(false) => return Err(pos),
+                Ok(true) => pos += n,
             }
-            // Multi-byte name start — advance by n and fall through to name loop
-            pos += 2;
-        }
-        ByteType::LEAD3 => {
-            if end - pos < 3 {
-                return Ok(TokenResult {
-                    token: XmlTok::PartialChar,
-                    next_pos: pos,
-                });
-            }
-            pos += 3;
-        }
-        ByteType::LEAD4 => {
-            // 4-byte UTF-8 = U+10000+, not valid as XML name character
-            return Err(pos);
         }
         _ if is_nmstrt_char(enc.byte_type(data, pos)) => {
             // Start tag - advance past first char and fall through to name loop
@@ -1569,27 +1509,18 @@ pub fn scan_lt<E: Encoding>(
                     next_pos: pos + enc.min_bytes_per_char(),
                 });
             }
-            ByteType::LEAD2 => {
-                if end - pos < 2 {
-                    return Ok(TokenResult {
-                        token: XmlTok::PartialChar,
-                        next_pos: pos,
-                    });
+            bt @ (ByteType::LEAD2 | ByteType::LEAD3 | ByteType::LEAD4) => {
+                let n = lead_byte_len(bt);
+                match check_lead_name(data, pos, end, n) {
+                    Err(()) => {
+                        return Ok(TokenResult {
+                            token: XmlTok::PartialChar,
+                            next_pos: pos,
+                        })
+                    }
+                    Ok(false) => return Err(pos),
+                    Ok(true) => pos += n,
                 }
-                pos += 2;
-            }
-            ByteType::LEAD3 => {
-                if end - pos < 3 {
-                    return Ok(TokenResult {
-                        token: XmlTok::PartialChar,
-                        next_pos: pos,
-                    });
-                }
-                pos += 3;
-            }
-            ByteType::LEAD4 => {
-                // 4-byte UTF-8 = U+10000+, not valid as XML name character
-                return Err(pos);
             }
             ByteType::COLON => {
                 pos += enc.min_bytes_per_char();

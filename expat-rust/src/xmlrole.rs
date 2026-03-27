@@ -230,7 +230,7 @@ fn keyword_matches(text: &[u8], keyword: &str) -> bool {
     }
     text.iter()
         .zip(keyword.bytes())
-        .all(|(a, b)| a.eq_ignore_ascii_case(&b))
+        .all(|(a, b)| *a == b)
 }
 
 fn set_top_level(state: &mut XmlRoleState) {
