@@ -4245,6 +4245,12 @@ impl Parser {
         start: usize,
         end: usize,
     ) {
+        if self.processing_instruction_handler.is_none() {
+            if self.default_handler.is_some() {
+                self.report_default(enc, data, start, end);
+            }
+            return;
+        }
         let minbpc = enc.min_bytes_per_char();
         // PI format: <?target data?>
         let target_start = start + minbpc * 2; // skip '<?'
@@ -4256,21 +4262,47 @@ impl Parser {
         let mut data_start = target_start + target_len;
         let pi_end = end - minbpc * 2; // before '?>'
         data_start = xmltok_impl::skip_s(enc, data, data_start);
-        let pi_data = if data_start < pi_end {
-            std::str::from_utf8(&data[data_start..pi_end]).unwrap_or("")
+        let pi_data_raw = if data_start < pi_end {
+            &data[data_start..pi_end]
         } else {
-            ""
+            &[]
         };
+        let normalized = Self::normalize_lines(pi_data_raw);
+        let pi_data = std::str::from_utf8(&normalized).unwrap_or("");
 
         if let Some(handler) = &mut self.processing_instruction_handler {
             handler(target, pi_data);
-        } else if let Some(handler) = &mut self.default_handler {
-            handler(&data[start..end]);
         }
+    }
+
+    /// Normalize line endings in text: \r\n -> \n, bare \r -> \n
+    /// Corresponds to C normalizeLines()
+    fn normalize_lines(input: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(input.len());
+        let mut i = 0;
+        while i < input.len() {
+            if input[i] == b'\r' {
+                out.push(b'\n');
+                // Skip \n after \r (CRLF -> single LF)
+                if i + 1 < input.len() && input[i + 1] == b'\n' {
+                    i += 1;
+                }
+            } else {
+                out.push(input[i]);
+            }
+            i += 1;
+        }
+        out
     }
 
     /// Report a comment — corresponds to C reportComment()
     fn report_comment<E: Encoding>(&mut self, enc: &E, data: &[u8], start: usize, end: usize) {
+        if self.comment_handler.is_none() {
+            if self.default_handler.is_some() {
+                self.report_default(enc, data, start, end);
+            }
+            return;
+        }
         let minbpc = enc.min_bytes_per_char();
         // Comment format: <!--data-->
         let comment_start = start + minbpc * 4; // skip '<!--'
@@ -4280,10 +4312,9 @@ impl Parser {
         } else {
             &[]
         };
+        let normalized = Self::normalize_lines(comment_data);
         if let Some(handler) = &mut self.comment_handler {
-            handler(comment_data);
-        } else if let Some(handler) = &mut self.default_handler {
-            handler(&data[start..end]);
+            handler(&normalized);
         }
     }
 
@@ -5113,6 +5144,13 @@ impl Parser {
             self.event_pos = self.position_pos;
         }
 
+        // Free parse_data now that position tracking is complete.
+        // This prevents holding a full copy of the buffer between parse() calls.
+        // (original_chunk is NOT cleared here — it's used by current_byte_index()
+        // and get_input_context() which may be called after parse() returns.)
+        self.parse_data.clear();
+        self.parse_data.shrink_to_fit();
+
         // Track total byte offset (for XML_GetCurrentByteIndex)
         self.byte_offset += data.len() as u64;
 
@@ -5660,9 +5698,6 @@ impl Parser {
     pub fn current_byte_index(&self) -> i64 {
         if self.parsing_state == ParsingState::Initialized {
             return -1; // Before any parsing, C returns -1
-        }
-        if self.parse_data.is_empty() || self.event_pos > self.parse_data.len() {
-            return -1;
         }
 
         let utf8_event_pos = self.event_pos;
