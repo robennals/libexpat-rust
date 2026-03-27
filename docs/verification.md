@@ -169,6 +169,48 @@ Excluding unreachable utilities, effective coverage of API-reachable code is app
 | `generated_comparison_tests.rs` | 109 | Generated: XML feature matrix with incremental byte-split testing |
 | `c_comparison_tests.rs` | 59 | Original: foundational status/error/handler comparison tests |
 
+## Fuzz Corpus Comparison
+
+We also run the OSS-Fuzz public corpora through both parsers. These ~48,000 files
+(24k UTF-8, 24k UTF-16LE) are raw inputs from continuous fuzzing of the C library.
+
+### What we check
+
+The fuzz corpus tests verify **status agreement**: both parsers must agree on
+whether each input is valid (OK) or invalid (ERROR). We do NOT require identical
+error codes — see below.
+
+### Error code differences (accepted)
+
+When both parsers agree the input is invalid, their specific error codes may
+differ. For example, Rust may return `INVALID_TOKEN` where C returns
+`UNCLOSED_TOKEN`. This happens because:
+
+1. **UTF-8 normalization**: The Rust parser transcodes non-UTF-8 input to UTF-8
+   before tokenizing. Both C and Rust perform the same encoding auto-detection
+   and work with the same logical characters, but the UTF-8 tokenizer can hit
+   error conditions at different token boundaries than C's encoding-specific
+   tokenizers, producing different error codes for the same invalid input.
+
+2. **Prolog tokenizer coverage**: The Rust prolog tokenizer handles fewer
+   sub-token states than C's, sometimes returning `INVALID_TOKEN` early where
+   C would parse further and report a more specific error like `SYNTAX` or
+   `NO_ELEMENTS`.
+
+These differences only affect the specific error code for invalid XML — they
+never cause a valid/invalid status disagreement. Improving error code fidelity
+is tracked as future work.
+
+### Running
+
+```bash
+# Download corpora (one-time, ~100MB)
+bash scripts/download-fuzz-corpus.sh corpus
+
+# Run fuzz corpus comparison
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test fuzz_corpus_comparison
+```
+
 ## Note on Encoding
 
 The Rust parser transcodes all non-UTF-8 input to UTF-8 before tokenizing (unlike C, which tokenizes in the native encoding). This produces identical results for all inputs — see [design-decisions.md](design-decisions.md) for the rationale and [architecture.md](architecture.md) for details on byte offset handling.

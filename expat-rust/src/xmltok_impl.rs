@@ -489,9 +489,12 @@ fn is_name_char(bt: ByteType) -> bool {
     )
 }
 
-/// Check if byte type is valid for name start (single-byte only)
+/// Check if byte type is valid for name start (single-byte only).
+/// Includes COLON, matching C's non-namespace tokenizer where BT_COLON is
+/// #define'd to BT_NMSTRT. In namespace mode, the parser validates colon
+/// usage semantically after tokenization.
 fn is_nmstrt_char(bt: ByteType) -> bool {
-    matches!(bt, ByteType::NMSTRT | ByteType::HEX)
+    matches!(bt, ByteType::NMSTRT | ByteType::HEX | ByteType::COLON)
 }
 
 /// Check if a multi-byte UTF-8 sequence at pos is a valid XML name-start character.
@@ -2046,6 +2049,7 @@ pub fn prolog_tok<E: Encoding>(
                 }
                 ByteType::NMSTRT
                 | ByteType::HEX
+                | ByteType::COLON
                 | ByteType::LEAD2
                 | ByteType::LEAD3
                 | ByteType::LEAD4 => {
@@ -2282,7 +2286,7 @@ pub fn prolog_tok<E: Encoding>(
             first_pos -= 1;
         }
         let first_bt = enc.byte_type(data, first_pos);
-        if matches!(first_bt, ByteType::NMSTRT | ByteType::HEX) {
+        if matches!(first_bt, ByteType::NMSTRT | ByteType::HEX | ByteType::COLON) {
             true
         } else if matches!(
             first_bt,
@@ -2720,7 +2724,8 @@ pub fn name_length<E: Encoding>(enc: &E, data: &[u8], mut ptr: usize) -> usize {
             | ByteType::HEX
             | ByteType::DIGIT
             | ByteType::NAME
-            | ByteType::MINUS => {
+            | ByteType::MINUS
+            | ByteType::COLON => {
                 ptr += minbpc;
             }
             _ => {
@@ -3274,8 +3279,8 @@ mod tests {
         let enc = Utf8Encoding;
         let data = b"ns:tag>";
         let len = name_length(&enc, data, 0);
-        // Colon stops the name, so just "ns"
-        assert_eq!(len, 2);
+        // In non-NS mode, colon is part of the name (C: BT_COLON = BT_NMSTRT)
+        assert_eq!(len, 6);
     }
 
     #[test]

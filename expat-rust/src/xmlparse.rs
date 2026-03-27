@@ -4773,11 +4773,11 @@ impl Parser {
                     // characters (ÿþ), not a UTF-16 BOM.
                     self.detected_encoding = Some(enc_upper);
                     self.buffer = transcode_latin1_to_utf8(data);
-                } else if self.protocol_encoding_set
-                    && (enc_upper == "UTF-8" || enc_upper == "US-ASCII" || enc_upper == "ASCII")
+                } else if enc_upper == "UTF-8" || enc_upper == "US-ASCII" || enc_upper == "ASCII"
                 {
-                    // Explicit UTF-8/ASCII encoding — consume UTF-8 BOM if present,
-                    // then treat as UTF-8
+                    // UTF-8/ASCII encoding — consume UTF-8 BOM if present,
+                    // then treat as UTF-8. Bypass encoding auto-detection so raw
+                    // bytes go to the tokenizer, matching C's XML_ParserCreate("UTF-8").
                     self.detected_encoding = Some(enc_upper);
                     if data.len() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
                         self.original_chunk_bom_len = 3;
