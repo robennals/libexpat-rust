@@ -3060,7 +3060,19 @@ impl Parser {
                     XmlTok::None => {
                         break;
                     }
-                    XmlTok::Partial | XmlTok::TrailingCr => {
+                    XmlTok::TrailingCr => {
+                        if have_more {
+                            if pos > 0 {
+                                data.drain(..pos);
+                            }
+                            self.buffer = data;
+                            return;
+                        }
+                        // Final buffer with trailing CR — this is valid whitespace
+                        // in the epilog (C handles it as XML_TOK_PROLOG_S).
+                        break;
+                    }
+                    XmlTok::Partial => {
                         if have_more {
                             // Efficiently save remaining data — reuse allocation
                             if pos > 0 {
@@ -4078,7 +4090,10 @@ impl Parser {
             let value =
                 Self::normalize_attribute_value(raw_value, &dtd.internal_entities, skip_unknown);
             drop(dtd);
-            if value.contains('\x00') {
+            if value.starts_with('\x00') {
+                if value == "\x00UNDEFINED" {
+                    return Err(XmlError::UndefinedEntity);
+                }
                 return Err(XmlError::RecursiveEntityRef);
             }
             if !seen.insert(name.clone()) {
@@ -4201,8 +4216,9 @@ impl Parser {
                                         );
                                         result.extend_from_slice(expanded.as_bytes());
                                     } else if !skip_unknown {
-                                        // Unknown entity — keep as-is (only when not skipping)
-                                        result.extend_from_slice(&raw[i..i + 2 + semi_offset]);
+                                        // Unknown entity in standalone document — error
+                                        // C returns XML_ERROR_UNDEFINED_ENTITY
+                                        return String::from("\x00UNDEFINED");
                                     }
                                     // When skip_unknown is true, unknown entities are
                                     // silently dropped (C behavior when external subset
@@ -4854,8 +4870,24 @@ impl Parser {
             if let Some(ref enc) = self.encoding_name {
                 let enc_upper = enc.to_uppercase();
                 if enc_upper == "UTF-16LE" || enc_upper == "UTF-16BE" {
-                    // Explicit UTF-16 encoding — strip BOM if present, then transcode
-                    let is_be = enc_upper == "UTF-16BE";
+                    // Explicit UTF-16 encoding — but C's initScan may override
+                    // endianness based on byte patterns (e.g. 00 3C → UTF-16BE even
+                    // if protocol says UTF-16LE). Match that behavior.
+                    let mut is_be = enc_upper == "UTF-16BE";
+                    if data.len() >= 2 {
+                        let is_content = matches!(self.processor, Processor::ExternalEntity);
+                        match crate::xmltok::init_scan(data, is_content) {
+                            crate::xmltok::InitScanResult::Bom(crate::xmltok::DetectedEncoding::Utf16BE, _)
+                            | crate::xmltok::InitScanResult::Encoding(crate::xmltok::DetectedEncoding::Utf16BE) => {
+                                is_be = true;
+                            }
+                            crate::xmltok::InitScanResult::Bom(crate::xmltok::DetectedEncoding::Utf16LE, _)
+                            | crate::xmltok::InitScanResult::Encoding(crate::xmltok::DetectedEncoding::Utf16LE) => {
+                                is_be = false;
+                            }
+                            _ => {} // keep as specified
+                        }
+                    }
                     self.detected_encoding = Some(enc_upper);
                     let input = if data.len() >= 2 {
                         let has_bom = if is_be {
@@ -4919,15 +4951,60 @@ impl Parser {
                     self.buffer = transcode_latin1_to_utf8(data);
                 } else if enc_upper == "UTF-8" || enc_upper == "US-ASCII" || enc_upper == "ASCII"
                 {
-                    // UTF-8/ASCII encoding — consume UTF-8 BOM if present,
-                    // then treat as UTF-8. Bypass encoding auto-detection so raw
-                    // bytes go to the tokenizer, matching C's XML_ParserCreate("UTF-8").
-                    self.detected_encoding = Some(enc_upper);
-                    if data.len() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
-                        self.original_chunk_bom_len = 3;
-                        self.buffer = data[3..].to_vec();
+                    // UTF-8/ASCII encoding — but C's initScan still overrides to
+                    // UTF-16 for null-byte patterns (00 3C → UTF-16BE, 3C 00 → UTF-16LE).
+                    // Check init_scan first, then fall back to raw UTF-8.
+                    let is_content = matches!(self.processor, Processor::ExternalEntity);
+                    let detected_utf16 = if data.len() >= 2 {
+                        match crate::xmltok::init_scan(data, is_content) {
+                            crate::xmltok::InitScanResult::Encoding(crate::xmltok::DetectedEncoding::Utf16BE) => Some(true),
+                            crate::xmltok::InitScanResult::Encoding(crate::xmltok::DetectedEncoding::Utf16LE) => Some(false),
+                            crate::xmltok::InitScanResult::Bom(crate::xmltok::DetectedEncoding::Utf16BE, _) => Some(true),
+                            crate::xmltok::InitScanResult::Bom(crate::xmltok::DetectedEncoding::Utf16LE, _) => Some(false),
+                            _ => None,
+                        }
                     } else {
-                        self.buffer = data.to_vec();
+                        None
+                    };
+
+                    if let Some(is_be) = detected_utf16 {
+                        // initScan detected UTF-16 from byte patterns — override
+                        let enc_name = if is_be { "UTF-16BE" } else { "UTF-16LE" };
+                        self.detected_encoding = Some(enc_name.to_string());
+                        // Strip BOM if present
+                        let input = if data.len() >= 2 {
+                            let has_bom = if is_be {
+                                data[0] == 0xFE && data[1] == 0xFF
+                            } else {
+                                data[0] == 0xFF && data[1] == 0xFE
+                            };
+                            if has_bom { &data[2..] } else { data }
+                        } else {
+                            data
+                        };
+                        let (to_transcode, leftover) = if input.len() % 2 != 0 {
+                            (&input[..input.len() - 1], Some(input[input.len() - 1]))
+                        } else {
+                            (input, None)
+                        };
+                        self.utf16_pending_byte = leftover;
+                        match self.transcode_utf16(to_transcode, is_be) {
+                            Ok(transcoded) => { self.buffer = transcoded; }
+                            Err(err) => {
+                                self.error_code = err;
+                                self.parsing_state = ParsingState::Finished;
+                                return XmlStatus::Error;
+                            }
+                        }
+                    } else {
+                        // Genuine UTF-8 — consume BOM if present, use raw bytes
+                        self.detected_encoding = Some(enc_upper);
+                        if data.len() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+                            self.original_chunk_bom_len = 3;
+                            self.buffer = data[3..].to_vec();
+                        } else {
+                            self.buffer = data.to_vec();
+                        }
                     }
                 } else {
                     // Known encoding without protocol override — detect BOM etc
@@ -5162,6 +5239,14 @@ impl Parser {
 
         // If final, check for incomplete document and mark as finished
         if is_final {
+            // If there's a pending UTF-16 byte, the input ended mid-character.
+            // C returns XML_ERROR_UNCLOSED_TOKEN for trailing odd bytes.
+            if self.utf16_pending_byte.is_some() && self.error_code == XmlError::None {
+                self.error_code = XmlError::UnclosedToken;
+                self.parsing_state = ParsingState::Finished;
+                return XmlStatus::Error;
+            }
+
             // If we never saw a root element, that's an error
             // BUT: external entities (tag_level > 0) don't require a complete root element
             // AND: foreign DTD subsets don't require a root element

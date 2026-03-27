@@ -2835,8 +2835,8 @@ pub fn get_atts<E: Encoding>(
                 };
                 pos += n - minbpc;
             }
-            // Start of name: single-byte name start characters (letters, etc.)
-            ByteType::NMSTRT | ByteType::HEX => {
+            // Start of name: single-byte name start characters (letters, colon, etc.)
+            ByteType::NMSTRT | ByteType::HEX | ByteType::COLON => {
                 if matches!(state, State::Other) {
                     if n_atts < atts_max {
                         atts.push(Attribute {
