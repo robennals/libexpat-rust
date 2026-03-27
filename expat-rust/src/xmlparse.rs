@@ -5251,6 +5251,10 @@ impl Parser {
         if is_final {
             // If there's a pending UTF-16 byte, the input ended mid-character.
             // C returns XML_ERROR_UNCLOSED_TOKEN for trailing odd bytes.
+            // Note: C has one edge case where trailing CR + odd byte in the
+            // epilog returns -XML_TOK_PROLOG_S (accepted), but we consistently
+            // reject all trailing odd bytes — this is stricter than C for 1 known
+            // fuzz corpus file (e1c60632...) but safer overall.
             if self.utf16_pending_byte.is_some() && self.error_code == XmlError::None {
                 self.error_code = XmlError::UnclosedToken;
                 self.parsing_state = ParsingState::Finished;
