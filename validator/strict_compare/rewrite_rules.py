@@ -532,15 +532,43 @@ def apply_expression_rewrites(args: list[str], func_name: str, lang: str) -> lis
         for i, arg in enumerate(result):
             if arg is None:
                 continue
-            full_match = re.fullmatch(match_pattern, arg)
-            if full_match:
-                if replacement is None:
-                    result[i] = None  # Delete this arg
+            # Handle list of args (alternatives from previous rules)
+            args_to_check = arg if isinstance(arg, list) else [arg]
+            new_alternatives = []
+            any_matched = False
+
+            for alt in args_to_check:
+                full_match = re.fullmatch(match_pattern, alt)
+                if full_match:
+                    any_matched = True
+                    if replacement is None:
+                        pass  # Delete — don't add any alternative
+                    elif isinstance(replacement, list):
+                        # Multiple possible replacements
+                        for rep in replacement:
+                            new_alternatives.append(full_match.expand(rep))
+                    else:
+                        new_alternatives.append(full_match.expand(replacement))
+                elif replacement is not None:
+                    partial_match = re.search(match_pattern, alt)
+                    if partial_match:
+                        any_matched = True
+                        if isinstance(replacement, list):
+                            for rep in replacement:
+                                new_alternatives.append(re.sub(match_pattern, rep, alt))
+                        else:
+                            new_alternatives.append(re.sub(match_pattern, replacement, alt))
+                    else:
+                        new_alternatives.append(alt)  # No match, keep original
                 else:
-                    result[i] = full_match.expand(replacement)
-            elif replacement is not None:
-                partial_match = re.search(match_pattern, arg)
-                if partial_match:
-                    result[i] = re.sub(match_pattern, replacement, arg)
+                    new_alternatives.append(alt)  # No match, keep original
+
+            if any_matched:
+                if not new_alternatives:
+                    result[i] = None  # All alternatives deleted
+                elif len(new_alternatives) == 1:
+                    result[i] = new_alternatives[0]
+                else:
+                    result[i] = new_alternatives  # Multiple alternatives
 
     return result

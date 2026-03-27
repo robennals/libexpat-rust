@@ -464,8 +464,8 @@
       "side": "c",
       "function": "*",
       "match": "^end$",
-      "replace": null,
-      "justification": "C uses 'end' as buffer end pointer. Rust uses 'end' or 'len' depending on context. Deleted to avoid false mismatch since the naming varies.",
+      "replace": ["end", "len"],
+      "justification": "C uses 'end' as buffer end pointer. Rust uses 'end' or 'len' depending on context. Both are valid equivalents.",
       "category": "naming_difference"
     },
     {

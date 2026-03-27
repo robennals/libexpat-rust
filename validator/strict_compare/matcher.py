@@ -788,8 +788,11 @@ def _compare_call_args(c: SkeletonNode, r: SkeletonNode, ctx: str,
     r_idx = 0
     for c_i, c_arg in enumerate(c_args):
         matched = False
+        # c_arg may be a list of alternatives (from rewrite rules with multiple replacements)
+        c_alternatives = c_arg if isinstance(c_arg, list) else [c_arg]
         while r_idx < len(r_args):
-            if _exprs_match(c_arg, r_args[r_idx]):
+            r_alt = r_args[r_idx] if not isinstance(r_args[r_idx], list) else r_args[r_idx][0]
+            if any(_exprs_match(ca, r_alt) for ca in c_alternatives):
                 # Text match found — now do deep expression comparison
                 c_expr_info = c_expr_map.get(c_i)
                 r_expr_info = r_expr_map.get(r_idx)
