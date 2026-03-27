@@ -321,7 +321,9 @@ def _can_skip(node: Node, lang: str) -> bool:
     for rule in _match_rules:
         skip_lang = rule.get("skip")
         if skip_lang and skip_lang == lang:
-            pattern = rule.get("c_pattern" if lang == "c" else "r_pattern", {})
+            pattern = rule.get("c_pattern" if lang == "c" else "r_pattern")
+            if pattern is None:
+                continue
             captures = {}
             if _pattern_matches(node, pattern, captures):
                 # Check for promote — if the rule says to promote a captured
@@ -340,7 +342,9 @@ def _get_promotion(node: Node, lang: str) -> list[Node] | None:
     for rule in _match_rules:
         skip_lang = rule.get("skip")
         if skip_lang and skip_lang == lang:
-            pattern = rule.get("c_pattern" if lang == "c" else "r_pattern", {})
+            pattern = rule.get("c_pattern" if lang == "c" else "r_pattern")
+            if pattern is None:
+                continue
             captures = {}
             if _pattern_matches(node, pattern, captures):
                 promote = rule.get("promote")
@@ -388,8 +392,13 @@ def _try_match_rule(c: Node, r: Node, rule: dict,
 
     Returns True if the rule applies and all captured variables can be paired.
     """
-    c_pattern = rule.get("c_pattern", {})
-    r_pattern = rule.get("r_pattern", {})
+    c_pattern = rule.get("c_pattern")
+    r_pattern = rule.get("r_pattern")
+
+    # Skip rules that don't have both c_pattern and r_pattern
+    # (multi-child rules have c_children/r_children instead)
+    if c_pattern is None or r_pattern is None:
+        return False
 
     c_captures = {}
     r_captures = {}
