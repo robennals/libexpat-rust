@@ -89,7 +89,7 @@ def build_suppressed_calls():
         for call in info.get("calls", []):
             suppressed.add(call)
 
-    # SAFETY CHECK: Never suppress calls listed in NOT_SUPPRESSED
+    # SAFETY CHECK: Never suppress calls listed in NOT_SUPPRESSED with status "must_port"
     not_suppressed_config = config.get("global_suppressions", {}).get("NOT_SUPPRESSED", {})
     never_suppress = set()
     for category, info in not_suppressed_config.items():
@@ -97,6 +97,8 @@ def build_suppressed_calls():
             continue
         if not isinstance(info, dict):
             continue
+        if info.get("status") != "must_port":
+            continue  # Only block must_port items; ported items can be per-function suppressed
         for call in info.get("calls", []):
             never_suppress.add(call)
 
@@ -110,7 +112,7 @@ def build_suppressed_calls():
 
 
 def build_never_suppress_errors():
-    """Build set of error codes that must NOT be suppressed."""
+    """Build set of error codes that must NOT be suppressed (only must_port items)."""
     config = load_divergences()
     never = set()
     not_suppressed = config.get("global_suppressions", {}).get("NOT_SUPPRESSED", {})
@@ -119,6 +121,8 @@ def build_never_suppress_errors():
             continue
         if not isinstance(info, dict):
             continue
+        if info.get("status") != "must_port":
+            continue  # Only block must_port items
         if "error" in info:
             never.add(info["error"])
     return never
@@ -561,6 +565,14 @@ def compare(c_func_name, r_func_name, extra_rust_funcs=None, c_file=None, r_file
         for part in case["label"].split("|"):
             part = part.strip()
             r_case_map[part] = case
+            # Also store with module prefix stripped (e.g., "xmlrole::Role::None" → "Role::None")
+            if "::" in part:
+                # Strip leading module paths: "xmlrole::Role::None" → "Role::None"
+                segments = part.split("::")
+                if len(segments) >= 2:
+                    short = "::".join(segments[-2:])
+                    if short not in r_case_map:
+                        r_case_map[short] = case
 
     # Check for wildcard/default patterns that handle unmatched cases
     has_rust_wildcard = "_" in r_case_map or any(

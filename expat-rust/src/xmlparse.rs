@@ -162,6 +162,18 @@ impl XmlError {
     }
 }
 
+/// Accounting mode for amplification attack detection.
+/// Determines which byte counter is updated when tracking token processing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum XmlAccount {
+    /// Bytes from the primary XML input (not entity expansion)
+    Direct,
+    /// Bytes from entity expansion
+    EntityExpansion,
+    /// Skip accounting (used for structural operations like attribute storage)
+    None,
+}
+
 /// Content type enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentType {
@@ -451,6 +463,16 @@ pub struct Parser {
     billion_laughs_max_amplification: f32,
     /// Billion laughs: activation threshold in bytes (0 = use default)
     billion_laughs_activation_threshold: u64,
+    /// Accounting: bytes parsed from direct input (not entity expansion)
+    accounting_bytes_direct: u64,
+    /// Accounting: bytes parsed from entity expansion
+    accounting_bytes_indirect: u64,
+    /// Entity tracking: current entity nesting depth
+    entity_tracking_depth: u32,
+    /// Entity tracking: maximum nesting depth seen
+    entity_tracking_max_depth: u32,
+    /// Entity tracking: total entities opened
+    entity_tracking_count: u64,
     /// XML role state machine for prolog parsing
     prolog_state: XmlRoleState,
     /// Current element declaration name being processed
@@ -582,6 +604,11 @@ impl Parser {
             is_subordinate: false,
             billion_laughs_max_amplification: 0.0,
             billion_laughs_activation_threshold: 0,
+            accounting_bytes_direct: 0,
+            accounting_bytes_indirect: 0,
+            entity_tracking_depth: 0,
+            entity_tracking_max_depth: 0,
+            entity_tracking_count: 0,
             prolog_state: XmlRoleState::new(),
             current_element_decl_name: None,
             content_model_stack: Vec::new(),
@@ -697,6 +724,11 @@ impl Parser {
             is_subordinate: false,
             billion_laughs_max_amplification: 0.0,
             billion_laughs_activation_threshold: 0,
+            accounting_bytes_direct: 0,
+            accounting_bytes_indirect: 0,
+            entity_tracking_depth: 0,
+            entity_tracking_max_depth: 0,
+            entity_tracking_count: 0,
             prolog_state: XmlRoleState::new(),
             current_element_decl_name: None,
             content_model_stack: Vec::new(),
@@ -790,6 +822,12 @@ impl Parser {
         }
         self.ns_triplets = false;
         self.content_start_tag_level = 0;
+        // Reset accounting state
+        self.accounting_bytes_direct = 0;
+        self.accounting_bytes_indirect = 0;
+        self.entity_tracking_depth = 0;
+        self.entity_tracking_max_depth = 0;
+        self.entity_tracking_count = 0;
         // Clear all handlers (matches C parserInit behavior)
         self.start_element_handler = None;
         self.end_element_handler = None;
@@ -1126,6 +1164,10 @@ impl Parser {
                     }
                 }
                 XmlTok::Bom => {
+                    // Check amplification accounting for BOM
+                    if !self.accounting_diff_tolerated(next_pos.saturating_sub(start), XmlAccount::Direct) {
+                        return (XmlError::AmplificationLimitBreach, start);
+                    }
                     // Skip BOM, continue with init
                     if next_pos < end {
                         self.external_entity_init_processor3(data, next_pos, end)
@@ -1507,6 +1549,20 @@ impl Parser {
                     // Get the role for this token
                     let role =
                         xmlrole::xml_token_role(&mut self.prolog_state, role_tok, &tok_text, &[]);
+
+                    // Check amplification accounting for non-whitespace roles
+                    // C: accountingDiffTolerated is called for roles other than
+                    // XML_ROLE_NONE, XML_ROLE_INSTANCE_START, and whitespace
+                    if !matches!(role, xmlrole::Role::None | xmlrole::Role::InstanceStart) {
+                        let account = if is_internal_entity {
+                            XmlAccount::EntityExpansion
+                        } else {
+                            XmlAccount::Direct
+                        };
+                        if !self.accounting_diff_tolerated(next.saturating_sub(pos), account) {
+                            return (XmlError::AmplificationLimitBreach, pos);
+                        }
+                    }
 
                     // Handle IgnoreSect specially: scan past the closing ]]>
                     if role == xmlrole::Role::IgnoreSect {
@@ -2624,8 +2680,14 @@ impl Parser {
                     }
                 }
             }
+            xmlrole::Role::None => {
+                // C: XML_ROLE_NONE — suppress default handler for BOM tokens,
+                // otherwise let default handler run
+                let suppress_default = matches!(tok, XmlTok::Bom);
+                (XmlError::None, suppress_default)
+            }
             _ => {
-                // Other roles — ignore for now
+                // Other roles — no error, let default handler run
                 (XmlError::None, false)
             }
         }
@@ -2883,6 +2945,9 @@ impl Parser {
         // Pass 2: cleanup — entity is fully processed
         let closed = self.open_internal_entities.pop().unwrap();
 
+        // Track entity closing for amplification detection
+        self.entity_tracking_on_close();
+
         // Mark entity as closed
         if closed.is_param {
             if let Some(pe) = self
@@ -2946,6 +3011,9 @@ impl Parser {
             self.open_entities.insert(entity_name.to_string());
         }
 
+        // Track entity opening for amplification detection
+        self.entity_tracking_on_open();
+
         self.open_internal_entities.push(open);
         self.processor = Processor::InternalEntity;
         self.reenter = true;
@@ -2964,7 +3032,15 @@ impl Parser {
         while pos < len {
             let result = xmltok_impl::prolog_tok(&enc, &data, pos, len);
             match result {
-                Ok(TokenResult { token, next_pos }) => match token {
+                Ok(TokenResult { token, next_pos }) => {
+                    // Check amplification accounting
+                    if !matches!(token, XmlTok::None | XmlTok::Partial | XmlTok::PartialChar | XmlTok::Invalid) {
+                        if !self.accounting_diff_tolerated(next_pos.saturating_sub(pos), XmlAccount::Direct) {
+                            self.error_code = XmlError::AmplificationLimitBreach;
+                            return;
+                        }
+                    }
+                    match token {
                     XmlTok::PrologS => {
                         self.report_default(&enc, &data, pos, next_pos);
                         pos = next_pos;
@@ -3004,7 +3080,7 @@ impl Parser {
                         self.error_code = XmlError::JunkAfterDocElement;
                         return;
                     }
-                },
+                }},
                 Err(err_pos) => {
                     // Check if this is a partial UTF-8 character at the end
                     if Self::is_partial_utf8_sequence(&data, err_pos) {
@@ -3074,6 +3150,24 @@ impl Parser {
                     return (XmlError::InvalidToken, pos);
                 }
             };
+
+            // Check amplification accounting before processing this token
+            let account = if is_internal_entity {
+                XmlAccount::EntityExpansion
+            } else {
+                XmlAccount::Direct
+            };
+            // For trailing tokens, account up to the actual end if we're not consuming more
+            let account_end = if matches!(tok, XmlTok::TrailingRsqb | XmlTok::TrailingCr) {
+                if have_more { pos } else { end }
+            } else {
+                next
+            };
+            if !matches!(tok, XmlTok::None | XmlTok::Partial | XmlTok::PartialChar | XmlTok::Invalid) {
+                if !self.accounting_diff_tolerated(account_end.saturating_sub(pos), account) {
+                    return (XmlError::AmplificationLimitBreach, pos);
+                }
+            }
 
             // Track byte count and raw data of current token for reportDefault/DefaultCurrent
             // These are always updated (even for entity text) since reportDefault needs
@@ -3693,6 +3787,13 @@ impl Parser {
                 Err(_) => return (XmlError::InvalidToken, pos),
             };
 
+            // Check amplification accounting
+            if !matches!(tok, XmlTok::None | XmlTok::Partial | XmlTok::PartialChar | XmlTok::Invalid) {
+                if !self.accounting_diff_tolerated(next.saturating_sub(pos), XmlAccount::Direct) {
+                    return (XmlError::AmplificationLimitBreach, pos);
+                }
+            }
+
             // Track event position and byte count for handler callbacks
             self.event_pos = pos;
             self.event_cur_byte_count = (next - pos) as i32;
@@ -4209,6 +4310,13 @@ impl Parser {
                 Ok(TokenResult { token, next_pos }) => (token, next_pos),
                 Err(_) => return Err(XmlError::InvalidToken),
             };
+
+            // Check amplification accounting for entity value parsing
+            if !matches!(tok, XmlTok::None | XmlTok::Partial | XmlTok::PartialChar | XmlTok::Invalid) {
+                if !self.accounting_diff_tolerated(next.saturating_sub(pos), XmlAccount::EntityExpansion) {
+                    return Err(XmlError::AmplificationLimitBreach);
+                }
+            }
 
             match tok {
                 XmlTok::None => break,
@@ -5935,6 +6043,76 @@ impl Parser {
     ) -> bool {
         self.billion_laughs_activation_threshold = threshold;
         true
+    }
+
+    /// Check if the amplification from processing bytes between `before` and `after`
+    /// is within acceptable limits. Returns true if tolerated, false if amplification
+    /// limit is breached.
+    ///
+    /// This is the core of billion laughs attack protection. It counts bytes processed
+    /// from direct input vs entity expansion, and checks whether the expansion ratio
+    /// exceeds the configured maximum amplification factor.
+    ///
+    /// Equivalent to accountingDiffTolerated in C libexpat.
+    fn accounting_diff_tolerated(&mut self, bytes_consumed: usize, account: XmlAccount) -> bool {
+        if account == XmlAccount::None {
+            return true;
+        }
+
+        let bytes_more = bytes_consumed as u64;
+
+        // Determine if this is direct input or entity expansion
+        let is_direct = account == XmlAccount::Direct
+            && !self.is_subordinate;
+
+        if is_direct {
+            self.accounting_bytes_direct = self.accounting_bytes_direct.saturating_add(bytes_more);
+        } else {
+            self.accounting_bytes_indirect = self.accounting_bytes_indirect.saturating_add(bytes_more);
+        }
+
+        // Check amplification
+        let total = self.accounting_bytes_direct + self.accounting_bytes_indirect;
+        let threshold = if self.billion_laughs_activation_threshold > 0 {
+            self.billion_laughs_activation_threshold
+        } else {
+            8_388_608 // Default: 8 MB
+        };
+
+        if total < threshold {
+            return true; // Below threshold, always tolerated
+        }
+
+        if self.accounting_bytes_direct == 0 {
+            return false; // Infinite amplification
+        }
+
+        let max_factor = if self.billion_laughs_max_amplification > 0.0 {
+            self.billion_laughs_max_amplification
+        } else {
+            100.0 // Default: 100x
+        };
+
+        let amplification = total as f64 / self.accounting_bytes_direct as f64;
+        amplification <= max_factor as f64
+    }
+
+    /// Track entity opening for recursion detection.
+    /// Equivalent to entityTrackingOnOpen in C libexpat.
+    fn entity_tracking_on_open(&mut self) {
+        self.entity_tracking_count += 1;
+        self.entity_tracking_depth += 1;
+        if self.entity_tracking_depth > self.entity_tracking_max_depth {
+            self.entity_tracking_max_depth = self.entity_tracking_depth;
+        }
+    }
+
+    /// Track entity closing.
+    /// Equivalent to entityTrackingOnClose in C libexpat.
+    fn entity_tracking_on_close(&mut self) {
+        if self.entity_tracking_depth > 0 {
+            self.entity_tracking_depth -= 1;
+        }
     }
 
     /// Set the alloc tracker maximum amplification
