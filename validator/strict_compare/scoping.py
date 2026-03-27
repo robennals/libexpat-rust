@@ -9,8 +9,9 @@ from dataclasses import dataclass, field
 from .common_ast import Node
 
 
-# Node kinds that define scope (control flow structure)
-SCOPING_KINDS = {"block", "if", "if_let", "loop", "match", "arm", "closure"}
+# Node kinds that define scope (control flow structure).
+# Block is NOT scoping — it's just { } syntax.
+SCOPING_KINDS = {"if", "if_let", "loop", "match", "arm", "closure"}
 
 
 @dataclass
@@ -97,33 +98,67 @@ def _extract_scope(ast: Node, current_scope: ScopeNode):
     """Recursively extract scoping structure and content."""
     for child in ast.children:
         if child.kind in SCOPING_KINDS:
-            # Create a child scope
-            child_scope = ScopeNode(
-                kind=child.kind,
-                label=_extract_scope_label(child),
-                source_file=child.source_file,
-                line=child.line,
-            )
-            current_scope.children.append(child_scope)
-            _extract_scope(child, child_scope)
+            _add_scope_child(child, current_scope)
         else:
             # Non-scoping node — collect content, then check for nested scopes
             _collect_content(child, current_scope.content)
             _find_nested_scopes(child, current_scope)
 
 
+def _add_scope_child(child: Node, parent_scope: ScopeNode):
+    """Create a scope node from an AST node and add it to the parent.
+
+    Applies normalizations:
+    - Result match (match with Ok/Err arms) → promote Ok arm's children
+    - Block (bare { }) → promote children to parent (block is transparent)
+    """
+    # Block transparency: blocks are not semantic scopes, just { } syntax.
+    # Promote their content and scoping children to the parent.
+    if child.kind == "block" and not child.value:
+        _extract_scope(child, parent_scope)
+        return
+
+    child_scope = ScopeNode(
+        kind=child.kind,
+        label=_extract_scope_label(child),
+        source_file=child.source_file,
+        line=child.line,
+    )
+    _extract_scope(child, child_scope)
+
+    # Result-match normalization: match with exactly Ok + Err arms
+    # → promote Ok arm's children, discard Result wrapper
+    if child_scope.kind == "match":
+        ok_arm = None
+        has_err = False
+        has_other = False
+        for arm in child_scope.children:
+            if arm.kind == "arm" and arm.label.startswith("Ok"):
+                ok_arm = arm
+            elif arm.kind == "arm" and arm.label.startswith("Err"):
+                has_err = True
+            else:
+                has_other = True
+        if ok_arm is not None and has_err and not has_other:
+            # Promote Ok arm's children and content to parent
+            parent_scope.children.extend(ok_arm.children)
+            # Merge content
+            for call, args in ok_arm.content.calls.items():
+                parent_scope.content.calls.setdefault(call, set()).update(args)
+            parent_scope.content.identifiers.update(ok_arm.content.identifiers)
+            parent_scope.content.literals.update(ok_arm.content.literals)
+            parent_scope.content.error_returns.update(ok_arm.content.error_returns)
+            parent_scope.content.assigns_to.update(ok_arm.content.assigns_to)
+            return
+
+    parent_scope.children.append(child_scope)
+
+
 def _find_nested_scopes(node: Node, parent_scope: ScopeNode):
     """Find scoping nodes nested within non-scoping expressions."""
     for child in node.children:
         if child.kind in SCOPING_KINDS:
-            child_scope = ScopeNode(
-                kind=child.kind,
-                label=_extract_scope_label(child),
-                source_file=child.source_file,
-                line=child.line,
-            )
-            parent_scope.children.append(child_scope)
-            _extract_scope(child, child_scope)
+            _add_scope_child(child, parent_scope)
         else:
             _find_nested_scopes(child, parent_scope)
 
@@ -237,6 +272,41 @@ def _collect_identifiers(node: Node, idents: set[str]):
     for child in node.children:
         if child.kind not in SCOPING_KINDS:
             _collect_identifiers(child, idents)
+
+
+def _normalize_result_match(children: list[Node]) -> list[Node]:
+    """Normalize Rust Result-match patterns in a list of children.
+
+    Detects: match { arm(Ok(...)) { [inner content] }, arm(Err) { ... } }
+    Replaces with: [inner content promoted to parent level]
+
+    This flattens Result error handling into the parent scope, making
+    Rust's `match tokenizer() { Ok(result) => match token { arms } }`
+    look like C's `tok = tokenizer(); switch(tok) { arms }`.
+    """
+    result = []
+    for child in children:
+        # Detect Rust Result match: match with arm(Ok...) and arm(Err...)
+        if child.kind == "match":
+            ok_arm = None
+            err_arm = None
+            other_arms = []
+            for arm_child in child.children:
+                if arm_child.kind == "arm":
+                    if arm_child.value.startswith("Ok"):
+                        ok_arm = arm_child
+                    elif arm_child.value.startswith("Err"):
+                        err_arm = arm_child
+                    else:
+                        other_arms.append(arm_child)
+
+            if ok_arm and err_arm and not other_arms:
+                # This is a Result match — promote Ok arm's children
+                result.extend(ok_arm.children)
+                continue
+
+        result.append(child)
+    return result
 
 
 def _extract_scope_label(node: Node) -> str:

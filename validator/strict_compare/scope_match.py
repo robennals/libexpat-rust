@@ -179,16 +179,6 @@ def _compare_scope_children(c_children: list[ScopeNode], r_children: list[ScopeN
             continue
         if any(pat in c.label for pat in skip_c_scope_labels):
             continue
-        # Unwind bare C blocks: replace with their children.
-        # C wraps switch/loop/if bodies in block nodes that Rust doesn't have.
-        if c.kind == "block" and not c.label:
-            for bc in c.children:
-                if bc.kind in skip_c_scope_kinds:
-                    continue
-                if any(pat in bc.label for pat in skip_c_scope_labels):
-                    continue
-                c_effective.append(bc)
-            continue
         c_effective.append(c)
 
     r_effective = []
