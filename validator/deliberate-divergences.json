@@ -160,6 +160,11 @@
       "c_function": "store_attribute_value",
       "c_original_name": "storeAttributeValue",
       "justification": "C storeAttributeValue wraps appendAttributeValue with entity list management. Rust inlines into normalize_attribute_value."
+    },
+    {
+      "c_function": "process_xml_decl",
+      "c_original_name": "processXmlDecl",
+      "justification": "C processXmlDecl is called from externalEntityInitProcessor3 and doProlog. Rust inlines the logic into handle_prolog_role and external_entity_init_processor3."
     }
   ],
 

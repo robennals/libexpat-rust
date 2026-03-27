@@ -131,10 +131,10 @@
       "category": "language_difference"
     },
     {
-      "name": "xml_char_cr_to_byte_cr",
+      "name": "xml_char_cr_to_input_cr",
       "input":  { "kind": "branch", "label_regex": "\\*s\\s*==\\s*0xD|\\*s\\s*==\\s*0x0D|\\*s\\s*==\\s*13" },
-      "output": { "kind": "branch", "label": "byte_is_cr" },
-      "justification": "C checks *s == 0xD (carriage return as XML_Char). Rust checks raw[i] == b'\\r'. Same comparison, different type system. Rewritten to a generic label that matches Rust's byte check.",
+      "output": { "kind": "branch", "label": "input[i] == b'\\r'" },
+      "justification": "C checks *s == 0xD (carriage return as XML_Char). Rust checks input[i] == b'\\r'. Same comparison, different type system. Rewritten to match Rust's exact label.",
       "category": "language_difference"
     },
     {
@@ -193,6 +193,14 @@
       "output": null,
       "justification": "C checks accountingDiffTolerated per-token for entity expansion attack detection. Rust checks at parse() entry point instead. Same security guarantee, different granularity.",
       "category": "architectural_difference"
+    },
+    {
+      "name": "accounting_role_match_removal",
+      "input":  { "kind": "match", "label_regex": "^role$" },
+      "output": null,
+      "justification": "C has a second switch(role) that checks which roles need accounting (XML_GE guard). Rust handles accounting at parse() entry. This match only contains accounting_diff_tolerated calls which are already deleted by other rules, leaving an empty match.",
+      "category": "architectural_difference",
+      "condition": "children contain only return(error) or return(0)"
     },
     {
       "name": "parsing_status_match_removal",
@@ -467,6 +475,16 @@
       "replace": ["end", "len"],
       "justification": "C uses 'end' as buffer end pointer. Rust uses 'end' or 'len' depending on context. Both are valid equivalents.",
       "category": "naming_difference"
+    },
+    {
+      "name": "c_nextPtr_removal",
+      "description": "Remove C 'nextPtr' output pointer argument",
+      "side": "c",
+      "function": "*",
+      "match": "^nextPtr$",
+      "replace": null,
+      "justification": "C passes nextPtr as an output pointer to return the next parse position. Rust returns it in the function's return value. No arg equivalent.",
+      "category": "api_difference"
     },
     {
       "name": "c_encoding_to_enc",

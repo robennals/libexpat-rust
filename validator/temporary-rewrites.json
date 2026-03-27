@@ -23,8 +23,8 @@
     {
       "name": "handler_check_to_if_let",
       "input":  { "kind": "branch", "label_regex": "^!?\\s*(character_data_handler|char_data_handler|default_handler|start_element_handler|end_element_handler|end_cdata_section_handler|start_cdata_section_handler|comment_handler|processing_instruction_handler|skipped_entity_handler|xml_decl_handler|start_doctype_decl_handler|end_doctype_decl_handler|notation_decl_handler|entity_decl_handler|attlist_decl_handler|element_decl_handler|unparsed_entity_decl_handler|external_entity_ref_handler|not_standalone_handler|start_namespace_decl_handler|end_namespace_decl_handler)" },
-      "output": { "kind": "branch", "label_regex": "let Some.*handler" },
-      "justification": "C checks handler pointer: if (handler) { handler(arg, data) }. Rust uses if-let: if let Some(handler) = &mut self.*_handler { handler(data) }. Both check the same handler and dispatch the same way. TEMPORARY: believed equivalent but the nested structures may differ.",
+      "output": null,
+      "justification": "C checks handler pointer: if (handler) { handler(arg, data) }. Rust uses if-let: if let Some(handler) = &mut self.*_handler { handler(data) }. The handler dispatch call inside the branch IS verified by the handler_dispatch mechanism in the matcher. The branch structure itself differs (C if-pointer vs Rust if-let) and has no 1:1 structural match. TEMPORARY: the handler call is verified, but the branch body details may differ.",
       "risk": "Handler dispatch details (arguments, fallback to default handler) may differ within the branch body.",
       "status": "believed_equivalent"
     },
@@ -79,7 +79,7 @@
     {
       "name": "parsing_status_branch_to_have_more",
       "input":  { "kind": "branch", "label_regex": "parsing_status\\.final_buffer|!parsing_status|finalBuffer" },
-      "output": { "kind": "branch", "label": "have_more" },
+      "output": { "kind": "branch", "label": "!is_final" },
       "justification": "C checks !parsing_status.finalBuffer to decide between buffering and erroring. Rust uses have_more (= !self.is_final) but the branch may be structured differently — merged into Partial/PartialChar match arms instead of as a standalone if. TEMPORARY: the check exists in Rust but may be at a different structural level.",
       "risk": "The Partial/PartialChar handling may differ in whether it returns an error or buffers data.",
       "status": "needs_verification"
