@@ -180,6 +180,21 @@ calls and errors that must never be suppressed:
 If anyone adds one of these to a suppression category, both tools exit with
 a `FATAL` error.
 
+## Algorithm divergences (needs fix)
+
+Four functions use a **different algorithm** from C and are not structurally
+compared. These are tracked in `algorithm-divergences.json` and are the
+highest-risk area for behavioral divergence:
+
+| C function | Rust function | Issue |
+|-----------|---------------|-------|
+| `storeAtts` (466L) | `process_namespaces` (115L) | Hash tables → HashMap, pools → Vec, different control flow |
+| `appendAttributeValue` (192L) | `normalize_attribute_value` (98L) | Tokenizer-based → byte-by-byte processing |
+| `storeAttributeValue` (75L) | `normalize_attribute_value` (98L) | Pool + entity list → combined with above |
+| `is_rfc3986_uri_char` (109L) | `is_rfc3986_uri_char` (9L) | Switch on char ranges → `.contains()` |
+
+These should be fixed by rewriting the Rust functions to follow C's algorithm.
+
 ## Files
 
 | File | Purpose |
@@ -187,6 +202,7 @@ a `FATAL` error.
 | `strict-ast-compare.py` | Strict skeleton-based structural comparison |
 | `ast-compare.py` | Legacy name-set comparison |
 | `strict_compare/` | Python package: skeleton extraction, rewrite engine, matcher |
+| `algorithm-divergences.json` | **Functions using different algorithms — needs fix** |
 | `structural-rewrites.json` | Verified rewrite rules (input/output patterns) |
 | `temporary-rewrites.json` | Temporary rewrite rules (believed but unverified) |
 | `deliberate-divergences.json` | Per-function suppressions and legacy config |

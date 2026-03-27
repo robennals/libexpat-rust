@@ -300,18 +300,33 @@ of equivalence. Known limitations:
    of DTD declarations, entity nesting, and encoding is unlikely to be caught by
    the test corpus.
 
-3. **Some C features are not yet ported.** Suspend/resume (`XML_StopParser` /
+3. **Some functions use a different algorithm from C.**
+   Four functions were reimplemented with different algorithms rather than
+   transliterated from C. These are tracked in `validator/algorithm-divergences.json`
+   and are verified only by behavioral tests, not structural comparison:
+   - `storeAtts` → `process_namespaces` (466→115 lines): hash tables → HashMap,
+     pools → Vec, manual array indexing → Vec<(String,String)>
+   - `appendAttributeValue` → `normalize_attribute_value` (192→98 lines):
+     tokenizer-based → byte-by-byte processing
+   - `storeAttributeValue` → `normalize_attribute_value` (75→98 lines):
+     pool + entity list management → combined with above
+   - `is_rfc3986_uri_char` (109→9 lines): switch on ranges → `.contains()`
+
+   **These should be fixed** by rewriting the Rust functions to follow C's
+   algorithm. Using a different algorithm is a potential source of behavioral
+   divergence that behavioral tests may not cover (edge cases in attribute
+   limits, entity expansion, namespace URI construction, etc.).
+
+4. **Some C features are not yet ported.** Suspend/resume (`XML_StopParser` /
    `XML_ResumeParser`) and multi-encoding external entity parsing are not
    implemented. The AST tool flags these as temporary suppressions rather than
    verified equivalences.
 
-4. **The three layers are not fully independent.** The same developer wrote the
+5. **The three layers are not fully independent.** The same developer wrote the
    Rust code, the comparison tests, and the rewrite rules. A systematic
    misunderstanding of C's semantics could propagate through all three.
 
-Despite these limitations, the combination of structural constraint + behavioral
-testing makes accidental divergence unlikely. The AST tool ensures the Rust code
-is structurally very close to C, the behavioral tests verify outputs match across
-a wide input space, and the original C test suite provides an independent quality
-bar. A bug would need to hide in a structural gap that's also not exercised by
-any of ~750 tests.
+Despite these limitations, the combination of structural constraint + deep
+expression comparison + behavioral testing makes accidental divergence unlikely
+for the 16 structurally-verified function pairs. The 4 algorithm-divergent
+functions are the highest-risk area and should be fixed first.

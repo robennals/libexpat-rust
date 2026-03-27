@@ -244,33 +244,25 @@
     {
       "c_function": "storeAtts",
       "rust_function": "process_namespaces",
-      "notes": "REIMPLEMENTED: C storeAtts (466 lines) was completely reimplemented as Rust process_namespaces (115 lines). Different data structures (hash table → HashMap, pool → Vec, flat array → Vec<(String,String)>), different control flow. 21 structural differences. NOT a transliteration — behavioral tests are the primary verification.",
-      "skip_structural": true,
-      "structural_errors": 21,
-      "error_categories": {
-        "c_data_structure_ops": "getAttributeId hash lookup, getElementType lookup, pool ops — replaced by HashMap/Vec",
-        "c_integer_overflow_guards": "INT_MAX checks — Rust uses usize, no overflow",
-        "c_memory_allocation": "realloc/malloc for attribute arrays — Rust Vec grows automatically",
-        "attribute_normalization": "C does non-CDATA normalization inside storeAtts; Rust does it in do_content after process_namespaces returns",
-        "namespace_uri_construction": "C builds URI strings with pool concatenation; Rust uses String::from + push_str"
-      }
+      "notes": "Listed in algorithm-divergences.json — Rust uses different algorithm. Needs fix.",
+      "skip_structural": true
     },
     {
       "c_function": "appendAttributeValue",
       "rust_function": "normalize_attribute_value",
-      "notes": "REIMPLEMENTED: C appendAttributeValue (192 lines) tokenizes attribute values with XmlAttributeValueTok and switches on token types. Rust normalize_attribute_value (98 lines) processes bytes directly. Different algorithm — same result verified by behavioral tests.",
+      "notes": "Listed in algorithm-divergences.json — Rust uses different algorithm. Needs fix.",
       "skip_structural": true
     },
     {
       "c_function": "storeAttributeValue",
       "rust_function": "normalize_attribute_value",
-      "notes": "REIMPLEMENTED: C storeAttributeValue wraps appendAttributeValue with entity list and pool management. Rust normalize_attribute_value combines both with byte-by-byte processing.",
+      "notes": "Listed in algorithm-divergences.json — Rust uses different algorithm. Needs fix.",
       "skip_structural": true
     },
     {
       "c_function": "is_rfc3986_uri_char",
       "rust_function": "is_rfc3986_uri_char",
-      "notes": "URI character validation. C uses a switch on character ranges; Rust uses .is_ascii_alphanumeric() + string .contains(). Completely different implementation structure — same character set verified by behavioral tests.",
+      "notes": "Listed in algorithm-divergences.json — Rust uses different algorithm. Needs fix.",
       "skip_structural": true
     }
   ],
