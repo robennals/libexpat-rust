@@ -111,8 +111,17 @@ principled:
 
   - name: must_convert
     skip: c
+    c: "if(call(ident(must_convert), $args...), $then, $else)"
+    promote: "$else"
+    why: >
+      C if(MUST_CONVERT) { encoding_conversion_loop } else { direct_call }.
+      Rust is UTF-8 only — no conversion needed. Keep the else branch
+      (the direct call) which corresponds to Rust's code.
+
+  - name: must_convert_no_else
+    skip: c
     c: "if(call(ident(must_convert), $args...), $body)"
-    why: C checks if encoding conversion needed. Rust is UTF-8 only.
+    why: C MUST_CONVERT with no else branch. Rust is UTF-8 only.
 
   - name: xml_convert
     skip: c
@@ -130,6 +139,22 @@ principled:
     skip: r
     r: "//"
     why: Not semantic.
+
+  # --- C declaration + assignment = Rust let binding ---
+
+  - name: c_decl_assign_is_rust_let
+    c_children:
+      - "let($type, $init)"
+      - "expr_stmt(assign(=, ident($name), $value))"
+    r_children:
+      - "let(ident($name), $value)"
+    why: C declares variable then assigns. Rust let-binds at initialization.
+
+  - name: c_decl_only_skip
+    c_children:
+      - "let($children...)"
+    r_children: []
+    why: C local variable declaration with no corresponding Rust let.
 
 # ==================================================================
 # Temporary rules: Known differences to be fixed

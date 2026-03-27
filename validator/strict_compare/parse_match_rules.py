@@ -75,15 +75,29 @@ def _convert_yaml_rule(rule_def: dict, status: str) -> dict | None:
     if "skip" in rule_def:
         rule["skip"] = rule_def["skip"]
 
-    # C pattern
+    # C pattern (single node)
     c_text = rule_def.get("c", "")
     if c_text:
         rule["c_pattern"] = parse_pattern(c_text)
 
-    # Rust pattern
+    # Rust pattern (single node)
     r_text = rule_def.get("r", "")
     if r_text:
         rule["r_pattern"] = parse_pattern(r_text)
+
+    # Multi-child patterns (N:M matching)
+    c_children = rule_def.get("c_children")
+    if c_children:
+        rule["c_children"] = c_children  # Keep as string list — parsed during matching
+
+    r_children = rule_def.get("r_children")
+    if r_children is not None:
+        rule["r_children"] = r_children  # Can be empty list (0:M skip)
+
+    # Promote field
+    promote = rule_def.get("promote")
+    if promote:
+        rule["promote"] = promote
 
     return rule
 
