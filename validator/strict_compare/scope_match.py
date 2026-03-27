@@ -81,17 +81,32 @@ def _compare_content(c_content: ContentSet, r_content: ContentSet,
     c_to_r_call_map = rules.get("call_name_map", {})
     c_to_r_ident_map = rules.get("identifier_map", {})
 
+    # Build reverse Rust call map: normalize Rust call names through the mapping
+    r_call_map_reverse = {}
+    for c_name, r_name in c_to_r_call_map.items():
+        r_call_map_reverse[c_name] = r_name  # C name → normalized
+    for r_name in c_to_r_call_map.values():
+        r_call_map_reverse[r_name] = r_name  # Normalized name → itself
+
+    # Normalize Rust calls: map them through the call name mapping
+    r_calls_normalized = {}
+    for r_call, r_args in r_content.calls.items():
+        normalized = c_to_r_call_map.get(r_call, r_call)
+        r_calls_normalized.setdefault(normalized, set()).update(r_args)
+
+    r_all_calls_normalized = set()
+    for call in _collect_all_calls(r_scope):
+        r_all_calls_normalized.add(c_to_r_call_map.get(call, call))
+
     # --- Compare calls ---
     for c_call, c_args in c_content.calls.items():
         if c_call in skip_c_calls:
             continue
-        # Map C call name to Rust equivalent
+        # Map C call name to normalized form
         r_call = c_to_r_call_map.get(c_call, c_call)
-        # Check current scope AND child scopes for the call
-        r_all_calls = _collect_all_calls(r_scope)
-        if r_call in r_content.calls:
+        if r_call in r_calls_normalized:
             # Call exists in Rust at same scope — compare arg identifiers
-            r_args = r_content.calls[r_call]
+            r_args = r_calls_normalized[r_call]
             # Map C arg identifiers
             mapped_c_args = set()
             for arg in c_args:
@@ -109,7 +124,7 @@ def _compare_content(c_content: ContentSet, r_content: ContentSet,
                 ))
         elif r_call != c_call and c_call in r_content.calls:
             pass  # Original name found (mapping wasn't needed)
-        elif r_call in r_all_calls or c_call in r_all_calls:
+        elif r_call in r_all_calls_normalized or c_call in r_all_calls_normalized:
             pass  # Call exists in Rust but at a different scope level — OK
         else:
             mismatches.append(Mismatch(
@@ -118,18 +133,19 @@ def _compare_content(c_content: ContentSet, r_content: ContentSet,
                 c_scope.line, r_scope.line, path,
             ))
 
-    # Check for extra Rust calls not in C (informational, not error)
+    # Check for extra Rust calls not in C
+    c_calls_normalized = set()
+    for c_call in c_content.calls:
+        c_calls_normalized.add(c_to_r_call_map.get(c_call, c_call))
+
     for r_call in r_content.calls:
         if r_call in skip_r_calls:
             continue
-        # Reverse-map: is this Rust call covered by any C call?
-        found = False
-        for c_call in c_content.calls:
-            mapped = c_to_r_call_map.get(c_call, c_call)
-            if mapped == r_call or c_call == r_call:
-                found = True
-                break
-        if not found:
+        r_normalized = c_to_r_call_map.get(r_call, r_call)
+        if r_normalized in c_calls_normalized:
+            continue  # Matched via normalization
+        if r_call in skip_r_calls or r_normalized in skip_r_calls:
+            continue
             mismatches.append(Mismatch(
                 "extra_call",
                 f"Rust calls {r_call}() but C doesn't (in this scope)",
