@@ -62,6 +62,11 @@ Language differences are handled by **explicit rewrite rules** stored in JSON:
 The tool currently validates 12 function pairs covering the main parser loop,
 content/prolog/epilog/CDATA processors, handler dispatch, and entity processing.
 
+The approach — normalizing two programs in different languages to a common IR and
+verifying equivalence modulo explicit rewrite rules — is derived from the
+multi-language synchronization algorithm described in
+[Ennals (2007), "Multi-language synchronization"](https://dl.acm.org/doi/10.5555/1762174.1762217).
+
 ```bash
 # Run the strict structural comparison
 python3 validator/strict-ast-compare.py --ci

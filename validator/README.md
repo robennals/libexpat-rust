@@ -5,6 +5,11 @@ function-by-function. Uses tree-sitter to parse both languages into ASTs,
 converts them to a common "skeleton" IR, and compares with explicit rewrite
 rules for known language differences.
 
+The approach is derived from
+[Ennals (2007), "Multi-language synchronization"](https://dl.acm.org/doi/10.5555/1762174.1762217):
+normalize programs in different languages to a common representation, then
+verify equivalence modulo a set of principled rewrite rules.
+
 ## How it works
 
 The verifier has two tools:
