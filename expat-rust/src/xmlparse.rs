@@ -334,6 +334,13 @@ pub struct AttrInfo {
 pub struct Parser {
     /// Parse buffer for incremental parsing
     buffer: Vec<u8>,
+    /// Reparse deferral: number of bytes available when the last partial token
+    /// was encountered. On the next parse() call, we skip re-tokenization unless
+    /// the buffer has grown to at least 2x this size (or we're near a realloc).
+    /// This matches C libexpat's m_partialTokenBytesBefore heuristic, preventing
+    /// O(n²) re-scanning of long incomplete tokens (comments, PIs, attributes).
+    /// See C xmlparse.c callProcessor() lines 1258-1321.
+    partial_token_bytes_before: usize,
     /// Buffer for XML_GetBuffer/XML_ParseBuffer two-phase API
     get_buffer_data: Vec<u8>,
     /// Data remaining when parser was suspended (for resume)
@@ -541,6 +548,7 @@ impl Parser {
     pub fn new(encoding: Option<&str>) -> Option<Parser> {
         Some(Parser {
             buffer: Vec::new(),
+            partial_token_bytes_before: 0,
             get_buffer_data: Vec::new(),
             suspended_data: Vec::new(),
             suspended_is_final: false,
@@ -561,7 +569,7 @@ impl Parser {
             hash_salt: 0,
             base_uri: None,
             param_entity_parsing: ParamEntityParsing::Never,
-            reparse_deferral_enabled: false,
+            reparse_deferral_enabled: true,
             tag_stack: Vec::new(),
             tag_triplet_flags: Vec::new(),
             seen_root: false,
@@ -661,6 +669,7 @@ impl Parser {
 
         Some(Parser {
             buffer: Vec::new(),
+            partial_token_bytes_before: 0,
             get_buffer_data: Vec::new(),
             suspended_data: Vec::new(),
             suspended_is_final: false,
@@ -681,7 +690,7 @@ impl Parser {
             hash_salt: 0,
             base_uri: None,
             param_entity_parsing: ParamEntityParsing::Never,
-            reparse_deferral_enabled: false,
+            reparse_deferral_enabled: true,
             tag_stack: Vec::new(),
             tag_triplet_flags: Vec::new(),
             seen_root: false,
@@ -857,7 +866,7 @@ impl Parser {
         true
     }
 
-    /// Run the current processor on the buffered data
+    /// Run the current processor on the buffered data.
     fn run_processor(&mut self) {
         // Take buffer once — matches C where parse() passes data to the processor
         let mut data = std::mem::take(&mut self.buffer);
@@ -1035,9 +1044,26 @@ impl Parser {
                 continue;
             }
 
-            // Buffer remaining data
+            // Buffer remaining data — avoid copying when no progress was made.
+            //
+            // In C libexpat, leftover data stays in-place (pointer arithmetic).
+            // In Rust, we must copy the leftover into self.buffer for the next
+            // parse() call. When no progress was made (next_pos == 0), we can
+            // move the entire Vec back in O(1) — this is the key optimization
+            // for long incomplete tokens. When progress was made, we copy the
+            // remainder (O(remaining)) and return the full data for position
+            // tracking.
             if next_pos < end {
-                self.buffer = data[next_pos..end].to_vec();
+                if next_pos == 0 && end == data.len() {
+                    // No data consumed — move entire Vec back (O(1) instead of O(n)).
+                    // No events were generated, so parse_data can be empty.
+                    self.buffer = data;
+                    return;
+                } else {
+                    // Some data consumed or end < data.len() — copy the remainder.
+                    // Return full data for position tracking (events were generated).
+                    self.buffer = data[next_pos..end].to_vec();
+                }
             }
 
             // Set event_pos for position tracking
@@ -1450,9 +1476,8 @@ impl Parser {
                     // Check if this is a partial UTF-8 character at the end
                     if Self::is_partial_utf8_sequence(data, err_pos) {
                         if have_more {
-                            // Save the remaining data for next parse call
-                            self.buffer = data[err_pos..].to_vec();
-                            return (XmlError::None, end);
+                            // Signal caller to save remaining data (run_processor handles it)
+                            return (XmlError::None, err_pos);
                         }
                         // Final buffer with partial char → PartialChar error (C: XML_ERROR_PARTIAL_CHAR)
                         return (XmlError::PartialChar, pos);
@@ -1472,8 +1497,7 @@ impl Parser {
                 XmlTok::Bom => {
                     // BOM — skip it and continue
                     if next == end && have_more {
-                        self.buffer = data[next..].to_vec();
-                        return (XmlError::None, end);
+                        return (XmlError::None, next);
                     }
                     pos = next;
                     continue;
@@ -1485,24 +1509,21 @@ impl Parser {
                 XmlTok::Partial => {
                     // Incomplete token — need more data
                     if have_more {
-                        self.buffer = data[pos..].to_vec();
-                        return (XmlError::None, end);
+                        return (XmlError::None, pos);
                     }
                     return (XmlError::UnclosedToken, pos);
                 }
                 XmlTok::PartialChar => {
                     // Incomplete UTF-8 character
                     if have_more {
-                        self.buffer = data[pos..].to_vec();
-                        return (XmlError::None, end);
+                        return (XmlError::None, pos);
                     }
                     return (XmlError::PartialChar, pos);
                 }
                 XmlTok::TrailingCr => {
                     // Trailing CR in prolog
                     if have_more {
-                        self.buffer = data[pos..].to_vec();
-                        return (XmlError::None, end);
+                        return (XmlError::None, pos);
                     }
                     // Final buffer with trailing CR: convert to newline and continue
                     // This handles DTD content that ends with \r followed by EOF
@@ -1532,8 +1553,7 @@ impl Parser {
                                 | XmlTok::CloseBracket
                         )
                     {
-                        self.buffer = data[pos..].to_vec();
-                        return (XmlError::None, end);
+                        return (XmlError::None, pos);
                     }
 
                     // Convert token type to role token type
@@ -3015,7 +3035,7 @@ impl Parser {
     /// Epilog processor — corresponds to C epilogProcessor()
     /// After root element, only whitespace, comments, and PIs are allowed
     fn epilog_processor(&mut self) {
-        let data = std::mem::take(&mut self.buffer);
+        let mut data = std::mem::take(&mut self.buffer);
         let have_more = !self.is_final;
         let enc = xmltok::Utf8Encoding;
         let len = data.len();
@@ -3042,7 +3062,11 @@ impl Parser {
                     }
                     XmlTok::Partial | XmlTok::TrailingCr => {
                         if have_more {
-                            self.buffer = data[pos..].to_vec();
+                            // Efficiently save remaining data — reuse allocation
+                            if pos > 0 {
+                                data.drain(..pos);
+                            }
+                            self.buffer = data;
                             return;
                         }
                         self.error_code = XmlError::UnclosedToken;
@@ -3050,7 +3074,10 @@ impl Parser {
                     }
                     XmlTok::PartialChar => {
                         if have_more {
-                            self.buffer = data[pos..].to_vec();
+                            if pos > 0 {
+                                data.drain(..pos);
+                            }
+                            self.buffer = data;
                             return;
                         }
                         self.error_code = XmlError::PartialChar;
@@ -3069,7 +3096,10 @@ impl Parser {
                     // Check if this is a partial UTF-8 character at the end
                     if Self::is_partial_utf8_sequence(&data, err_pos) {
                         if have_more {
-                            self.buffer = data[err_pos..].to_vec();
+                            if err_pos > 0 {
+                                data.drain(..err_pos);
+                            }
+                            self.buffer = data;
                             return;
                         }
                         // Final buffer with partial char — matches C epilogProcessor
@@ -4965,14 +4995,53 @@ impl Parser {
             self.buffer.extend_from_slice(data);
         }
 
-        // Store parse data and base position for lazy error position calculation
-        // (corresponds to C's m_positionPtr / m_eventPtr pattern)
+        // Reparse deferral: if a previous parse() call found an incomplete token,
+        // skip re-tokenization until the buffer has grown significantly (2x).
+        // This matches C libexpat's callProcessor() heuristic (xmlparse.c:1258-1321)
+        // and prevents O(n²) behavior for long incomplete tokens like comments, PIs,
+        // and attribute values.
+        //
+        // Without this, each parse() call would clone the buffer (for position
+        // tracking) and re-scan the entire accumulated data through the tokenizer,
+        // both O(buffer_size) per call → O(n²) total.
+        if self.reparse_deferral_enabled && self.partial_token_bytes_before > 0 && !self.is_final {
+            let have_now = self.buffer.len();
+            let had_before = self.partial_token_bytes_before;
+            // Only re-parse if data has at least doubled since last attempt
+            if have_now < 2 * had_before {
+                return XmlStatus::Ok;
+            }
+        }
+
+        // Store parse data and base position for lazy error position calculation.
+        // The clone is needed because handlers inside run_processor() may call
+        // current_line_number() etc., which read parse_data. The reparse deferral
+        // above ensures this clone only runs when the tokenizer actually needs to
+        // process data (not on every chunk of a long token).
+        let buf_len_before = self.buffer.len();
         self.parse_data = self.buffer.clone();
         self.position_pos = 0;
         self.event_pos = self.buffer.len(); // default: end of buffer
 
         // Run the current processor
         self.run_processor();
+
+        // Reparse deferral tracking: if the processor consumed nothing (buffer
+        // still has data and no error), remember how much data was available.
+        // On the next parse() call, we'll skip re-tokenization until the buffer
+        // has grown significantly. This matches C's m_partialTokenBytesBefore.
+        if self.error_code == XmlError::None && !self.buffer.is_empty() {
+            let consumed = buf_len_before.saturating_sub(self.buffer.len());
+            if consumed == 0 {
+                // No progress — remember buffer size for deferral
+                self.partial_token_bytes_before = buf_len_before;
+            } else {
+                // Some progress — reset deferral
+                self.partial_token_bytes_before = 0;
+            }
+        } else {
+            self.partial_token_bytes_before = 0;
+        }
 
         // Reset event byte count and data (only valid during handler callbacks)
         self.event_cur_byte_count = 0;
