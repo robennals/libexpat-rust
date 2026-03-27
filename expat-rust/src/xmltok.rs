@@ -406,6 +406,40 @@ pub fn parse_xml_decl(data: &[u8], is_text_decl: bool) -> Result<XmlDeclInfo, us
                 standalone,
             });
         }
+
+        // Second attribute after version is not "encoding" — check if it's "standalone"
+        let name_matches_standalone2 = name_end2 > name_start2
+            && name_end2 - name_start2 == 10
+            && &data[name_start2..name_end2] == b"standalone";
+
+        if !name_matches_standalone2 || is_text_decl {
+            return Err(name_start2);
+        }
+
+        // Check standalone value
+        let val_end2 = next_pos2 - minbpc;
+        let val_matches_yes = val_start2 < val_end2
+            && val_end2 - val_start2 == 3
+            && &data[val_start2..val_end2] == b"yes";
+        let val_matches_no = val_start2 < val_end2
+            && val_end2 - val_start2 == 2
+            && &data[val_start2..val_end2] == b"no";
+
+        if val_matches_yes {
+            standalone = Some(true);
+        } else if val_matches_no {
+            standalone = Some(false);
+        } else {
+            return Err(val_start2);
+        }
+
+        return Ok(XmlDeclInfo {
+            version_start,
+            version_end,
+            encoding_start: 0,
+            encoding_end: 0,
+            standalone,
+        });
     } else if name_matches_encoding {
         // First attribute is encoding (only for text declarations)
         if !is_text_decl {
