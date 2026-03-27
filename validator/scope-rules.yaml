@@ -100,11 +100,23 @@ skip_r_calls:
   - min_bytes_per_char  # Encoding method — C accesses as struct field
   - "std::mem::take"    # Rust ownership transfer
   - from_utf8           # String::from_utf8
+  - "std::str::from_utf8"  # str conversion
   - Vec::new            # Constructor
   - Vec::with_capacity  # Constructor with hint
   - String::from_utf8   # String conversion
   - Ok                  # Result::Ok constructor
+  - Err                 # Result::Err constructor
   - unwrap_or_default   # Unwrap with default
+  - handler             # Rust if-let handler call (C calls handler directly)
+  - clone               # Rust Clone trait
+  - get                 # HashMap/Vec get
+  - get_mut             # HashMap get_mut
+  - as_bytes            # str::as_bytes
+  - "char::from_u32"    # Char conversion
+  - pop                 # Vec::pop
+  - saturating_sub      # Numeric operation
+  - extract_qualified_name  # Rust-specific namespace helper
+  - "Self::normalize_lines" # Self:: prefix variant
 
 # === C identifiers to skip ===
 skip_c_identifiers:
@@ -176,6 +188,15 @@ call_name_map:
   xml_name_length: name_length
   xml_skip_s: skip_s
   xml_prolog_tok: prolog_tok
+  # Rust xmltok_impl:: prefixed calls → C tokenizer macros
+  "xmltok_impl::content_tok": content_tok
+  "xmltok_impl::prolog_tok": prolog_tok
+  "xmltok_impl::cdata_section_tok": cdata_section_tok
+  "xmltok_impl::name_length": name_length
+  "xmltok_impl::char_ref_number": char_ref_number
+  "xmltok_impl::skip_s": skip_s
+  "xmltok_impl::predefined_entity_name": predefined_entity_name
+  "xmltok::parse_xml_decl": parse_xml_decl
 
 # === Identifier mapping (C name → Rust name) ===
 identifier_map:
