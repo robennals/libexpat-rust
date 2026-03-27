@@ -329,6 +329,7 @@ def _scopes_match(c: ScopeNode, r: ScopeNode) -> bool:
     if c.kind == "if_let" and r.kind == "if":
         return True
 
+
     return False
 
 
