@@ -277,35 +277,65 @@ Excluding unreachable utilities, effective coverage of API-reachable code is app
 
 ## Fuzz Corpus Comparison
 
-We also run the OSS-Fuzz public corpora through both parsers. These ~48,000 files
-(24k UTF-8, 24k UTF-16LE) are raw inputs from continuous fuzzing of the C library.
+We run the OSS-Fuzz public corpora through both parsers — ~48,000 files
+(24k UTF-8, 24k UTF-16LE) of raw inputs from continuous fuzzing of the C library.
+This is the broadest behavioral comparison, covering malformed inputs, encoding
+edge cases, and pathological byte sequences that handwritten tests would never
+produce.
 
-### What we check
+### What we verify
 
-The fuzz corpus tests verify **status agreement**: both parsers must agree on
-whether each input is valid (OK) or invalid (ERROR). We do NOT require identical
-error codes — see below.
+Three levels of comparison, in order of importance:
 
-### Error code differences (accepted)
+1. **SAX event identity** — for every input where both parsers return OK, we
+   compare full SAX event traces (StartElement, EndElement, CharacterData,
+   ProcessingInstruction, Comment) with adjacent CharacterData events merged.
+   **Result: 0 divergences** across 109 files where both parsers accept the input.
 
-When both parsers agree the input is invalid, their specific error codes may
-differ. For example, Rust may return `INVALID_TOKEN` where C returns
-`UNCLOSED_TOKEN`. This happens because:
+2. **Status agreement** — both parsers must agree on whether each input is valid
+   (OK) or invalid (ERROR). No false accepts, no false rejects.
+   **Result: 0 disagreements** across all 47,934 files.
 
-1. **UTF-8 normalization**: The Rust parser transcodes non-UTF-8 input to UTF-8
-   before tokenizing. Both C and Rust perform the same encoding auto-detection
-   and work with the same logical characters, but the UTF-8 tokenizer can hit
-   error conditions at different token boundaries than C's encoding-specific
+3. **Error code fidelity** — when both parsers reject an input, we compare the
+   specific error code. This is a known issue (see below).
+   **Result: ~85% exact match** (84% UTF-8, 86% UTF-16LE).
+
+### Known issue: error code differences for invalid XML
+
+About 7,200 of the ~48,000 fuzz corpus files produce different error codes from
+the two parsers despite both agreeing the input is invalid. For example, Rust
+may return `INVALID_TOKEN` where C returns `UNCLOSED_TOKEN`, or `INVALID_TOKEN`
+where C returns `SYNTAX`.
+
+The root causes:
+
+1. **Prolog tokenizer coverage**: The Rust prolog tokenizer (`prolog_tok`)
+   handles fewer sub-token states than C's. When it encounters a byte sequence
+   it doesn't recognize, it returns `Invalid` or `Err` instead of `Partial`.
+   C's tokenizer parses further into the DTD/prolog before giving up, so it
+   reaches different error points and reports more specific errors like `SYNTAX`,
+   `NO_ELEMENTS`, or `UNCLOSED_TOKEN`.
+
+2. **UTF-8 normalization**: The Rust parser transcodes non-UTF-8 input to UTF-8
+   before tokenizing. Both parsers perform the same encoding auto-detection and
+   work with the same logical characters, but the UTF-8 tokenizer can hit error
+   conditions at different token boundaries than C's encoding-specific
    tokenizers, producing different error codes for the same invalid input.
 
-2. **Prolog tokenizer coverage**: The Rust prolog tokenizer handles fewer
-   sub-token states than C's, sometimes returning `INVALID_TOKEN` early where
-   C would parse further and report a more specific error like `SYNTAX` or
-   `NO_ELEMENTS`.
+These differences **never** affect:
+- Whether valid XML is accepted (SAX events always match)
+- Whether invalid XML is rejected (status always agrees)
+- The content of parsed output (element names, attributes, character data)
 
-These differences only affect the specific error code for invalid XML — they
-never cause a valid/invalid status disagreement. Improving error code fidelity
-is tracked as future work.
+They only affect which specific error code is reported for XML that both parsers
+agree is invalid. Applications that switch on specific error codes (rather than
+just checking OK vs ERROR) may see different behavior.
+
+**To fix this**, the main work needed is auditing `prolog_tok` in
+`xmltok_impl.rs` against C's `normal_prologTok` in `xmltok_impl.c`, ensuring
+all sub-token states (partial DTD constructs, conditional sections, etc.) return
+the same token types. This is a tokenizer accuracy issue, not an architectural
+one — the UTF-8 normalization approach is sound.
 
 ### Running
 
@@ -313,8 +343,12 @@ is tracked as future work.
 # Download corpora (one-time, ~100MB)
 bash scripts/download-fuzz-corpus.sh corpus
 
-# Run fuzz corpus comparison
+# Run fuzz corpus comparison (status + SAX)
 RUST_TEST_THREADS=1 cargo test -p expat-rust --test fuzz_corpus_comparison
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test fuzz_sax_comparison
+
+# Run error code analysis (informational, not a pass/fail gate)
+RUST_TEST_THREADS=1 cargo test -p expat-rust --test fuzz_corpus_analysis -- --nocapture
 ```
 
 ## Note on Encoding
