@@ -4748,12 +4748,8 @@ impl Parser {
     }
 
     fn report_default<E: Encoding>(&mut self, _enc: &E, data: &[u8], start: usize, end: usize) {
-        // Call default_handler_expand if set, otherwise call default_handler
-        let chunk = &data[start..end];
-        if let Some(handler) = &mut self.default_handler_expand {
-            handler(chunk);
-        } else if let Some(handler) = &mut self.default_handler {
-            handler(chunk);
+        if let Some(handler) = &mut self.default_handler {
+            handler(&data[start..end]);
         }
     }
 
