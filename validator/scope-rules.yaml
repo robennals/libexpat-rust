@@ -315,6 +315,21 @@ c_only_scopes:
     label_contains: "final_buffer"
     why: C final buffer check — Rust uses have_more parameter
 
+# === Content-scope matches ===
+# Rules matching C content items to Rust scope-wrapped equivalents.
+# Format: c_content matches a content item (call) at the parent level.
+#          r_scope matches a child scope wrapping the same call.
+# Shared $variables must bind to the same value on both sides.
+content_scope_matches:
+  - name: handler_borrow_wrapper
+    # C: $x($args)                        — direct handler call
+    # R: if let Some($handler) = $x { $handler($args) }  — borrow wrapper
+    c_content: { kind: "call", label_contains: "$x" }
+    r_scope: { kind: "if", label_contains: "$x" }
+    why: >
+      Rust borrow checker requires if-let to borrow Option<fn> handler.
+      C calls handler directly after null check + early return.
+
 # === Rust-only scopes (drop rules) ===
 # These Rust scopes have no C equivalent.
 r_only_scopes:

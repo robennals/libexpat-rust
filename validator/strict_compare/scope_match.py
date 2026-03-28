@@ -61,12 +61,16 @@ def _compare_scope(c: ScopeNode, r: ScopeNode, path: str,
     """Compare a matched pair of scoping nodes."""
     # Compare content
     _compare_content(c.content, r.content, path, c, r, mismatches)
-    # Compare child scopes
-    _compare_scope_children(c.children, r.children, path, mismatches)
+    # Compare child scopes, passing parent content for content-scope matching
+    _compare_scope_children(c.children, r.children, path, mismatches,
+                            c_parent_content=c.content,
+                            r_parent_content=r.content)
 
 
 def _compare_scope_children(c_children: list[ScopeNode], r_children: list[ScopeNode],
-                            path: str, mismatches: list[Mismatch]):
+                            path: str, mismatches: list[Mismatch],
+                            c_parent_content: ContentSet = None,
+                            r_parent_content: ContentSet = None):
     """Compare child scoping nodes using identity-based matching.
 
     1. Match arms by label
@@ -153,10 +157,17 @@ def _compare_scope_children(c_children: list[ScopeNode], r_children: list[ScopeN
         ))
 
     # Phase 5: Report unmatched Rust scopes
+    # Check content-scope matches: if Rust has a scope wrapping a call
+    # that C has as content at the parent level, it's a borrow-checker wrapper.
+    cs_rules = rules.get("content_scope_matches", [])
+
     for ri, r_node in enumerate(r_children):
         if ri in r_matched:
             continue
         if _should_drop(r_node, r_drops):
+            continue
+        # Check content-scope matches
+        if _is_content_scope_match(r_node, c_parent_content, cs_rules):
             continue
         mismatches.append(Mismatch(
             "extra_r_scope",
@@ -331,6 +342,44 @@ def _should_drop(scope: ScopeNode, drop_rules: list) -> bool:
     for rule in drop_rules:
         if _scope_matches_pattern(scope, rule):
             return True
+    return False
+
+
+# ========= Content-scope matching =========
+
+def _is_content_scope_match(r_scope: ScopeNode, c_content: ContentSet,
+                            rules: list) -> bool:
+    """Check if a Rust scope is a borrow-checker wrapper for a C content call.
+
+    For each content-scope rule: if the Rust scope matches the r_scope pattern,
+    AND C's parent content has a call that shares an identifier with the
+    Rust scope's label, they correspond.
+    """
+    if c_content is None:
+        return False
+    for rule in rules:
+        r_pat = rule.get("r_scope", {})
+        if not _scope_matches_pattern(r_scope, r_pat):
+            continue
+        # The Rust scope matched the pattern. Check if C content has
+        # a corresponding call. Extract the handler name from the Rust
+        # scope's label and look for it in C's calls.
+        r_label_ids = set(r_scope.label.replace(",", " ").split())
+        for c_call_name in c_content.calls:
+            c_call_ids = set(c_call_name.replace("_", " ").split())
+            # Check if any meaningful identifier overlaps
+            # Strip m_ prefix from C call name parts
+            c_normalized = set()
+            for part in c_call_name.split("_"):
+                if part and part != "m":
+                    c_normalized.add(part)
+            r_normalized = set()
+            for part in r_scope.label.replace(",", " ").split():
+                for sub in part.split("_"):
+                    if sub:
+                        r_normalized.add(sub)
+            if c_normalized & r_normalized:
+                return True
     return False
 
 
