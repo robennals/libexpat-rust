@@ -2,7 +2,6 @@
   "description": "Deliberate divergences between C libexpat and Rust implementation. Every suppression MUST have a justification. The ast-compare tool uses this to distinguish intentional differences from bugs.",
   "version": 2,
   "last_audited": "2026-03-26",
-
   "global_suppressions": {
     "errors": {
       "NoMemory": {
@@ -22,68 +21,116 @@
         "justification": "C uses manual memory management with pools (STRING_POOL) and explicit malloc/free. Rust uses owned types (Vec, String, HashMap) with automatic memory management. These are fundamental language differences with no behavioral impact on parsing.",
         "status": "accepted",
         "calls": [
-          "poolStoreString", "poolAppend", "poolAppendString", "poolCopyString",
-          "poolCopyStringN", "poolFinish", "poolDiscard", "poolStart", "poolGrow",
-          "poolClear", "poolDestroy", "poolInit", "poolLastString", "poolLength",
-          "poolBytesToAllocateFor", "poolChop", "poolCopyStringNoFinish",
-          "poolAppendChar", "POOL_APPEND_CHAR",
-          "REALLOC", "MALLOC", "FREE",
-          "malloc_fcn", "free_fcn", "free"
+          "poolStoreString",
+          "poolAppend",
+          "poolAppendString",
+          "poolCopyString",
+          "poolCopyStringN",
+          "poolFinish",
+          "poolDiscard",
+          "poolStart",
+          "poolGrow",
+          "poolClear",
+          "poolDestroy",
+          "poolInit",
+          "poolLastString",
+          "poolLength",
+          "poolBytesToAllocateFor",
+          "poolChop",
+          "poolCopyStringNoFinish",
+          "poolAppendChar",
+          "POOL_APPEND_CHAR",
+          "REALLOC",
+          "MALLOC",
+          "FREE",
+          "malloc_fcn",
+          "free_fcn",
+          "free"
         ]
       },
       "hash_tables": {
         "justification": "C uses custom hash table implementation with lookup/hash functions. Rust uses std::collections::HashMap. Same semantics, different API.",
         "status": "accepted",
         "calls": [
-          "lookup", "hash", "hashTableInit", "hashTableClear", "hashTableDestroy"
+          "lookup",
+          "hash",
+          "hashTableInit",
+          "hashTableClear",
+          "hashTableDestroy"
         ]
       },
       "entropy": {
         "justification": "C gathers entropy for hash salt manually. Rust uses RandomState from std which handles this automatically.",
         "status": "accepted",
         "calls": [
-          "generate_hash_secret_salt", "gather_time_entropy"
+          "generate_hash_secret_salt",
+          "gather_time_entropy"
         ]
       },
       "c_string_ops": {
         "justification": "C string operations (memcpy, strcmp, etc.) are handled inline in Rust via String/Vec methods and slice operations.",
         "status": "accepted",
         "calls": [
-          "memcpy", "memcmp", "strcmp", "strlen", "XML_T", "XmlConvert",
-          "XmlEncode", "CHAR_HASH", "XmlPredefinedEntityName", "XmlIsPublicId"
+          "memcpy",
+          "memcmp",
+          "strcmp",
+          "strlen",
+          "XML_T",
+          "XmlConvert",
+          "XmlEncode",
+          "CHAR_HASH",
+          "XmlPredefinedEntityName",
+          "XmlIsPublicId"
         ]
       },
       "c_type_system": {
         "justification": "C type casting macros (ENTITY, ELEMENT_TYPE, etc.) have no Rust equivalent because Rust uses proper types.",
         "status": "accepted",
         "calls": [
-          "ENTITY", "ELEMENT_TYPE", "ATTRIBUTE_ID", "PREFIX", "TAG",
-          "charDataHandler", "XML_Char"
+          "ENTITY",
+          "ELEMENT_TYPE",
+          "ATTRIBUTE_ID",
+          "PREFIX",
+          "TAG",
+          "charDataHandler",
+          "XML_Char"
         ]
       },
       "c_internal_macros": {
         "justification": "C-specific internal macros and helpers with no Rust equivalent.",
         "status": "accepted",
         "calls": [
-          "mustConvert", "MUST_CONVERT", "lines",
-          "getContext", "dtdCopy", "dtdReset",
-          "parserBusy", "parserInit"
+          "mustConvert",
+          "MUST_CONVERT",
+          "lines",
+          "getContext",
+          "dtdCopy",
+          "dtdReset",
+          "parserBusy",
+          "parserInit"
         ]
       },
       "content_model_building": {
-        "justification": "C builds content models with buildModel/nextScaffoldPart using a scaffold array. Rust uses ContentNode stack (content_model_stack) with push/pop — same semantics, different data structure.",
+        "justification": "C builds content models with buildModel/nextScaffoldPart using a scaffold array. Rust uses ContentNode stack (content_model_stack) with push/pop \u2014 same semantics, different data structure.",
         "status": "accepted",
         "calls": [
-          "buildModel", "build_model", "nextScaffoldPart"
+          "buildModel",
+          "build_model",
+          "nextScaffoldPart"
         ]
       },
       "refactored_into_callers": {
         "justification": "These C helper functions were inlined into their Rust callers during the port. The logic exists in the Rust code but is part of a larger function rather than being a separate call. Verified by behavioral tests passing: the same code paths execute, just not factored into separate functions.",
         "status": "accepted",
         "calls": [
-          "freeBindings", "getElementType", "getAttributeId",
-          "defineAttribute", "normalizePublicId", "storeAttributeValue",
-          "callStoreEntityValue", "storeSelfEntityValue",
+          "freeBindings",
+          "getElementType",
+          "getAttributeId",
+          "defineAttribute",
+          "normalizePublicId",
+          "storeAttributeValue",
+          "callStoreEntityValue",
+          "storeSelfEntityValue",
           "processXmlDecl"
         ]
       },
@@ -91,31 +138,50 @@
         "justification": "C wraps tokenizer calls through XmlContentTok/XmlPrologTok/etc macros which the AST extractor sees as calls. In Rust, the tokenizer is called directly via methods in xmltok_impl. The tokenizer call IS made in Rust, just through a different path. These are already in CALL_MAP for renaming but also appear in case-level analysis.",
         "status": "accepted",
         "calls": [
-          "XmlContentTok", "XmlPrologTok", "XmlCdataSectionTok",
-          "XmlEntityValueTok", "XmlCharRefNumber", "XmlIgnoreSectionTok",
-          "XmlNameLength", "XmlGetAttributes"
+          "XmlContentTok",
+          "XmlPrologTok",
+          "XmlCdataSectionTok",
+          "XmlEntityValueTok",
+          "XmlCharRefNumber",
+          "XmlIgnoreSectionTok",
+          "XmlNameLength",
+          "XmlGetAttributes"
         ]
       },
       "c_preprocessor_macros": {
         "justification": "C preprocessor macros and compile-time constructs that are extracted by regex but are not real function calls. These are artifacts of text-based call extraction.",
         "status": "accepted",
         "calls": [
-          "ROUND_UP", "EXPAT_MIN", "EXPAT_SAFE_PTR_DIFF", "EXPAT_FMT_PTRDIFF_T",
-          "EXPAT_FMT_ULL", "ENTROPY_DEBUG", "PROBE_STEP", "SECOND_HASH",
-          "UNUSED_P", "XML_GE", "XML_TRUE", "XML_FALSE", "XCS",
-          "INT_MAX", "UINT_MAX", "SIZE_MAX"
+          "ROUND_UP",
+          "EXPAT_MIN",
+          "EXPAT_SAFE_PTR_DIFF",
+          "EXPAT_FMT_PTRDIFF_T",
+          "EXPAT_FMT_ULL",
+          "ENTROPY_DEBUG",
+          "PROBE_STEP",
+          "SECOND_HASH",
+          "UNUSED_P",
+          "XML_GE",
+          "XML_TRUE",
+          "XML_FALSE",
+          "XCS",
+          "INT_MAX",
+          "UINT_MAX",
+          "SIZE_MAX"
         ]
       },
       "allocator_tracking": {
         "justification": "C's MALLOC_TRACKER wraps expat_malloc/realloc/free to track heap allocation sizes for amplification detection. This is allocator-level instrumentation that requires C's custom allocator hooks. Rust's owned types make heap tracking impractical without a custom global allocator. NOTE: This is SEPARATE from byte-counting accounting (see NOT_SUPPRESSED below).",
         "status": "accepted",
         "calls": [
-          "expat_malloc", "expat_realloc", "expat_free",
-          "testingAccountingGetCountBytesDirect", "testingAccountingGetCountBytesIndirect"
+          "expat_malloc",
+          "expat_realloc",
+          "expat_free",
+          "testingAccountingGetCountBytesDirect",
+          "testingAccountingGetCountBytesIndirect"
         ]
       }
     },
-
     "NOT_SUPPRESSED": {
       "_comment": "These C features are NOT suppressed and MUST be ported to Rust. They are listed here to prevent accidental re-suppression.",
       "byte_counting_accounting": {
@@ -129,7 +195,7 @@
         "status": "ported"
       },
       "entity_tracking": {
-        "why_not_suppressed": "entityTrackingOnOpen/OnClose track which entities are currently being expanded, preventing infinite recursion and enabling amplification detection. This is pure parsing state management — it maintains a stack of open entities. It does NOT depend on the C allocator.",
+        "why_not_suppressed": "entityTrackingOnOpen/OnClose track which entities are currently being expanded, preventing infinite recursion and enabling amplification detection. This is pure parsing state management \u2014 it maintains a stack of open entities. It does NOT depend on the C allocator.",
         "calls": [
           "entityTrackingOnOpen",
           "entityTrackingOnClose",
@@ -144,7 +210,6 @@
       }
     }
   },
-
   "inline_functions": [
     {
       "c_function": "get_attribute_id",
@@ -167,12 +232,11 @@
       "justification": "C processXmlDecl is called from externalEntityInitProcessor3 and doProlog. Rust inlines the logic into handle_prolog_role and external_entity_init_processor3."
     }
   ],
-
   "function_pairs": [
     {
       "c_function": "doContent",
       "rust_function": "do_content",
-      "notes": "Core content processing loop. 'accountingDiffTolerated' calls in C check amplification on every token — these are NOT ported yet."
+      "notes": "Core content processing loop. 'accountingDiffTolerated' calls in C check amplification on every token \u2014 these are NOT ported yet."
     },
     {
       "c_function": "epilogProcessor",
@@ -188,7 +252,9 @@
       "c_function": "doProlog",
       "rust_function": "do_prolog",
       "notes": "Prolog tokenization loop. Role dispatch is split into handle_prolog_role in Rust.",
-      "split_functions": ["handle_prolog_role"]
+      "split_functions": [
+        "handle_prolog_role"
+      ]
     },
     {
       "c_function": "contentProcessor",
@@ -199,12 +265,6 @@
       "c_function": "prologProcessor",
       "rust_function": "prolog_processor",
       "notes": "Prolog processor entry point"
-    },
-    {
-      "c_function": "processXmlDecl",
-      "rust_function": "handle_prolog_role",
-      "rust_match_arm": "Role::XmlDecl",
-      "notes": "XML declaration processing is inline in handle_prolog_role, not in process_xml_decl (which is dead code)"
     },
     {
       "c_function": "reportComment",
@@ -224,12 +284,12 @@
     {
       "c_function": "storeEntityValue",
       "rust_function": "store_entity_value",
-      "notes": "Entity value storage — contains accountingDiffTolerated and entityTracking calls"
+      "notes": "Entity value storage \u2014 contains accountingDiffTolerated and entityTracking calls"
     },
     {
       "c_function": "externalEntityInitProcessor",
       "rust_function": "external_entity_init_processor",
-      "notes": "External entity initialization — contains accountingDiffTolerated calls"
+      "notes": "External entity initialization \u2014 contains accountingDiffTolerated calls"
     },
     {
       "c_function": "normalizeLines",
@@ -239,88 +299,145 @@
     {
       "c_function": "processEntity",
       "rust_function": "process_entity",
-      "notes": "Entity processing setup — security-critical (entity tracking, amplification checks). C uses typed enum (INTERNAL/ATTRIBUTE/VALUE); Rust uses is_param bool."
+      "notes": "Entity processing setup \u2014 security-critical (entity tracking, amplification checks). C uses typed enum (INTERNAL/ATTRIBUTE/VALUE); Rust uses is_param bool."
     },
     {
       "c_function": "externalEntityInitProcessor3",
       "rust_function": "external_entity_init_processor3",
-      "notes": "Third-stage external entity processor — handles BOM, text declaration, content start."
+      "notes": "Third-stage external entity processor \u2014 handles BOM, text declaration, content start."
     },
     {
       "c_function": "storeAtts",
       "rust_function": "process_namespaces",
-      "notes": "Listed in algorithm-divergences.json — Rust uses different algorithm. Needs fix.",
+      "notes": "Listed in algorithm-divergences.json \u2014 Rust uses different algorithm. Needs fix.",
       "skip_structural": true
     },
     {
       "c_function": "appendAttributeValue",
       "rust_function": "normalize_attribute_value",
-      "notes": "Listed in algorithm-divergences.json — Rust uses different algorithm. Needs fix.",
+      "notes": "Listed in algorithm-divergences.json \u2014 Rust uses different algorithm. Needs fix.",
       "skip_structural": true
     },
     {
       "c_function": "storeAttributeValue",
       "rust_function": "normalize_attribute_value",
-      "notes": "Listed in algorithm-divergences.json — Rust uses different algorithm. Needs fix.",
+      "notes": "Listed in algorithm-divergences.json \u2014 Rust uses different algorithm. Needs fix.",
       "skip_structural": true
     },
     {
       "c_function": "is_rfc3986_uri_char",
       "rust_function": "is_rfc3986_uri_char",
-      "notes": "Listed in algorithm-divergences.json — Rust uses different algorithm. Needs fix.",
+      "notes": "Listed in algorithm-divergences.json \u2014 Rust uses different algorithm. Needs fix.",
       "skip_structural": true
     }
   ],
-
   "per_function_suppressions": {
     "do_content": {
       "notes": "Entity lookup uses HashMap instead of C hash table + pool. EntityDeclaredInPe only fires in pool-related contexts. end_namespace_decl_handler IS called in Rust but via pop_ns_bindings() (line 4586) which the case-level AST analysis can't trace through. character_data_handler in CdataSectOpen is guarded by #if XML_GE in C (entity accounting path). storeAtts/process_namespaces appearing in EndTag case is a tree-sitter extraction artifact from C's switch fall-through.",
-      "suppressed_errors": ["EntityDeclaredInPe", "AmplificationLimitBreach"],
-      "suppressed_handlers": ["end_namespace_decl_handler", "character_data_handler"],
-      "suppressed_calls": ["process_namespaces", "accounting_diff_tolerated"],
+      "suppressed_errors": [
+        "EntityDeclaredInPe",
+        "AmplificationLimitBreach"
+      ],
+      "suppressed_handlers": [
+        "end_namespace_decl_handler",
+        "character_data_handler"
+      ],
+      "suppressed_calls": [
+        "process_namespaces",
+        "accounting_diff_tolerated"
+      ],
       "justification": "AmplificationLimitBreach and accounting_diff_tolerated are handled at parse() entry point and process_entity() level, not per-token. This avoids double-counting when data is buffered and re-parsed across parse() calls."
     },
     "do_prolog": {
-      "notes": "Role handling split into handle_prolog_role. EntityDeclaredInPe relates to C pool operations. NoElements is returned in prologProcessor/contentProcessor (higher-level callers), not inside the prolog dispatch itself. UndefinedEntity is checked in do_content, not do_prolog, in Rust. entity_tracking_on_open/close are called in process_entity() which is called FROM do_prolog. accounting_on_abort is debug logging — Rust logs via standard error handling.",
-      "suppressed_errors": ["EntityDeclaredInPe", "NoElements", "UndefinedEntity", "AmplificationLimitBreach"],
+      "notes": "Role handling split into handle_prolog_role. EntityDeclaredInPe relates to C pool operations. NoElements is returned in prologProcessor/contentProcessor (higher-level callers), not inside the prolog dispatch itself. UndefinedEntity is checked in do_content, not do_prolog, in Rust. entity_tracking_on_open/close are called in process_entity() which is called FROM do_prolog. accounting_on_abort is debug logging \u2014 Rust logs via standard error handling.",
+      "suppressed_errors": [
+        "EntityDeclaredInPe",
+        "NoElements",
+        "UndefinedEntity",
+        "AmplificationLimitBreach"
+      ],
       "suppressed_handlers": [],
-      "suppressed_calls": ["entity_tracking_on_open", "entity_tracking_on_close", "accounting_on_abort", "accounting_diff_tolerated"],
+      "suppressed_calls": [
+        "entity_tracking_on_open",
+        "entity_tracking_on_close",
+        "accounting_on_abort",
+        "accounting_diff_tolerated"
+      ],
       "justification": "Structural split. AmplificationLimitBreach returned from parse() entry. entity_tracking/accounting in process_entity()."
     },
     "do_cdata_section": {
       "notes": "AmplificationLimitBreach is returned from parse() entry point, not per-token in do_cdata_section.",
-      "suppressed_errors": ["AmplificationLimitBreach"],
+      "suppressed_errors": [
+        "AmplificationLimitBreach"
+      ],
       "suppressed_handlers": [],
       "justification": "Accounting at parse() entry level, not per-token."
     },
     "epilog_processor": {
       "notes": "C has -XML_TOK_PROLOG_S (negative token = trailing CR). Rust tokenizer returns XmlTok::TrailingCr instead. Aborted/UnexpectedState are C-specific guard returns for parser state validation.",
-      "suppressed_errors": ["Aborted", "UnexpectedState", "AmplificationLimitBreach"],
+      "suppressed_errors": [
+        "Aborted",
+        "UnexpectedState",
+        "AmplificationLimitBreach"
+      ],
       "suppressed_handlers": [],
       "justification": "Different token representation for trailing CR. AmplificationLimitBreach at parse() entry."
     },
     "handle_prolog_role": {
       "notes": "processXmlDecl in C handles both XML declarations and text declarations. In Rust, text declaration handling is in external_entity_init_processor3, not handle_prolog_role. TextDecl error IS returned at xmlparse.rs:1107. AmplificationLimitBreach from processXmlDecl's accountingDiffTolerated is handled by do_prolog's accounting check (which covers all roles including XmlDecl).",
-      "suppressed_errors": ["TextDecl", "AmplificationLimitBreach"],
+      "suppressed_errors": [
+        "TextDecl",
+        "AmplificationLimitBreach"
+      ],
       "suppressed_handlers": [],
       "justification": "TextDecl and accounting checks exist in Rust but in different functions. TextDecl in external_entity_init_processor3. AmplificationLimitBreach is returned by do_prolog's accounting check which runs for all roles."
     },
     "store_entity_value": {
-      "notes": "UnexpectedState is a C-specific guard return. skipped_entity_handler is called in do_prolog and do_content when entities are skipped, not during entity value storage — different point in the entity processing pipeline.",
-      "suppressed_errors": ["UnexpectedState", "AmplificationLimitBreach"],
-      "suppressed_handlers": ["skipped_entity_handler"],
+      "notes": "UnexpectedState is a C-specific guard return. skipped_entity_handler is called in do_prolog and do_content when entities are skipped, not during entity value storage \u2014 different point in the entity processing pipeline.",
+      "suppressed_errors": [
+        "UnexpectedState",
+        "AmplificationLimitBreach"
+      ],
+      "suppressed_handlers": [
+        "skipped_entity_handler"
+      ],
       "justification": "UnexpectedState at higher level. AmplificationLimitBreach at parse() entry and process_entity(). skipped_entity_handler at entity reference sites."
     },
     "external_entity_init_processor3": {
       "notes": "C returns Aborted/UnexpectedState as guard returns for parser state validation that Rust handles differently.",
-      "suppressed_errors": ["Aborted", "UnexpectedState"],
+      "suppressed_errors": [
+        "Aborted",
+        "UnexpectedState"
+      ],
       "justification": "C-specific parser state guard returns. Rust uses different state validation."
     },
     "normalize_attribute_value": {
       "notes": "C appendAttributeValue is 192 lines with entity expansion, pool management, encoding conversion. Rust normalize_attribute_value is 98 lines handling the same cases but with Vec/String instead of pools and simplified entity handling.",
-      "suppressed_errors": ["AmplificationLimitBreach", "AttributeExternalEntityRef", "BadCharRef", "BinaryEntityRef", "EntityDeclaredInPe", "InvalidToken", "RecursiveEntityRef", "UndefinedEntity", "UnexpectedState"],
-      "suppressed_calls": ["accounting_diff_tolerated", "append_attribute_value", "character", "encoding", "pool_last_char", "process_entity", "report_default", "xml_attribute_value_tok"],
-      "suppressed_handlers": ["default_handler", "skipped_entity_handler"],
+      "suppressed_errors": [
+        "AmplificationLimitBreach",
+        "AttributeExternalEntityRef",
+        "BadCharRef",
+        "BinaryEntityRef",
+        "EntityDeclaredInPe",
+        "InvalidToken",
+        "RecursiveEntityRef",
+        "UndefinedEntity",
+        "UnexpectedState"
+      ],
+      "suppressed_calls": [
+        "accounting_diff_tolerated",
+        "append_attribute_value",
+        "character",
+        "encoding",
+        "pool_last_char",
+        "process_entity",
+        "report_default",
+        "xml_attribute_value_tok"
+      ],
+      "suppressed_handlers": [
+        "default_handler",
+        "skipped_entity_handler"
+      ],
       "justification": "C appendAttributeValue recursively calls itself for entity expansion, checks accounting, and manages pool memory. Rust handles entity expansion inline with HashMap lookups. Error codes from recursive entity processing (RecursiveEntityRef, BinaryEntityRef, etc.) are checked at different structural levels. Pool operations replaced by Vec."
     }
   }
