@@ -128,12 +128,11 @@ def compare_pair(c_func: str, r_func: str, dump: bool = False):
         if len(r_canonical) > 500:
             print(f"... ({len(r_canonical)} chars total)")
 
-    # Compare: tokenize both and find differences
-    from strict_compare.source_pattern import tokenize
-    c_tokens = tokenize(c_canonical)
-    r_tokens = tokenize(r_canonical)
+    # Diff canonical forms
+    from strict_compare.canonical_diff import diff_canonical
+    diffs = diff_canonical(c_canonical, r_canonical, c_body, r_body, c_func, r_func)
 
-    return c_tokens, r_tokens
+    return c_canonical, r_canonical, diffs, c_body, r_body
 
 
 def main():
@@ -150,6 +149,8 @@ def main():
     if args[0] == "--all":
         with open(DIVERGENCES_FILE) as f:
             config = json.load(f)
+        total_diffs = 0
+        passing = 0
         for pair in config["function_pairs"]:
             if pair.get("skip_structural"):
                 print(f"  {pair['c_function']} <-> {pair['rust_function']}: SKIPPED")
@@ -157,16 +158,46 @@ def main():
             result = compare_pair(pair["c_function"], pair["rust_function"], dump=dump)
             if result is None:
                 continue
-            c_can, r_can = result
-            # For now just show lengths — real comparison TBD
-            print(f"  {pair['c_function']} <-> {pair['rust_function']}: "
-                  f"C={len(c_can)} chars, R={len(r_can)} chars")
+            c_can, r_can, diffs, c_body, r_body = result
+            n = len(diffs)
+            total_diffs += n
+            if n == 0:
+                passing += 1
+                print(f"  {pair['c_function']} <-> {pair['rust_function']}: MATCH")
+            else:
+                # Count meaningful diffs (not just punctuation)
+                meaningful = [d for d in diffs
+                              if len(d.get("c_token", "") or d.get("r_token", "")) > 1
+                              or (d.get("c_token", "") or d.get("r_token", "")).isalpha()]
+                print(f"  {pair['c_function']} <-> {pair['rust_function']}: "
+                      f"{n} diffs ({len(meaningful)} meaningful)")
+        n_compared = sum(1 for p in config["function_pairs"] if not p.get("skip_structural"))
+        print(f"\n{passing}/{n_compared} match, {total_diffs} total diffs")
+
+    elif args[0] == "--prompt" and len(args) >= 3:
+        result = compare_pair(args[1], args[2])
+        if result:
+            c_can, r_can, diffs, c_body, r_body = result
+            from strict_compare.canonical_diff import generate_prompt
+            prompt = generate_prompt(args[1], args[2], diffs, c_body, r_body)
+            print(prompt)
+
     elif len(args) >= 2:
         result = compare_pair(args[0], args[1], dump=dump)
         if result:
-            c_can, r_can = result
-            print(f"  C canonical: {len(c_can)} chars")
-            print(f"  R canonical: {len(r_can)} chars")
+            c_can, r_can, diffs, c_body, r_body = result
+            n = len(diffs)
+            if n == 0:
+                print(f"  {args[0]} <-> {args[1]}: MATCH")
+            else:
+                meaningful = [d for d in diffs
+                              if len(d.get("c_token", "") or d.get("r_token", "")) > 1
+                              or (d.get("c_token", "") or d.get("r_token", "")).isalpha()]
+                print(f"  {args[0]} <-> {args[1]}: {n} diffs ({len(meaningful)} meaningful)")
+                if dump:
+                    from strict_compare.canonical_diff import generate_prompt
+                    print()
+                    print(generate_prompt(args[0], args[1], diffs, c_body, r_body))
     else:
         print(__doc__)
         sys.exit(1)

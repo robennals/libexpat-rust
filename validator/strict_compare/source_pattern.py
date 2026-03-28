@@ -26,14 +26,18 @@ _MATCH = {"(": ")", "{": "}", "[": "]"}
 _RMATCH = {")": "(", "}": "{", "]": "["}
 
 
-def tokenize(text: str) -> list[str]:
+def tokenize(text: str, track_lines: bool = False) -> list[str] | list[tuple[str, int]]:
     """Split source text into tokens.
+
+    If track_lines=True, returns list of (token, line_number) tuples.
+    Otherwise returns list of token strings.
 
     Handles: identifiers, numbers, strings, operators, single-char punctuation.
     Strips whitespace and comments.
     """
     tokens = []
     i = 0
+    line = 1
     while i < len(text):
         c = text[i]
 
