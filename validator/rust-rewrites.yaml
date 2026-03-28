@@ -54,6 +54,15 @@ rust_rewrite_rules:
     before: "String :: from_utf8 ( $val ) . unwrap_or_default ( )"
     after: "$val"
 
+  # --- Handler null check + early return ---
+  - name: handler_is_none_early_return
+    before: "if self . $field . is_none ( ) { $body return ; }"
+    drop: true
+
+  - name: handler_is_none_early_return_with_default
+    before: "if self . $field . is_none ( ) { $body return $ret ; }"
+    drop: true
+
   # --- Reference/borrow removal ---
   - name: strip_ref
     before: "& $expr"

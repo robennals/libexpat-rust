@@ -8,6 +8,15 @@ c_rewrite_rules:
     before: "parser -> $field"
     after: "self . $field"
 
+  # --- Handler null check + early return ---
+  - name: handler_null_check_early_return
+    before: "if ( ! self . $handler ) { $body return ; }"
+    drop: true
+
+  - name: handler_null_check_early_return_1
+    before: "if ( ! self . $handler ) { $body return 1 ; }"
+    drop: true
+
   # --- Handler dispatch ---
   - name: handler_call_with_arg
     before: "if ( $handler ) { $handler ( $handlerArg , $args ) ; }"
