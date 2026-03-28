@@ -103,8 +103,30 @@ def _compare_scope_children(c_children: list[ScopeNode], r_children: list[ScopeN
                 return True
         return False
 
-    # Find maximum matching (augmenting paths algorithm)
-    best_pairs = _find_max_matching(c_remaining, r_remaining, can_match)
+    def match_quality(c_node, r_node):
+        """Score for how well two scopes match. Higher = better."""
+        if not can_match(c_node, r_node):
+            return 0
+        if c_node.kind == "match" and r_node.kind == "match":
+            # For matches, score by arm label overlap
+            c_labels = {c.label for c in c_node.children if c.kind == "arm" and c.label}
+            r_labels = {r.label for r in r_node.children if r.kind == "arm" and r.label}
+            # Count case-insensitive matches
+            overlap = 0
+            for cl in c_labels:
+                for rl in r_labels:
+                    if _arm_labels_match(cl, rl):
+                        overlap += 1
+                        break
+            return overlap + 1  # +1 so non-zero even with no arms
+        return 1
+
+    # Find maximum matching, preferring higher-quality pairs
+    # Sort adjacency lists by quality (best first) so augmenting paths
+    # prefer better matches
+    best_pairs = _find_max_matching(
+        c_remaining, r_remaining,
+        can_match, match_quality)
     for ci, ri in best_pairs:
         c_matched[ci] = ri
         r_matched[ri] = ci
@@ -145,19 +167,26 @@ def _compare_scope_children(c_children: list[ScopeNode], r_children: list[ScopeN
 
 # ========= Maximum bipartite matching =========
 
-def _find_max_matching(c_items: list, r_items: list, can_match) -> list:
+def _find_max_matching(c_items: list, r_items: list,
+                       can_match, match_quality=None) -> list:
     """Find maximum matching between C and R scope lists.
 
     Uses augmenting paths (Hopcroft-Karp simplified for small sets).
+    When match_quality is provided, adjacency lists are sorted by
+    quality (best first) so the algorithm prefers better matches.
     Returns list of (c_idx, r_idx) pairs.
     """
     # Build adjacency: for each c_item, which r_items can it match?
     adj = {}
     for ci, c_node in c_items:
-        adj[ci] = []
+        candidates = []
         for ri, r_node in r_items:
             if can_match(c_node, r_node):
-                adj[ci].append(ri)
+                q = match_quality(c_node, r_node) if match_quality else 1
+                candidates.append((ri, q))
+        # Sort by quality descending so augmenting paths prefer better matches
+        candidates.sort(key=lambda x: -x[1])
+        adj[ci] = [ri for ri, q in candidates]
 
     # Hungarian algorithm (simplified): try to find augmenting path for each C node
     r_to_c = {}  # r_idx → c_idx (current matching)
