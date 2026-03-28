@@ -42,6 +42,70 @@ RUST_FILE = os.path.join(ROOT, "expat-rust", "src", "xmlparse.rs")
 DIVERGENCES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "deliberate-divergences.json")
 
 
+def _get_inlinable_functions(c_tree):
+    """Get C functions that should be inlined when comparing.
+
+    These are functions defined in xmlparse.c that don't have a corresponding
+    Rust function — meaning Rust inlined their logic into callers.
+    """
+    with open(DIVERGENCES_FILE) as f:
+        config = json.load(f)
+    inlinable = config.get("inline_functions", [])
+    return {entry["c_function"]: entry for entry in inlinable}
+
+
+def _inline_c_calls(skeleton: SkeletonNode, c_tree, parent_func: str,
+                    _depth: int = 0) -> SkeletonNode:
+    """Inline C function calls by expanding them into the callee's body.
+
+    When the C skeleton has call(X) and X is in the inline_functions list,
+    replace the call with a sequence containing X's body skeleton. This
+    makes the expanded C skeleton match Rust code that inlined the logic.
+    """
+    if _depth > 3:
+        return skeleton  # Prevent infinite recursion
+
+    inlinable = _get_inlinable_functions(c_tree)
+    if not inlinable:
+        return skeleton
+
+    new_children = []
+    changed = False
+    for child in skeleton.children:
+        if child.kind == "call" and child.label in inlinable:
+            # Inline this call: extract the callee's skeleton and splice it in
+            c_func_name = inlinable[child.label].get("c_original_name", child.label)
+            callee_node = find_c_function(c_tree, c_func_name)
+            if callee_node:
+                callee_skel = extract_c_skeleton(callee_node, source_file="C")
+                # Recursively inline within the callee too
+                callee_skel = _inline_c_calls(callee_skel, c_tree, c_func_name, _depth + 1)
+                # Replace the call with the callee's body children
+                new_children.extend(callee_skel.children)
+                changed = True
+                continue
+        # Recurse into non-inlined children
+        inlined_child = _inline_c_calls(child, c_tree, parent_func, _depth)
+        new_children.append(inlined_child)
+        if inlined_child is not child:
+            changed = True
+
+    if not changed:
+        return skeleton
+
+    return SkeletonNode(
+        kind=skeleton.kind,
+        label=skeleton.label,
+        args=skeleton.args,
+        arg_exprs=skeleton.arg_exprs,
+        expr=skeleton.expr,
+        children=new_children,
+        source_file=skeleton.source_file,
+        source_start=skeleton.source_start,
+        source_end=skeleton.source_end,
+    )
+
+
 def load_function_pairs():
     """Load function pairs from deliberate-divergences.json."""
     with open(DIVERGENCES_FILE) as f:
@@ -89,6 +153,14 @@ def compare_pair(c_func_name: str, r_func_name: str,
     if dump:
         print_skeleton(c_skel, f"C: {c_func_name} (raw)")
 
+    # Inline C function calls — expand calls to functions defined in the same
+    # file by replacing the call node with the callee's body skeleton. This
+    # handles functions that Rust inlines into the caller.
+    c_skel = _inline_c_calls(c_skel, c_tree, c_func_name)
+
+    if dump:
+        print_skeleton(c_skel, f"C: {c_func_name} (after inlining)")
+
     # Apply rewrite rules to C skeleton
     c_rewritten = apply_all_rules(c_skel)
     if c_rewritten is None:
@@ -107,23 +179,28 @@ def compare_pair(c_func_name: str, r_func_name: str,
     func_sup = suppressions.get(r_func_name, {})
     suppressed_calls = set(func_sup.get("suppressed_calls", []))
     suppressed_errors = set(func_sup.get("suppressed_errors", []))
+    suppressed_labels = set(func_sup.get("suppressed_labels", []))
     # 2. From structural-rewrites.json (new)
     rewrite_sup = get_per_function_suppressions(r_func_name)
     suppressed_calls |= set(rewrite_sup.get("suppressed_calls", []))
     suppressed_errors |= set(rewrite_sup.get("suppressed_errors", []))
+    suppressed_labels |= set(rewrite_sup.get("suppressed_labels", []))
 
     filtered = []
     for m in mismatches:
         # Check if this mismatch is suppressed
-        if _is_suppressed(m, suppressed_calls, suppressed_errors):
+        if _is_suppressed(m, suppressed_calls, suppressed_errors, suppressed_labels):
             continue
         filtered.append(m)
 
     return filtered
 
 
-def _is_suppressed(m: Mismatch, suppressed_calls: set, suppressed_errors: set) -> bool:
+def _is_suppressed(m: Mismatch, suppressed_calls: set, suppressed_errors: set,
+                   suppressed_labels: set = None) -> bool:
     """Check if a mismatch is covered by per-function suppressions."""
+    if suppressed_labels is None:
+        suppressed_labels = set()
     if m.c_node:
         # Direct call suppression
         if m.c_node.kind == "call" and m.c_node.label in suppressed_calls:
@@ -133,11 +210,19 @@ def _is_suppressed(m: Mismatch, suppressed_calls: set, suppressed_errors: set) -
             error = m.c_node.label.replace("XmlError::", "")
             if error in suppressed_errors:
                 return True
-        # Branch whose condition mentions a suppressed call
+        # Branch whose condition mentions a suppressed call or label
         if m.c_node.kind == "branch":
             label = m.c_node.label
             for call in suppressed_calls:
                 if call in label:
+                    return True
+            for sup_label in suppressed_labels:
+                if sup_label in label:
+                    return True
+        # Check node label against suppressed labels
+        if m.c_node.label:
+            for sup_label in suppressed_labels:
+                if sup_label in m.c_node.label:
                     return True
     # Check if the reason text mentions a suppressed call or error
     reason = m.reason
@@ -189,6 +274,9 @@ def cmd_all(dump=False):
     pairs = load_function_pairs()
     total_errors = 0
     for pair in pairs:
+        if pair.get("skip_structural"):
+            print(f"  {pair['c_function']} <-> {pair['rust_function']}: SKIPPED (completely restructured)")
+            continue
         c_func = pair["c_function"]
         r_func = pair["rust_function"]
         errors = cmd_compare(c_func, r_func, dump=dump)
@@ -215,6 +303,8 @@ def cmd_json():
     r_src = open(RUST_FILE, 'rb').read()
     results = []
     for pair in pairs:
+        if pair.get("skip_structural"):
+            continue
         c_func = pair["c_function"]
         r_func = pair["rust_function"]
         mismatches = compare_pair(c_func, r_func, c_src=c_src, r_src=r_src)

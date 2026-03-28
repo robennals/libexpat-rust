@@ -210,8 +210,9 @@ def _extract_match_arm(node, sf: str) -> SkeletonNode:
 
 def _extract_if(node, sf: str) -> SkeletonNode:
     """Extract if / if-let -> branch skeleton."""
-    # Get condition text
+    # Get condition text and parsed expression
     cond_text = ""
+    cond_expr = None
     if node.type == "if_let_expression":
         # if let Some(x) = expr { ... }
         pattern = node.child_by_field_name("pattern")
@@ -220,10 +221,12 @@ def _extract_if(node, sf: str) -> SkeletonNode:
             pat_text = _node_text(pattern)
             val_text = _normalize_expr(_node_text(value))
             cond_text = f"let {pat_text} = {val_text}"
+            cond_expr = normalize.extract_expr_info(value, "rust")
     else:
         condition = node.child_by_field_name("condition")
         if condition:
             cond_text = _normalize_condition(_node_text(condition))
+            cond_expr = normalize.extract_expr_info(condition, "rust")
 
     consequence = node.child_by_field_name("consequence")
     alternative = node.child_by_field_name("alternative")
@@ -255,7 +258,7 @@ def _extract_if(node, sf: str) -> SkeletonNode:
                 children.append(SkeletonNode("sequence", children=[else_skel], source_file=sf))
 
     return SkeletonNode(
-        "branch", label=cond_text, children=children,
+        "branch", label=cond_text, expr=cond_expr, children=children,
         source_file=sf, source_start=_start_line(node), source_end=_end_line(node),
     )
 
@@ -335,14 +338,16 @@ def _extract_call(node, sf: str) -> SkeletonNode:
         return None
 
     args = []
+    arg_exprs = []
     if args_node:
         for child in args_node.children:
             if child.type in ("(", ")", ","):
                 continue
             args.append(_normalize_expr(_node_text(child)))
+            arg_exprs.append(normalize.extract_expr_info(child, "rust"))
 
     return SkeletonNode(
-        "call", label=name, args=args,
+        "call", label=name, args=args, arg_exprs=arg_exprs,
         source_file=sf, source_start=_start_line(node), source_end=_end_line(node),
     )
 
@@ -379,11 +384,13 @@ def _extract_method_call(node, sf: str):
         return None
 
     args = []
+    arg_exprs = []
     if args_node:
         for child in args_node.children:
             if child.type in ("(", ")", ","):
                 continue
             args.append(_normalize_expr(_node_text(child)))
+            arg_exprs.append(normalize.extract_expr_info(child, "rust"))
 
     # Detect handler dispatch pattern: handler(data) where handler was bound by if-let
     # These show up as simple call expressions with "handler" as the function
@@ -391,7 +398,7 @@ def _extract_method_call(node, sf: str):
         pass  # Let it through as a regular call -- will be matched via handler_dispatch
 
     return SkeletonNode(
-        "call", label=name, args=args,
+        "call", label=name, args=args, arg_exprs=arg_exprs,
         source_file=sf, source_start=_start_line(node), source_end=_end_line(node),
     )
 

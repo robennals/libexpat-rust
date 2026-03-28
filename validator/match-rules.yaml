@@ -1,0 +1,328 @@
+# Match rules for C ↔ Rust structural comparison
+#
+# Pattern syntax (used in c: and r: fields):
+#   kind(child1, child2, ...)     — match node with children
+#   kind(value)                   — match leaf node (ident, literal)
+#   $var                          — capture anything, bind to $var
+#   $var...                       — capture remaining children
+#   *                             — match anything, don't bind
+
+# ==================================================================
+# Principled rules: Language-level differences (always valid)
+# ==================================================================
+
+principled:
+
+  # --- Control flow ---
+
+  - name: c_break
+    skip: c
+    c: "break"
+    why: C switch needs explicit break. Rust match arms end implicitly.
+
+  - name: c_goto
+    skip: c
+    c: "goto($label)"
+    why: C uses goto for error cleanup. Rust uses structured control flow.
+
+  - name: c_labeled_stmt
+    skip: c
+    c: "label_stmt($children...)"
+    why: Goto labels have no Rust equivalent.
+
+  # --- Declarations ---
+
+  - name: c_local_var_decl
+    skip: c
+    c: "let($children...)"
+    why: C declares variables at block top. Rust initializes at point of use.
+
+  - name: c_preproc
+    skip: c
+    c: "preproc($children...)"
+    why: C preprocessor conditionals. Active branch is promoted.
+
+  # --- Return values ---
+
+  - name: return_1_is_void
+    c: "return(literal(1))"
+    r: "return"
+    why: C returns 1 for success. Rust returns void.
+
+  - name: return_0_is_skip
+    skip: c
+    c: "return(literal(0))"
+    why: C returns 0 for OOM. Rust panics on OOM.
+
+  # --- Memory management (Rust uses RAII) ---
+
+  - name: pool_clear
+    skip: c
+    c: "expr_stmt(call(ident(pool_clear), $args...))"
+    why: C pool lifecycle. Rust RAII.
+
+  - name: pool_discard
+    skip: c
+    c: "expr_stmt(call(ident(pool_discard), $args...))"
+    why: C pool lifecycle. Rust RAII.
+
+  - name: pool_init
+    skip: c
+    c: "expr_stmt(call(ident(pool_init), $args...))"
+    why: C pool lifecycle. Rust RAII.
+
+  - name: malloc_free
+    skip: c
+    c: "expr_stmt(call(ident(free), $args...))"
+    why: C explicit heap. Rust automatic.
+
+  # --- Position tracking (Rust uses return tuples) ---
+
+  - name: position_tracking_write
+    skip: c
+    c: "expr_stmt(assign(=, ptr(*, $eventPP), $pos))"
+    why: C writes position via output pointer. Rust returns in tuples.
+
+  # --- Null/OOM checks (Rust panics) ---
+
+  - name: null_alloc_check
+    skip: c
+    c: "if(unary(!, $ptr), block(return(literal(0))))"
+    why: C NULL check + error return. Rust panics on OOM.
+
+  # --- Handler dispatch ---
+
+  - name: handler_call_strip_handler_arg
+    c: "call(field(self, $handler), field(self, handler_arg), $args...)"
+    r: "call(ident(handler), $args...)"
+    why: C passes handlerArg. Rust closures capture context.
+
+  - name: null_check_is_is_none
+    c: "unary(!, field(self, $handler))"
+    r: "call(field(field(self, $handler), ident(is_none)))"
+    why: C !handler = Rust handler.is_none().
+
+  - name: exists_check_is_is_some
+    c: "field(self, $handler)"
+    r: "call(field(field(self, $handler), ident(is_some)))"
+    why: C handler (truthy) = Rust handler.is_some().
+
+  # --- C return(XML_ERROR_NONE) = success sentinel ---
+
+  - name: return_error_none
+    skip: c
+    c: "return(ident(xml_error_none))"
+    why: C returns XML_ERROR_NONE as success. Rust returns void or Ok(()).
+
+  # --- C position tracking assigns ---
+
+  - name: c_event_ptr_assign
+    skip: c
+    c: "expr_stmt(assign(ptr($ptr), $value))"
+    why: >
+      C writes parse position via output pointers (*eventPP = s, *eventEndPP = next).
+      Rust returns positions in return tuples.
+
+  # --- C encoding pointer selection ---
+
+  - name: c_enc_selection
+    skip: c
+    c: "if(binary(ident(enc), $other), $body...)"
+    why: >
+      C checks enc == parser->m_encoding to select event pointer pair.
+      Rust uses a single encoding model. No equivalent branch.
+
+  # --- C success returns ---
+
+  - name: c_return_result_variable
+    skip: c
+    c: "return(ident(result))"
+    why: >
+      C returns a 'result' variable holding error code. Rust uses
+      Result return type or stores error in self.error_code.
+
+  # --- C output pointer checks ---
+
+  - name: c_next_ptr_check
+    skip: c
+    c: "if(binary(ident(next_ptr), $null), $body)"
+    why: >
+      C checks if output pointer nextPtr is non-NULL before writing.
+      Rust returns positions in tuples, no output pointers.
+
+  # --- C entity text bounds check ---
+
+  - name: c_entity_text_bounds
+    skip: c
+    c: "if(binary(ident(entity_text_ptr), $end), $body)"
+    why: >
+      C checks entityTextPtr >= entityTextEnd for empty entity.
+      Rust handles via tokenizer returning None for empty input.
+
+  # --- C position tracking via struct fields ---
+
+  - name: c_struct_field_assign
+    skip: c
+    c: "expr_stmt(assign(field($obj, $field), $value))"
+    why: >
+      C assigns parser struct fields for position tracking and state
+      (m_eventPtr, m_eventEndPtr, openEntity fields, etc.).
+      Rust tracks position via return values and handles struct state
+      through initialization or different field organization.
+      Only matches assigns where LHS is a struct field access.
+
+  # --- Encoding (Rust is UTF-8 only) ---
+
+  - name: must_convert
+    skip: c
+    c: "if(call(ident(must_convert), $args...), $then, $else)"
+    promote: "$else"
+    why: >
+      C if(MUST_CONVERT) { encoding_conversion_loop } else { direct_call }.
+      Rust is UTF-8 only — no conversion needed. Keep the else branch
+      (the direct call) which corresponds to Rust's code.
+
+  - name: must_convert_no_else
+    skip: c
+    c: "if(call(ident(must_convert), $args...), $body)"
+    why: C MUST_CONVERT with no else branch. Rust is UTF-8 only.
+
+  - name: xml_convert
+    skip: c
+    c: "expr_stmt(call(ident(xml_convert), $args...))"
+    why: C encoding conversion. Rust UTF-8 only.
+
+  # --- Comments ---
+
+  - name: c_comment
+    skip: c
+    c: "comment"
+    why: Not semantic.
+
+  - name: r_comment
+    skip: r
+    r: "//"
+    why: Not semantic.
+
+  # --- C declaration + assignment = Rust let binding ---
+
+  - name: c_decl_assign_is_rust_let
+    c_children:
+      - "let($type, $init)"
+      - "expr_stmt(assign(=, ident($name), $value))"
+    r_children:
+      - "let(ident($name), $value)"
+    why: C declares variable then assigns. Rust let-binds at initialization.
+
+  - name: c_decl_only_skip
+    c_children:
+      - "let($children...)"
+    r_children: []
+    why: C local variable declaration with no corresponding Rust let.
+
+# ==================================================================
+# Temporary rules: Known differences to be fixed
+# ==================================================================
+
+temporary:
+
+  # --- C for(;;) vs Rust while loop with setup ---
+
+  # C loop matches Rust expr_stmt(loop) — Rust wraps loops in expr_stmt
+  - name: c_loop_is_rust_expr_stmt_loop
+    c: "loop($children...)"
+    r: "expr_stmt(loop($children...))"
+    why: >
+      Rust loops are expressions, so when used as statements they get
+      wrapped in expr_stmt. C loops are statements directly. The loop
+      body must still match recursively.
+
+  - name: c_infinite_loop_is_rust_while_with_setup
+    c_children:
+      - "loop($body)"
+    r_children:
+      - "let($idx_decl...)"
+      - "let($bound_decl...)"
+      - "loop($cond, $body)"
+    why: >
+      C uses for(;;) with break/return inside. Rust declares loop
+      variables (let mut pos = 0; let len = data.len()) then uses
+      while pos < len. Same iteration, body must still match.
+    risk: Loop variable initialization might differ from C's for-init.
+
+  - name: c_infinite_loop_is_rust_while
+    c: "loop($body)"
+    r: "loop($cond, $body)"
+    why: >
+      C for(;;) = Rust while (without preceding let declarations).
+      Body must still match.
+    risk: Loop condition may not be equivalent to C's break condition.
+
+  # --- C entity type check ---
+
+  - name: c_entity_type_check
+    skip: c
+    c: "if(binary(ident(type), $other), $body)"
+    why: >
+      C checks entity type (type == ENTITY_INTERNAL) for specific handling.
+      Rust uses is_param bool and handles entity types differently.
+    risk: Different entity type handling could affect recursive expansion.
+
+  # --- Rust iteration safety limits ---
+  # Rust adds MAX_ITERATIONS + iteration counter for loop stall detection.
+  # C relies on the input being finite but has no explicit limit.
+
+  - name: rust_iteration_safety_const
+    skip: r
+    r: "const_item($children...)"
+    why: >
+      Rust adds const MAX_ITERATIONS for loop stall detection.
+      C has no equivalent — relies on input being finite.
+
+  - name: rust_iteration_safety_let
+    skip: r
+    r: "let(ident(iterations), $init)"
+    why: >
+      Rust adds let mut iterations = 0 for loop stall detection.
+      C has no equivalent.
+
+  # --- Rust if-let handler dispatch ---
+  # C calls handlers via function pointer: handler(handlerArg, data)
+  # Rust uses if-let: if let Some(handler) = &mut self.handler { handler(data) }
+  # The if-let is the Rust-idiomatic way to handle Option<fn> callbacks
+
+  - name: c_handler_call_is_rust_if_let
+    c: "call(field($obj, $handler), $args...)"
+    r: "if_let($pattern, $ref, $body)"
+    why: >
+      C calls handler via function pointer. Rust uses if-let to unwrap
+      Option handler. The handler call is inside the if-let body.
+
+  # Rust if-let handler dispatches that appear as extra (C handler call
+  # was already consumed by handler_dispatch rules). The if-let is
+  # Rust-idiomatic for calling Option<fn> handlers.
+  - name: rust_if_let_handler_dispatch
+    skip: r
+    r: "expr_stmt(if(let_condition($children...), $body))"
+    why: >
+      Rust if let Some(handler) = &mut self.*_handler { handler(data) }.
+      C's equivalent handler call was consumed by the handler_dispatch
+      rewrite. The if-let is Rust's idiomatic Option dispatch.
+
+  - name: handler_dispatch_if_let
+    c: "if(field(self, $handler), $body)"
+    r: "if_let($pattern, $handler_expr, $body)"
+    why: C if(handler) vs Rust if let Some(h). Body should match.
+    risk: Handler dispatch details may differ.
+
+  - name: parsing_status_to_is_final
+    c: "if(binary(!, field(self, parsing_status)), $body)"
+    r: "if(unary(!, field(self, is_final)), $body)"
+    why: C parsing_status.finalBuffer vs Rust is_final.
+    risk: Suspend/resume semantics may differ.
+
+  - name: entity_type_match
+    c: "match($expr, $arms...)"
+    r: "if($cond, $body)"
+    why: C switches on entity type enum. Rust uses is_param bool.
+    risk: Different entity types may be handled differently.

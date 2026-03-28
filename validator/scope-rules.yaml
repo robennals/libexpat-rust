@@ -1,0 +1,347 @@
+# Scoping-level match rules for C ↔ Rust comparison
+#
+# These rules handle known principled differences between C and Rust
+# at the scope level (control flow) and content level (calls, identifiers).
+
+# === C calls to skip (no Rust equivalent) ===
+# These are C functions that have no Rust call equivalent because Rust
+# uses different abstractions (RAII, type system, etc.)
+
+skip_c_calls:
+  # Memory management — Rust uses RAII
+  - pool_store_string
+  - pool_clear
+  - pool_discard
+  - pool_init
+  - pool_grow
+  - pool_finish
+  - pool_start
+  - pool_length
+  - pool_last_string
+  - pool_bytes_to_allocate_for
+  - pool_chop
+  - pool_copy_string
+  - pool_copy_string_no_finish
+  - pool_append
+  - pool_append_string
+  - pool_append_char
+  - realloc
+  - malloc
+  - free
+  - REALLOC
+  - MALLOC
+  - FREE
+  # Hash table — Rust uses HashMap
+  - lookup
+  - hash
+  - hash_table_init
+  - hash_table_destroy
+  - hash_table_iter_init
+  - hash_table_iter_next
+  # Entropy — Rust uses std RandomState
+  - generate_hash_secret_salt
+  - gather_time_entropy
+  # C string/memory ops — Rust uses slice operations
+  - memcpy
+  - memset
+  - strcmp
+  - strncmp
+  - strlen
+  - memmove
+  # C type macros — Rust type system handles
+  - ENTITY
+  - ELEMENT_TYPE
+  - ATTRIBUTE_ID
+  - CONTENT_SCAFFOLD
+  - PREFIX
+  - DEFAULT_ATTRIBUTE
+  - NS_ATT
+  - TAG
+  # C internal macros
+  - must_convert
+  - MUST_CONVERT
+  - get_context
+  - set_context
+  - parser_busy
+  - UNUSED_P
+  - unused_p
+  # C encoding
+  - initialize_encoding
+  - xml_convert
+  - xml_encode
+  - xml_t
+  # C position tracking
+  - store_raw_names
+  # C accounting (Rust does at parse() entry)
+  - accounting_diff_tolerated
+  - accounting_on_abort
+
+# === Rust calls to skip (no C equivalent) ===
+skip_r_calls:
+  - with_capacity    # Vec::with_capacity — allocation hint
+  - to_vec           # slice.to_vec() — clone
+  - to_string        # String conversion
+  - unwrap_or_default
+  - unwrap_or
+  - take             # std::mem::take — ownership
+  - borrow           # RefCell::borrow
+  - borrow_mut
+  - is_empty         # Rust emptiness check
+  - extend_from_slice
+  - push             # Vec::push
+  - encode_utf8      # char encoding
+  - len              # .len() — Rust collection length
+  - is_none          # Option::is_none
+  - is_some          # Option::is_some
+  - insert           # HashMap::insert
+  - new              # Constructor
+  - from_utf8        # String::from_utf8
+  - ok               # Result::ok
+  - min_bytes_per_char  # Encoding method — C accesses as struct field
+  - "std::mem::take"    # Rust ownership transfer
+  - from_utf8           # String::from_utf8
+  - "std::str::from_utf8"  # str conversion
+  - Vec::new            # Constructor
+  - Vec::with_capacity  # Constructor with hint
+  - String::from_utf8   # String conversion
+  - Ok                  # Result::Ok constructor
+  - Err                 # Result::Err constructor
+  - unwrap_or_default   # Unwrap with default
+  - handler             # Rust if-let handler call (C calls handler directly)
+  - clone               # Rust Clone trait
+  - get                 # HashMap/Vec get
+  - get_mut             # HashMap get_mut
+  - as_bytes            # str::as_bytes
+  - "char::from_u32"    # Char conversion
+  - pop                 # Vec::pop
+  - saturating_sub      # Numeric operation
+  - extract_qualified_name  # Rust-specific namespace helper
+  - "Self::normalize_lines" # Self:: prefix variant
+
+# === C identifiers to skip ===
+skip_c_identifiers:
+  - handler_arg      # C passes handlerArg to callbacks; Rust closures capture
+  - m_handler_arg    # Same, with m_ prefix
+  - parser           # C passes parser struct; Rust uses &mut self
+  - enc              # Often appears as extra arg in C
+  - encoding         # C encoding parameter
+  - dtd              # C DTD struct access pattern differs
+  - m_encoding       # C parser encoding field
+  - m_parent_parser  # C parent parser field
+  - m_parsing_status # C parsing status struct
+  - final_buffer     # C final buffer flag
+  - end_ptr          # C output pointer
+  - next_ptr         # C output pointer
+  - xml_account_direct  # C accounting constant
+  - xml_true         # C boolean constant
+  - xml_false
+  - __line__         # C __LINE__ macro for debugging
+
+# === Call name mapping (C name → Rust name) ===
+call_name_map:
+  # C tokenizer macros → Rust direct calls
+  xml_content_tok: content_tok
+  xml_prolog_tok: prolog_tok
+  xml_cdata_section_tok: cdata_section_tok
+  xml_attribute_value_tok: attribute_value_tok
+  xml_entity_value_tok: entity_value_tok
+  xml_name_length: name_length
+  xml_skip_s: skip_s
+  xml_char_ref_number: char_ref_number
+  # C handler calls → Rust method names
+  m_comment_handler: handler
+  m_default_handler: handler
+  m_processing_instruction_handler: handler
+  m_character_data_handler: handler
+  m_start_element_handler: handler
+  m_end_element_handler: handler
+  m_start_cdata_section_handler: handler
+  m_end_cdata_section_handler: handler
+  m_skipped_entity_handler: handler
+  m_xml_decl_handler: handler
+  m_start_doctype_decl_handler: handler
+  m_end_doctype_decl_handler: handler
+  m_entity_decl_handler: handler
+  m_notation_decl_handler: handler
+  m_attlist_decl_handler: handler
+  m_element_decl_handler: handler
+  m_unparsed_entity_decl_handler: handler
+  m_external_entity_ref_handler: handler
+  m_not_standalone_handler: handler
+  # Other mappings
+  content_tok: content_tok
+  prolog_tok: prolog_tok
+  cdata_section_tok: cdata_section_tok
+  char_ref_number: char_ref_number
+  name_length: name_length
+  normalize_lines: normalize_lines
+  report_default: report_default
+  report_comment: report_comment
+  report_processing_instruction: report_processing_instruction
+  process_entity: process_entity
+  do_content: do_content
+  do_prolog: do_prolog
+  do_cdata_section: do_cdata_section
+  trigger_reenter: trigger_reenter
+  external_entity_init_processor2: external_entity_init_processor
+  external_entity_content_processor: content_processor
+  xml_name_length: name_length
+  xml_skip_s: skip_s
+  xml_prolog_tok: prolog_tok
+  # Rust xmltok_impl:: prefixed calls → C tokenizer macros
+  "xmltok_impl::content_tok": content_tok
+  "xmltok_impl::prolog_tok": prolog_tok
+  "xmltok_impl::cdata_section_tok": cdata_section_tok
+  "xmltok_impl::name_length": name_length
+  "xmltok_impl::char_ref_number": char_ref_number
+  "xmltok_impl::skip_s": skip_s
+  "xmltok_impl::predefined_entity_name": predefined_entity_name
+  "xmltok::parse_xml_decl": parse_xml_decl
+  "Self::normalize_lines": normalize_lines
+  "Self::is_partial_utf8_sequence": is_partial_utf8_sequence
+
+# === Identifier mapping (C name → Rust name) ===
+identifier_map:
+  s: pos
+  next: next_pos
+  end: end
+  start: start
+  event_pp: event_pos
+  event_end_pp: event_pos
+
+# === C error codes to skip ===
+skip_c_errors:
+  - xml_error_none        # C success sentinel — Rust uses different success pattern
+  - xml_error_no_memory   # Rust panics on OOM
+
+# === Scope equivalence rules ===
+# These define C↔Rust scope pairs that should be matched even though
+# they have different kinds or labels. The matched pairs are then
+# compared recursively.
+scope_equivalences:
+  - name: handler_dispatch
+    c_scope: { kind: "if", label_regex: "m_.*_handler" }
+    r_scope: { kind: "if_let" }
+    why: >
+      C if(handler) { handler(arg) } = Rust if let Some(h) { h(data) }.
+      Same conditional handler dispatch, different syntax.
+
+  - name: handler_dispatch_default
+    c_scope: { kind: "if", label_contains: "m_default_handler" }
+    r_scope: { kind: "if_let" }
+    why: C if(defaultHandler) = Rust if let Some(handler).
+
+  - name: final_buffer_is_have_more
+    c_scope: { kind: "if", label_contains: "final_buffer" }
+    r_scope: { kind: "if", label_contains: "have_more" }
+    why: >
+      C if(!parsing_status.finalBuffer) = Rust if(have_more).
+      Both check whether more data may arrive.
+
+  - name: parsing_status_is_have_more
+    c_scope: { kind: "if", label_contains: "m_parsing_status" }
+    r_scope: { kind: "if", label_contains: "have_more" }
+    why: Same as above (different C label extraction).
+
+  - name: char_data_handler_abbrev
+    c_scope: { kind: "if", label_contains: "char_data_handler" }
+    r_scope: { kind: "if", label_contains: "character_data_handler" }
+    why: >
+      C uses local variable charDataHandler (abbreviated from
+      m_characterDataHandler). Same handler check.
+
+# === C-only scopes (drop rules) ===
+# These C scopes have no Rust equivalent — they are dropped without
+# generating a mismatch. Each must have a principled justification.
+c_only_scopes:
+  - kind: "if"
+    label_contains: "must_convert"
+    why: C MUST_CONVERT encoding check — Rust is UTF-8 only
+
+  - kind: "if"
+    label_contains: "MUST_CONVERT"
+    why: Same as above (uppercase variant)
+
+  - kind: "if"
+    label_contains: "accounting_diff_tolerated"
+    why: C per-token amplification accounting — Rust does at parse() entry
+
+  - kind: "if"
+    label_contains: "accountingDiffTolerated"
+    why: Same (camelCase variant)
+
+  - kind: "if"
+    label_contains: "m_encoding"
+    why: C encoding pointer selection — Rust is single-encoding (UTF-8)
+
+  - kind: "if"
+    label_contains: "m_parsing_status"
+    why: C suspend/resume status check — Rust handles differently
+
+  - kind: "if"
+    label_contains: "xml_finished"
+    why: C parsing finished check — Rust handles differently
+
+  - kind: "if"
+    label_contains: "xml_suspended"
+    why: C parsing suspended check — Rust handles differently
+
+  - kind: "match"
+    label_contains: "parsing"
+    why: C parsing status switch — Rust handles differently
+
+  - kind: "match"
+    has_child_label: "XML_SUSPENDED"
+    why: C parsing status switch (by arm content) — Rust handles differently
+
+  - kind: "match"
+    has_child_label: "XML_FINISHED"
+    why: Same as above (alternative arm)
+
+  - kind: "if"
+    label_regex: "^0$"
+    why: C disabled code (if(0)) — dead code, not in Rust
+
+  - kind: "if"
+    label_contains: "handle_default"
+    why: C handleDefault flag check — Rust handles default reporting differently
+
+  # C else-if(m_default_handler) fallback — Rust checks inside report_default()
+  - kind: "if"
+    label_contains: "m_default_handler"
+    why: Rust's report_default() checks handler existence internally
+
+  - kind: "if"
+    label_contains: "final_buffer"
+    why: C final buffer check — Rust uses have_more parameter
+
+# === Content-scope matches ===
+# Rules matching C content items to Rust scope-wrapped equivalents.
+# Format: c_content matches a content item (call) at the parent level.
+#          r_scope matches a child scope wrapping the same call.
+# Shared $variables must bind to the same value on both sides.
+content_scope_matches:
+  - name: handler_borrow_wrapper
+    # C: $x($args)                        — direct handler call
+    # R: if let Some($handler) = $x { $handler($args) }  — borrow wrapper
+    c_content: { kind: "call", label_contains: "$x" }
+    r_scope: { kind: "if", label_contains: "$x" }
+    why: >
+      Rust borrow checker requires if-let to borrow Option<fn> handler.
+      C calls handler directly after null check + early return.
+
+# === Rust-only scopes (drop rules) ===
+# These Rust scopes have no C equivalent.
+r_only_scopes:
+  - kind: "if"
+    label_contains: "iterations"
+    why: Rust MAX_ITERATIONS stall detection — C has no equivalent
+
+  - kind: "if"
+    label_contains: "MAX_ITERATIONS"
+    why: Same as above
+
+  - kind: "arm"
+    label_contains: "Err"
+    why: Rust Result::Err arm — C doesn't use Result type
+

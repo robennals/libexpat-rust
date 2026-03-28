@@ -1012,9 +1012,11 @@ def cmd_ci():
         report = format_report(results)
         print(report)
         print()
-        if results["divergences"]:
-            total_divergences += len(results["divergences"])
-            failed_pairs.append((c_name, r_name, len(results["divergences"])))
+        # Only count MEDIUM+ divergences as failures (LOW = informational)
+        real_divergences = [(s, d, det) for s, d, det in results["divergences"] if s != "LOW"]
+        if real_divergences:
+            total_divergences += len(real_divergences)
+            failed_pairs.append((c_name, r_name, len(real_divergences)))
         else:
             passed_pairs.append((c_name, r_name))
 

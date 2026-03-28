@@ -1,0 +1,297 @@
+# C source rewrite rules
+# Applied to C function body text to produce canonical form.
+# Each rule has a 'before' pattern and either 'after' (replacement) or 'drop: true'.
+
+c_rewrite_rules:
+  # --- Struct access normalization ---
+  # parser_to_self MUST come before arrow_to_dot
+  - name: parser_arrow_strip
+    before: "parser -> $field"
+    after: "$field"
+
+  - name: parser_dot_strip
+    before: "parser . $field"
+    after: "$field"
+
+  # --- Other struct access ---
+  - name: arrow_to_dot
+    before: "$obj -> $field"
+    after: "$obj . $field"
+
+  # (const/enum dropping moved to end of file)
+
+  # --- C macros and constants ---
+  - name: xml_false
+    before: "XML_FALSE"
+    after: "false"
+
+  - name: xml_true
+    before: "XML_TRUE"
+    after: "true"
+
+  - name: xml_bool
+    before: "XML_Bool"
+    after: "bool"
+
+  # XML_Char is handled by cast rules, not stripped directly
+
+  - name: xml_status_ok
+    before: "XML_STATUS_OK"
+    after: "true"
+
+  - name: xml_status_error
+    before: "XML_STATUS_ERROR"
+    after: "false"
+
+  # --- Switch/case → match/arm syntax ---
+  - name: case_to_arm
+    before: "case $label :"
+    after: "$label =>"
+
+  - name: default_to_wildcard
+    before: "default :"
+    after: "_ =>"
+
+  - name: switch_to_match
+    before: "switch ( $expr )"
+    after: "match $expr"
+
+  # --- Handler null check + early return ---
+  - name: handler_null_check_early_return
+    before: "if ( ! self . $handler ) { $body return ; }"
+    drop: true
+
+  - name: handler_null_check_early_return_1
+    before: "if ( ! self . $handler ) { $body return 1 ; }"
+    drop: true
+
+  # --- Handler dispatch ---
+  - name: handler_call_with_arg
+    before: "if ( $handler ) { $handler ( $handlerArg , $args ) ; }"
+    after: "$handler ( $args ) ;"
+
+  - name: handler_call_with_arg_and_default
+    before: "if ( $handler ) { $handler ( $handlerArg , $args ) ; } else if ( $default ) { reportDefault ( $dargs ) ; }"
+    after: "$handler ( $args ) ; reportDefault ( $dargs ) ;"
+
+  - name: handler_call_no_arg
+    before: "if ( $handler ) { $handler ( $handlerArg ) ; }"
+    after: "$handler ( ) ;"
+
+  # --- Memory management (RAII) ---
+  - name: drop_pool_clear
+    before: "poolClear ( $args ) ;"
+    drop: true
+
+  - name: drop_pool_discard
+    before: "poolDiscard ( $args ) ;"
+    drop: true
+
+  - name: drop_free
+    before: "free ( $args ) ;"
+    drop: true
+
+  # --- Control flow ---
+  - name: drop_break
+    before: "break ;"
+    drop: true
+
+  - name: drop_goto
+    before: "goto $label ;"
+    drop: true
+
+  # --- Position tracking ---
+  - name: drop_position_write
+    before: "* $pp = $val ;"
+    drop: true
+
+  # --- Variable declarations (C declares at top, Rust at point of use) ---
+  - name: drop_var_decl
+    before: "enum XML_Error $name ;"
+    drop: true
+
+  - name: drop_var_decl_2
+    before: "enum XML_Error $name = $val ;"
+    after: "$name = $val ;"
+
+  - name: drop_type_decl
+    before: "const char * $name ;"
+    drop: true
+
+  - name: drop_type_decl_2
+    before: "const char * * $name ;"
+    drop: true
+
+  - name: drop_ichar_decl
+    before: "ICHAR * $name ;"
+    drop: true
+
+  - name: drop_xml_char_decl
+    before: "XML_Char * $name ;"
+    drop: true
+
+  - name: drop_int_decl
+    before: "int $name ;"
+    drop: true
+
+  - name: int_decl_init_to_assign
+    before: "int $name = $val ;"
+    after: "$name = $val ;"
+
+  - name: xml_error_decl_init_to_assign
+    before: "XML_Error $name = $val ;"
+    after: "$name = $val ;"
+
+  # --- Encoding ---
+  - name: enc_pointer_selection
+    before: "if ( enc == self . m_encoding ) { $then } else { $else }"
+    after: "$then"
+
+  - name: must_convert_keep_else_braced
+    before: "if ( MUST_CONVERT ( $args ) ) { $then } else { $else }"
+    after: "$else"
+
+  - name: must_convert_keep_else_unbraced
+    before: "if ( MUST_CONVERT ( $args ) ) { $then } else $else"
+    after: "$else"
+
+  # --- Accounting ---
+  - name: drop_accounting_check
+    before: "if ( ! accountingDiffTolerated ( $args ) ) { $body }"
+    drop: true
+
+  - name: drop_accounting_abort
+    before: "accountingOnAbort ( $args ) ;"
+    drop: true
+
+  # --- Disabled code ---
+  - name: drop_disabled_code
+    before: "if ( ( 0 ) && $cond ) { $body }"
+    drop: true
+
+  # --- OOM null checks ---
+  - name: drop_null_check_return_0
+    before: "if ( ! $ptr ) return 0 ;"
+    drop: true
+
+  - name: drop_null_check_return_no_memory
+    before: "if ( ! $ptr ) { return XML_ERROR_NO_MEMORY ; }"
+    drop: true
+
+  - name: drop_null_check_return_no_memory_2
+    before: "if ( ! $ptr ) return XML_ERROR_NO_MEMORY ;"
+    drop: true
+
+  # --- Type casts ---
+  - name: cast_xml_char_ptr
+    before: "( const XML_Char * ) $expr"
+    after: "$expr"
+
+  - name: cast_xml_char_ptr_noconst
+    before: "( XML_Char * ) $expr"
+    after: "$expr"
+
+  - name: cast_xml_char_noptr
+    before: "( XML_Char ) $expr"
+    after: "$expr"
+
+  - name: cast_ichar_ptr
+    before: "( ICHAR * ) $expr"
+    after: "$expr"
+
+  - name: cast_ichar_ptr_const
+    before: "( const ICHAR * ) $expr"
+    after: "$expr"
+
+  - name: cast_int
+    before: "( int ) $expr"
+    after: "$expr"
+
+  - name: cast_char_ptr
+    before: "( const char * ) $expr"
+    after: "$expr"
+
+  - name: cast_char_ptr_noconst
+    before: "( char * ) $expr"
+    after: "$expr"
+
+  - name: cast_unsigned
+    before: "( unsigned ) $expr"
+    after: "$expr"
+
+  - name: cast_size_t
+    before: "( size_t ) $expr"
+    after: "$expr"
+
+  # --- Handler arg removal ---
+  - name: remove_handler_arg
+    before: "( self . m_handlerArg , $args )"
+    after: "( $args )"
+
+  - name: remove_handler_arg_bare
+    before: "( m_handlerArg , $args )"
+    after: "( $args )"
+
+  - name: remove_handler_arg_bare2
+    before: "( handlerArg , $args )"
+    after: "( $args )"
+
+  # --- Pool operations → slice notation ---
+  - name: pool_store_string_to_slice
+    before: "poolStoreString ( $pool , $enc , $start , $end )"
+    after: "data [ $start .. $end ]"
+
+  - name: pool_store_string_to_slice_2
+    before: "poolStoreString ( & $pool , $enc , $start , $end )"
+    after: "data [ $start .. $end ]"
+
+  # --- Pointer+length → slice range ---
+  # C: func(s, (int)((end)-(s))) or func(s, end-s) → func(data[s..end])
+  # This normalizes C's pointer+length calling convention to Rust's slice
+  - name: ptr_len_to_slice
+    before: "( $start , ( $end - $start ) )"
+    after: "( data [ $start .. $end ] )"
+
+  - name: ptr_len_to_slice_enc
+    before: "( enc , $start , $end )"
+    after: "( data [ $start .. $end ] )"
+
+  # --- Pointer dereference → index ---
+  - name: deref_pointer_to_index
+    before: "* $ptr"
+    after: "$ptr"
+
+  - name: pointer_increment
+    before: "$ptr ++"
+    after: "$ptr += 1"
+
+  - name: pre_increment
+    before: "++ $ptr"
+    after: "$ptr += 1"
+
+  # --- Pointer arithmetic → offset arithmetic ---
+  # C: s + enc->minBytesPerChar * N → start + minbpc * N
+  # (enc->minBytesPerChar already normalized by parser->self rule)
+
+  # --- Success returns ---
+  - name: success_return
+    before: "return XML_ERROR_NONE ;"
+    after: "return ;"
+
+  - name: success_return_1
+    before: "return 1 ;"
+    after: "return ;"
+
+  - name: error_return_0
+    before: "return 0 ;"
+    drop: true
+
+  # --- Late-stage type qualifier removal ---
+  # These must come AFTER cast removal rules since casts include "const"
+  - name: drop_const_qualifier
+    before: "const $type * $rest"
+    after: "$type * $rest"
+
+  - name: drop_enum_keyword
+    before: "enum $name"
+    after: "$name"
