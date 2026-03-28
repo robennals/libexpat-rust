@@ -4,13 +4,57 @@
 
 c_rewrite_rules:
   # --- Struct access normalization ---
-  - name: parser_to_self
+  # parser_to_self MUST come before arrow_to_dot
+  - name: parser_arrow_strip
     before: "parser -> $field"
-    after: "self . $field"
+    after: "$field"
 
-  - name: strip_self_dot
-    before: "self . $method ( $args )"
-    after: "$method ( $args )"
+  - name: parser_dot_strip
+    before: "parser . $field"
+    after: "$field"
+
+  # --- Other struct access ---
+  - name: arrow_to_dot
+    before: "$obj -> $field"
+    after: "$obj . $field"
+
+  # (const/enum dropping moved to end of file)
+
+  # --- C macros and constants ---
+  - name: xml_false
+    before: "XML_FALSE"
+    after: "false"
+
+  - name: xml_true
+    before: "XML_TRUE"
+    after: "true"
+
+  - name: xml_bool
+    before: "XML_Bool"
+    after: "bool"
+
+  # XML_Char is handled by cast rules, not stripped directly
+
+  - name: xml_status_ok
+    before: "XML_STATUS_OK"
+    after: "true"
+
+  - name: xml_status_error
+    before: "XML_STATUS_ERROR"
+    after: "false"
+
+  # --- Switch/case → match/arm syntax ---
+  - name: case_to_arm
+    before: "case $label :"
+    after: "$label =>"
+
+  - name: default_to_wildcard
+    before: "default :"
+    after: "_ =>"
+
+  - name: switch_to_match
+    before: "switch ( $expr )"
+    after: "match $expr"
 
   # --- Handler null check + early return ---
   - name: handler_null_check_early_return
@@ -139,8 +183,20 @@ c_rewrite_rules:
     before: "( const XML_Char * ) $expr"
     after: "$expr"
 
+  - name: cast_xml_char_ptr_noconst
+    before: "( XML_Char * ) $expr"
+    after: "$expr"
+
+  - name: cast_xml_char_noptr
+    before: "( XML_Char ) $expr"
+    after: "$expr"
+
   - name: cast_ichar_ptr
     before: "( ICHAR * ) $expr"
+    after: "$expr"
+
+  - name: cast_ichar_ptr_const
+    before: "( const ICHAR * ) $expr"
     after: "$expr"
 
   - name: cast_int
@@ -151,8 +207,16 @@ c_rewrite_rules:
     before: "( const char * ) $expr"
     after: "$expr"
 
-  - name: cast_char_ptr_mut
+  - name: cast_char_ptr_noconst
     before: "( char * ) $expr"
+    after: "$expr"
+
+  - name: cast_unsigned
+    before: "( unsigned ) $expr"
+    after: "$expr"
+
+  - name: cast_size_t
+    before: "( size_t ) $expr"
     after: "$expr"
 
   # --- Handler arg removal ---
@@ -217,3 +281,13 @@ c_rewrite_rules:
   - name: error_return_0
     before: "return 0 ;"
     drop: true
+
+  # --- Late-stage type qualifier removal ---
+  # These must come AFTER cast removal rules since casts include "const"
+  - name: drop_const_qualifier
+    before: "const $type * $rest"
+    after: "$type * $rest"
+
+  - name: drop_enum_keyword
+    before: "enum $name"
+    after: "$name"

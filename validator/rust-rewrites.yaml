@@ -72,7 +72,7 @@ rust_rewrite_rules:
     before: "& mut $expr"
     after: "$expr"
 
-  # --- Method call normalization ---
+  # --- Method/field access normalization ---
   - name: self_method_call
     before: "self . $method ( $args )"
     after: "$method ( $args )"
@@ -80,3 +80,55 @@ rust_rewrite_rules:
   - name: Self_method_call
     before: "Self :: $method ( $args )"
     after: "$method ( $args )"
+
+  - name: self_field_access
+    before: "self . $field"
+    after: "$field"
+
+  # --- Module path stripping ---
+  - name: strip_module_xmltok
+    before: "xmltok_impl :: $name"
+    after: "$name"
+
+  - name: strip_module_xmltok2
+    before: "xmltok :: $name"
+    after: "$name"
+
+  - name: strip_module_xmlrole
+    before: "xmlrole :: $name"
+    after: "$name"
+
+  - name: strip_crate
+    before: "crate :: $name"
+    after: "$name"
+
+  # --- Option handling → NULL equivalent ---
+  - name: some_unwrap
+    before: "Some ( $val )"
+    after: "$val"
+
+  - name: is_some_check
+    before: "$expr . is_some ( )"
+    after: "$expr"
+
+  - name: is_none_check
+    before: "$expr . is_none ( )"
+    after: "! $expr"
+
+  # --- Mutability ---
+  - name: drop_mut
+    before: "let mut $rest"
+    after: "let $rest"
+
+  # --- Clone/borrow ---
+  - name: drop_clone
+    before: "$expr . clone ( )"
+    after: "$expr"
+
+  - name: drop_to_string
+    before: "$expr . to_string ( )"
+    after: "$expr"
+
+  - name: drop_as_str
+    before: "$expr . as_str ( )"
+    after: "$expr"
