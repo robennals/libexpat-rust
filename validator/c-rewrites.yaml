@@ -1,0 +1,98 @@
+# C source rewrite rules
+# Applied to C function body text to produce canonical form.
+# Each rule has a 'before' pattern and either 'after' (replacement) or 'drop: true'.
+
+c_rewrite_rules:
+  # --- Struct access normalization ---
+  - name: parser_to_self
+    before: "parser -> $field"
+    after: "self . $field"
+
+  # --- Handler dispatch ---
+  - name: handler_call_with_arg
+    before: "if ( $handler ) { $handler ( $handlerArg , $args ) ; }"
+    after: "$handler ( $args ) ;"
+
+  - name: handler_call_with_arg_and_default
+    before: "if ( $handler ) { $handler ( $handlerArg , $args ) ; } else if ( $default ) { reportDefault ( $dargs ) ; }"
+    after: "$handler ( $args ) ; reportDefault ( $dargs ) ;"
+
+  - name: handler_call_no_arg
+    before: "if ( $handler ) { $handler ( $handlerArg ) ; }"
+    after: "$handler ( ) ;"
+
+  # --- Memory management (RAII) ---
+  - name: drop_pool_clear
+    before: "poolClear ( $args ) ;"
+    drop: true
+
+  - name: drop_pool_discard
+    before: "poolDiscard ( $args ) ;"
+    drop: true
+
+  - name: drop_free
+    before: "free ( $args ) ;"
+    drop: true
+
+  # --- Control flow ---
+  - name: drop_break
+    before: "break ;"
+    drop: true
+
+  - name: drop_goto
+    before: "goto $label ;"
+    drop: true
+
+  # --- Position tracking ---
+  - name: drop_position_write
+    before: "* $pp = $val ;"
+    drop: true
+
+  # --- Encoding ---
+  - name: must_convert_keep_else_braced
+    before: "if ( MUST_CONVERT ( $args ) ) { $then } else { $else }"
+    after: "$else"
+
+  - name: must_convert_keep_else_unbraced
+    before: "if ( MUST_CONVERT ( $args ) ) { $then } else $else"
+    after: "$else"
+
+  # --- Accounting ---
+  - name: drop_accounting_check
+    before: "if ( ! accountingDiffTolerated ( $args ) ) { $body }"
+    drop: true
+
+  - name: drop_accounting_abort
+    before: "accountingOnAbort ( $args ) ;"
+    drop: true
+
+  # --- Disabled code ---
+  - name: drop_disabled_code
+    before: "if ( ( 0 ) && $cond ) { $body }"
+    drop: true
+
+  # --- OOM null checks ---
+  - name: drop_null_check_return_0
+    before: "if ( ! $ptr ) return 0 ;"
+    drop: true
+
+  - name: drop_null_check_return_no_memory
+    before: "if ( ! $ptr ) { return XML_ERROR_NO_MEMORY ; }"
+    drop: true
+
+  - name: drop_null_check_return_no_memory_2
+    before: "if ( ! $ptr ) return XML_ERROR_NO_MEMORY ;"
+    drop: true
+
+  # --- Success returns ---
+  - name: success_return
+    before: "return XML_ERROR_NONE ;"
+    after: "return ;"
+
+  - name: success_return_1
+    before: "return 1 ;"
+    after: "return ;"
+
+  - name: error_return_0
+    before: "return 0 ;"
+    drop: true

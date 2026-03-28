@@ -162,12 +162,21 @@ def _match(pat: list[str], pi: int, src: list[str], si: int,
             return None
         return _match(pat, pi + 1, src, si + 1, captures, required_end)
 
-    # Variable token: try capturing increasing numbers of tokens (non-greedy)
+    # Variable token: try capturing tokens
     var_name = token[1:]  # strip $
     already_bound = var_name in captures
 
     max_capture = len(src) - si
-    for capture_len in range(0, max_capture + 1):
+
+    # If this is the LAST token in the pattern, capture greedily
+    # (take as much balanced content as possible)
+    is_last = (pi == len(pat) - 1)
+    if is_last:
+        capture_range = range(max_capture, -1, -1)  # greedy: try max first
+    else:
+        capture_range = range(0, max_capture + 1)   # non-greedy: try 0 first
+
+    for capture_len in capture_range:
         captured = src[si:si + capture_len]
 
         # Check balanced delimiters

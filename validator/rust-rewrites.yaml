@@ -1,0 +1,55 @@
+# Rust source rewrite rules
+# Applied to Rust function body text to produce canonical form.
+
+rust_rewrite_rules:
+  # --- Borrow checker handler wrappers ---
+  - name: if_let_handler_with_args
+    before: "if let Some ( $handler ) = & mut self . $field { $handler ( $args ) ; }"
+    after: "self . $field ( $args ) ;"
+
+  - name: if_let_handler_no_args
+    before: "if let Some ( $handler ) = & mut self . $field { $handler ( ) ; }"
+    after: "self . $field ( ) ;"
+
+  - name: if_let_handler_with_else
+    before: "if let Some ( $handler ) = & mut self . $field { $handler ( $args ) ; } else { $else }"
+    after: "self . $field ( $args ) ; $else"
+
+  # --- Result unwrapping ---
+  - name: result_match_unwrap
+    before: "match $expr { Ok ( $val ) => { $body } , Err ( $err ) => { return $ret ; } }"
+    after: "let $val = $expr ; $body"
+
+  - name: result_match_unwrap_2
+    before: "match $expr { Ok ( $val ) => $val , Err ( $err ) => { return $ret ; } }"
+    after: "let $val = $expr ;"
+
+  # --- Iteration safety guards ---
+  - name: drop_iteration_guard
+    before: "if $iter > $max { return $err ; }"
+    drop: true
+
+  - name: drop_iteration_counter_init
+    before: "let mut iterations = 0 ;"
+    drop: true
+
+  - name: drop_iteration_counter_inc
+    before: "iterations += 1 ;"
+    drop: true
+
+  - name: drop_iteration_const
+    before: "const MAX_ITERATIONS : $type = $val ;"
+    drop: true
+
+  # --- Ownership / memory ---
+  - name: mem_take
+    before: "std :: mem :: take ( & mut self . $field )"
+    after: "self . $field"
+
+  - name: drop_to_vec
+    before: ". to_vec ( )"
+    after: ""
+
+  - name: drop_string_from_utf8
+    before: "String :: from_utf8 ( $val ) . unwrap_or_default ( )"
+    after: "$val"
