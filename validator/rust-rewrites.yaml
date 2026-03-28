@@ -53,3 +53,12 @@ rust_rewrite_rules:
   - name: drop_string_from_utf8
     before: "String :: from_utf8 ( $val ) . unwrap_or_default ( )"
     after: "$val"
+
+  # --- Reference/borrow removal ---
+  - name: strip_ref
+    before: "& $expr"
+    after: "$expr"
+
+  - name: strip_mut_ref
+    before: "& mut $expr"
+    after: "$expr"

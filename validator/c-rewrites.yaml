@@ -84,6 +84,32 @@ c_rewrite_rules:
     before: "if ( ! $ptr ) return XML_ERROR_NO_MEMORY ;"
     drop: true
 
+  # --- Type casts ---
+  - name: cast_xml_char_ptr
+    before: "( const XML_Char * ) $expr"
+    after: "$expr"
+
+  - name: cast_ichar_ptr
+    before: "( ICHAR * ) $expr"
+    after: "$expr"
+
+  - name: cast_int
+    before: "( int ) $expr"
+    after: "$expr"
+
+  - name: cast_char_ptr
+    before: "( const char * ) $expr"
+    after: "$expr"
+
+  - name: cast_char_ptr_mut
+    before: "( char * ) $expr"
+    after: "$expr"
+
+  # --- Handler arg removal ---
+  - name: remove_handler_arg
+    before: "( self . m_handlerArg , $args )"
+    after: "( $args )"
+
   # --- Success returns ---
   - name: success_return
     before: "return XML_ERROR_NONE ;"
