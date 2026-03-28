@@ -72,6 +72,9 @@ def _apply_rule_once(tokens: list[str], rule: dict) -> list[str] | None:
         elif after_tokens is not None:
             # Substitute captures into template
             replacement = substitute(after_tokens, captures)
+            # Skip identity rewrites (output same as input)
+            if replacement == tokens[start:end_pos]:
+                continue
             return tokens[:start] + replacement + tokens[end_pos:]
 
     return None

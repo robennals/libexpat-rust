@@ -71,3 +71,12 @@ rust_rewrite_rules:
   - name: strip_mut_ref
     before: "& mut $expr"
     after: "$expr"
+
+  # --- Method call normalization ---
+  - name: self_method_call
+    before: "self . $method ( $args )"
+    after: "$method ( $args )"
+
+  - name: Self_method_call
+    before: "Self :: $method ( $args )"
+    after: "$method ( $args )"

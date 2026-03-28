@@ -51,6 +51,17 @@ def normalize_ident(token: str) -> str:
     if s.startswith("Role"):
         s = s[4:] or s
 
+    # Known variable name mappings (C name → canonical)
+    _VAR_MAP = {
+        "s": "pos",       # C current-position pointer = Rust pos/start offset
+        "next": "next",   # Same name
+        "end": "end",     # Same name
+        "start": "pos",   # Rust start = C s = canonical pos
+        "tok": "tok",     # Same name
+    }
+    if s.lower() in _VAR_MAP:
+        return _VAR_MAP[s.lower()]
+
     # Canonical form: lowercase, no underscores
     return s.lower().replace("_", "")
 

@@ -8,6 +8,10 @@ c_rewrite_rules:
     before: "parser -> $field"
     after: "self . $field"
 
+  - name: strip_self_dot
+    before: "self . $method ( $args )"
+    after: "$method ( $args )"
+
   # --- Handler null check + early return ---
   - name: handler_null_check_early_return
     before: "if ( ! self . $handler ) { $body return ; }"
@@ -155,6 +159,51 @@ c_rewrite_rules:
   - name: remove_handler_arg
     before: "( self . m_handlerArg , $args )"
     after: "( $args )"
+
+  - name: remove_handler_arg_bare
+    before: "( m_handlerArg , $args )"
+    after: "( $args )"
+
+  - name: remove_handler_arg_bare2
+    before: "( handlerArg , $args )"
+    after: "( $args )"
+
+  # --- Pool operations → slice notation ---
+  - name: pool_store_string_to_slice
+    before: "poolStoreString ( $pool , $enc , $start , $end )"
+    after: "data [ $start .. $end ]"
+
+  - name: pool_store_string_to_slice_2
+    before: "poolStoreString ( & $pool , $enc , $start , $end )"
+    after: "data [ $start .. $end ]"
+
+  # --- Pointer+length → slice range ---
+  # C: func(s, (int)((end)-(s))) or func(s, end-s) → func(data[s..end])
+  # This normalizes C's pointer+length calling convention to Rust's slice
+  - name: ptr_len_to_slice
+    before: "( $start , ( $end - $start ) )"
+    after: "( data [ $start .. $end ] )"
+
+  - name: ptr_len_to_slice_2
+    before: "( $enc , $start , $end )"
+    after: "( data [ $start .. $end ] )"
+
+  # --- Pointer dereference → index ---
+  - name: deref_pointer_to_index
+    before: "* $ptr"
+    after: "$ptr"
+
+  - name: pointer_increment
+    before: "$ptr ++"
+    after: "$ptr += 1"
+
+  - name: pre_increment
+    before: "++ $ptr"
+    after: "$ptr += 1"
+
+  # --- Pointer arithmetic → offset arithmetic ---
+  # C: s + enc->minBytesPerChar * N → start + minbpc * N
+  # (enc->minBytesPerChar already normalized by parser->self rule)
 
   # --- Success returns ---
   - name: success_return
