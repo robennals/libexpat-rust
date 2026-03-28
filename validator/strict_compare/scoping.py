@@ -109,11 +109,12 @@ def _add_scope_child(child: Node, parent_scope: ScopeNode):
     """Create a scope node from an AST node and add it to the parent.
 
     Applies normalizations:
-    - Result match (match with Ok/Err arms) → promote Ok arm's children
     - Block (bare { }) → promote children to parent (block is transparent)
+    - Result match → promote Ok arm's children
+    - if/if_let → condition goes to PARENT content, then/else become child scopes
+    - match → match expression goes to PARENT content, arms become child scopes
     """
-    # Block transparency: blocks are not semantic scopes, just { } syntax.
-    # Promote their content and scoping children to the parent.
+    # Block transparency
     if child.kind == "block" and not child.value:
         _extract_scope(child, parent_scope)
         return
@@ -124,7 +125,34 @@ def _add_scope_child(child: Node, parent_scope: ScopeNode):
         source_file=child.source_file,
         line=child.line,
     )
-    _extract_scope(child, child_scope)
+
+    # For if/if_let: condition expression is part of parent's content,
+    # not the if scope's content. The condition is evaluated at the
+    # parent level; only the then/else bodies execute conditionally.
+    if child.kind in ("if", "if_let") and child.children:
+        # First child is the condition — collect into PARENT content
+        _collect_content(child.children[0], parent_scope.content)
+        _find_nested_scopes(child.children[0], parent_scope)
+        # Remaining children are then/else bodies — extract into child scope
+        for body_child in child.children[1:]:
+            if body_child.kind in SCOPING_KINDS:
+                _add_scope_child(body_child, child_scope)
+            else:
+                _collect_content(body_child, child_scope.content)
+                _find_nested_scopes(body_child, child_scope)
+    elif child.kind == "match" and child.children:
+        # First child is the match expression — collect into PARENT content
+        _collect_content(child.children[0], parent_scope.content)
+        _find_nested_scopes(child.children[0], parent_scope)
+        # Remaining children (arms) — extract into child scope
+        for arm_child in child.children[1:]:
+            if arm_child.kind in SCOPING_KINDS:
+                _add_scope_child(arm_child, child_scope)
+            else:
+                _collect_content(arm_child, child_scope.content)
+                _find_nested_scopes(arm_child, child_scope)
+    else:
+        _extract_scope(child, child_scope)
 
     # Result-match normalization: match with exactly Ok + Err arms
     # → promote Ok arm's children, discard Result wrapper

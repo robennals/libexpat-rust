@@ -1,8 +1,10 @@
 """Compare scoping trees and content sets.
 
 Compares two functions by:
-1. Matching their scoping trees (control flow structure)
+1. Matching their scoping trees (control flow structure) using identity-based
+   pairing (arm labels, condition identifiers, scope equivalence rules)
 2. Comparing content sets within each matched scope
+3. Reporting unmatched scopes as mismatches (unless covered by drop rules)
 """
 
 import re
@@ -13,7 +15,7 @@ from .scoping import ScopeNode, ContentSet
 
 class Mismatch:
     def __init__(self, category: str, detail: str, c_line: int = 0, r_line: int = 0, path: str = ""):
-        self.category = category  # "missing_scope", "extra_scope", "missing_call", etc.
+        self.category = category
         self.detail = detail
         self.c_line = c_line
         self.r_line = r_line
@@ -29,7 +31,6 @@ class Mismatch:
         return f"[{self.category}]{path}{loc}: {self.detail}"
 
 
-# Rules loaded from YAML
 _rules = None
 
 
@@ -48,10 +49,8 @@ def load_rules(filepath: str = None):
 
 def compare_scopes(c_scope: ScopeNode, r_scope: ScopeNode,
                    path: str = "") -> list[Mismatch]:
-    """Compare two scoping trees with content sets."""
     if _rules is None:
         load_rules()
-
     mismatches = []
     _compare_scope(c_scope, r_scope, path, mismatches)
     return mismatches
@@ -60,295 +59,148 @@ def compare_scopes(c_scope: ScopeNode, r_scope: ScopeNode,
 def _compare_scope(c: ScopeNode, r: ScopeNode, path: str,
                    mismatches: list[Mismatch]):
     """Compare a matched pair of scoping nodes."""
-
-    # Compare content sets at this level
+    # Compare content
     _compare_content(c.content, r.content, path, c, r, mismatches)
-
-    # Compare child scoping nodes
+    # Compare child scopes
     _compare_scope_children(c.children, r.children, path, mismatches)
-
-
-def _compare_content(c_content: ContentSet, r_content: ContentSet,
-                     path: str, c_scope: ScopeNode, r_scope: ScopeNode,
-                     mismatches: list[Mismatch]):
-    """Compare content sets within a matched scope pair."""
-
-    rules = _rules or {}
-    skip_c_calls = set(rules.get("skip_c_calls", []))
-    skip_c_idents = set(rules.get("skip_c_identifiers", []))
-    skip_c_assigns = set(rules.get("skip_c_assigns_patterns", []))
-    skip_r_calls = set(rules.get("skip_r_calls", []))
-    c_to_r_call_map = rules.get("call_name_map", {})
-    c_to_r_ident_map = rules.get("identifier_map", {})
-
-    # Build reverse Rust call map: normalize Rust call names through the mapping
-    r_call_map_reverse = {}
-    for c_name, r_name in c_to_r_call_map.items():
-        r_call_map_reverse[c_name] = r_name  # C name → normalized
-    for r_name in c_to_r_call_map.values():
-        r_call_map_reverse[r_name] = r_name  # Normalized name → itself
-
-    # Normalize Rust calls: map them through the call name mapping
-    r_calls_normalized = {}
-    for r_call, r_args in r_content.calls.items():
-        normalized = c_to_r_call_map.get(r_call, r_call)
-        r_calls_normalized.setdefault(normalized, set()).update(r_args)
-
-    r_all_calls_normalized = set()
-    for call in _collect_all_calls(r_scope):
-        r_all_calls_normalized.add(c_to_r_call_map.get(call, call))
-
-    # --- Compare calls ---
-    for c_call, c_args in c_content.calls.items():
-        if c_call in skip_c_calls:
-            continue
-        # Map C call name to normalized form
-        r_call = c_to_r_call_map.get(c_call, c_call)
-        if r_call in r_calls_normalized:
-            # Call exists in Rust at same scope — compare arg identifiers
-            r_args = r_calls_normalized[r_call]
-            # Map C arg identifiers
-            mapped_c_args = set()
-            for arg in c_args:
-                if arg in skip_c_idents:
-                    continue
-                mapped = c_to_r_ident_map.get(arg, arg)
-                mapped_c_args.add(mapped)
-            # Check C args are subset of Rust args (Rust may have extras)
-            missing_args = mapped_c_args - r_args - skip_c_idents
-            if missing_args:
-                mismatches.append(Mismatch(
-                    "missing_call_arg",
-                    f"Call {c_call}(): C args {sorted(missing_args)} not in Rust",
-                    c_scope.line, r_scope.line, path,
-                ))
-        elif r_call != c_call and c_call in r_content.calls:
-            pass  # Original name found (mapping wasn't needed)
-        elif r_call in r_all_calls_normalized or c_call in r_all_calls_normalized:
-            pass  # Call exists in Rust but at a different scope level — OK
-        else:
-            mismatches.append(Mismatch(
-                "missing_call",
-                f"C calls {c_call}() but Rust doesn't (in any scope)",
-                c_scope.line, r_scope.line, path,
-            ))
-
-    # Check for extra Rust calls not in C
-    c_calls_normalized = set()
-    for c_call in c_content.calls:
-        c_calls_normalized.add(c_to_r_call_map.get(c_call, c_call))
-
-    for r_call in r_content.calls:
-        if r_call in skip_r_calls:
-            continue
-        r_normalized = c_to_r_call_map.get(r_call, r_call)
-        if r_normalized in c_calls_normalized:
-            continue  # Matched via normalization
-        if r_call in skip_r_calls or r_normalized in skip_r_calls:
-            continue
-            mismatches.append(Mismatch(
-                "extra_call",
-                f"Rust calls {r_call}() but C doesn't (in this scope)",
-                c_scope.line, r_scope.line, path,
-            ))
-
-    # --- Compare error returns ---
-    skip_c_errors = set(rules.get("skip_c_errors", []))
-    for c_error in c_content.error_returns:
-        if c_error in skip_c_errors:
-            continue
-        if c_error not in r_content.error_returns:
-            # Try with normalized name
-            normalized = c_error.lower().replace("xml_error_", "xmlerror::")
-            if not any(r.lower() == normalized for r in r_content.error_returns):
-                mismatches.append(Mismatch(
-                    "missing_error_return",
-                    f"C returns {c_error} but Rust doesn't (in this scope)",
-                    c_scope.line, r_scope.line, path,
-                ))
 
 
 def _compare_scope_children(c_children: list[ScopeNode], r_children: list[ScopeNode],
                             path: str, mismatches: list[Mismatch]):
-    """Compare child scoping nodes between C and Rust."""
+    """Compare child scoping nodes using identity-based matching.
 
+    1. Match arms by label
+    2. Match other scopes by kind + label identity (or equivalence rules)
+    3. Check drop rules for unmatched scopes
+    4. Report remaining unmatched as mismatches
+    """
     rules = _rules or {}
-    skip_c_scope_labels = set(rules.get("skip_c_scope_labels", []))
-    skip_c_scope_kinds = set(rules.get("skip_c_scope_kinds", []))
-    skip_r_scope_labels = set(rules.get("skip_r_scope_labels", []))
+    scope_equivs = rules.get("scope_equivalences", [])
+    c_drops = rules.get("c_only_scopes", [])
+    r_drops = rules.get("r_only_scopes", [])
 
-    # Filter out skippable scopes and flatten transparent scopes
-    flatten_r = rules.get("flatten_r_scopes", [])
-    flatten_both = rules.get("flatten_both_scopes", [])
+    c_matched = {}  # c_idx → r_idx
+    r_matched = {}  # r_idx → c_idx
 
-    def should_flatten_r(scope):
-        for pat in flatten_r:
-            if scope.label.startswith(pat):
-                return True
-            if scope.kind == pat and not scope.label:
-                return True
-        return False
+    # Phase 1: Match arms by label
+    c_arms = [(i, c) for i, c in enumerate(c_children) if c.kind == "arm"]
+    r_arms = [(i, r) for i, r in enumerate(r_children) if r.kind == "arm"]
+    if c_arms and r_arms:
+        _pair_arms(c_arms, r_arms, c_matched, r_matched)
 
-    c_effective = []
-    for c in c_children:
-        if c.kind in skip_c_scope_kinds:
+    # Phase 2: Match non-arm scopes by identity
+    for ci, c_node in enumerate(c_children):
+        if ci in c_matched or c_node.kind == "arm":
             continue
-        if any(pat in c.label for pat in skip_c_scope_labels):
-            continue
-        c_effective.append(c)
-
-    r_effective = []
-    for r in r_children:
-        if any(pat in r.label for pat in skip_r_scope_labels):
-            continue
-        if should_flatten_r(r):
-            for child in r.children:
-                if any(pat in child.label for pat in skip_r_scope_labels):
-                    continue
-                r_effective.append(child)
-        else:
-            r_effective.append(r)
-
-
-    # Match by kind and label
-    # For match/arm: pair by arm label
-    # For if: pair by condition identifiers
-    # For loop/block: pair by position
-
-    if c_effective and c_effective[0].kind == "arm" and r_effective and r_effective[0].kind == "arm":
-        # Match arms by label
-        _match_arms(c_effective, r_effective, path, mismatches)
-        return
-
-    # General case: pair by kind, using greedy matching with lookahead
-    c_idx = 0
-    r_idx = 0
-    while c_idx < len(c_effective) and r_idx < len(r_effective):
-        c_node = c_effective[c_idx]
-        r_node = r_effective[r_idx]
-
-        if _scopes_match(c_node, r_node):
-            _compare_scope(c_node, r_node,
-                           f"{path}/{c_node.kind}({c_node.label[:20]})",
-                           mismatches)
-            c_idx += 1
-            r_idx += 1
-            continue
-
-        # Try lookahead
-        found = False
-        for r_look in range(r_idx + 1, min(r_idx + 5, len(r_effective))):
-            if _scopes_match(c_node, r_effective[r_look]):
-                for r_skip in range(r_idx, r_look):
-                    mismatches.append(Mismatch(
-                        "extra_scope",
-                        f"Extra Rust {r_effective[r_skip].kind}({r_effective[r_skip].label[:30]})",
-                        r_line=r_effective[r_skip].line,
-                        path=path,
-                    ))
-                _compare_scope(c_node, r_effective[r_look],
-                               f"{path}/{c_node.kind}({c_node.label[:20]})",
-                               mismatches)
-                c_idx += 1
-                r_idx = r_look + 1
-                found = True
+        # Try direct match
+        for ri, r_node in enumerate(r_children):
+            if ri in r_matched or r_node.kind == "arm":
+                continue
+            if _scopes_match(c_node, r_node):
+                c_matched[ci] = ri
+                r_matched[ri] = ci
                 break
-        if found:
-            continue
 
-        for c_look in range(c_idx + 1, min(c_idx + 5, len(c_effective))):
-            if _scopes_match(c_effective[c_look], r_node):
-                for c_skip in range(c_idx, c_look):
-                    mismatches.append(Mismatch(
-                        "missing_scope",
-                        f"Extra C {c_effective[c_skip].kind}({c_effective[c_skip].label[:30]})",
-                        c_line=c_effective[c_skip].line,
-                        path=path,
-                    ))
-                _compare_scope(c_effective[c_look], r_node,
-                               f"{path}/{r_node.kind}({r_node.label[:20]})",
-                               mismatches)
-                c_idx = c_look + 1
-                r_idx += 1
-                found = True
+    # Phase 2b: Try scope equivalence rules for still-unmatched
+    for ci, c_node in enumerate(c_children):
+        if ci in c_matched:
+            continue
+        for ri, r_node in enumerate(r_children):
+            if ri in r_matched:
+                continue
+            for rule in scope_equivs:
+                if _equiv_rule_matches(c_node, r_node, rule):
+                    c_matched[ci] = ri
+                    r_matched[ri] = ci
+                    break
+            if ci in c_matched:
                 break
-        if found:
+
+    # Phase 3: Recursively compare matched pairs
+    for ci in sorted(c_matched.keys()):
+        ri = c_matched[ci]
+        c_node = c_children[ci]
+        r_node = r_children[ri]
+        _compare_scope(c_node, r_node,
+                       f"{path}/{c_node.kind}({c_node.label[:20]})",
+                       mismatches)
+
+    # Phase 4: Report unmatched C scopes
+    for ci, c_node in enumerate(c_children):
+        if ci in c_matched:
             continue
-
-        # No match — report both
+        if _should_drop(c_node, c_drops):
+            continue
         mismatches.append(Mismatch(
-            "scope_mismatch",
-            f"C {c_node.kind}({c_node.label[:30]}) vs R {r_node.kind}({r_node.label[:30]})",
-            c_line=c_node.line, r_line=r_node.line, path=path,
-        ))
-        c_idx += 1
-        r_idx += 1
-
-    # Remaining
-    while c_idx < len(c_effective):
-        c_node = c_effective[c_idx]
-        mismatches.append(Mismatch(
-            "missing_scope",
-            f"Extra C {c_node.kind}({c_node.label[:30]})",
+            "extra_c_scope",
+            f"C has {c_node.kind}({c_node.label[:40]}) with no Rust equivalent",
             c_line=c_node.line, path=path,
         ))
-        c_idx += 1
 
-    while r_idx < len(r_effective):
-        r_node = r_effective[r_idx]
+    # Phase 5: Report unmatched Rust scopes
+    for ri, r_node in enumerate(r_children):
+        if ri in r_matched:
+            continue
+        if _should_drop(r_node, r_drops):
+            continue
         mismatches.append(Mismatch(
-            "extra_scope",
-            f"Extra Rust {r_node.kind}({r_node.label[:30]})",
+            "extra_r_scope",
+            f"Rust has {r_node.kind}({r_node.label[:40]}) with no C equivalent",
             r_line=r_node.line, path=path,
         ))
-        r_idx += 1
 
 
-def _flatten_loop_blocks(children: list[ScopeNode]) -> list[ScopeNode]:
-    """If a list has a single bare block child, promote its children."""
-    if len(children) == 1 and children[0].kind == "block" and not children[0].label:
-        return children[0].children
-    return children
-
-
-def _collect_all_calls(scope: ScopeNode) -> set[str]:
-    """Collect all call names from a scope and all its descendants."""
-    calls = set(scope.content.calls.keys())
-    for child in scope.children:
-        calls.update(_collect_all_calls(child))
-    return calls
-
+# ========= Scope matching =========
 
 def _scopes_match(c: ScopeNode, r: ScopeNode) -> bool:
-    """Do two scoping nodes correspond to each other?"""
-    # Same kind
+    """Do two scoping nodes correspond by identity?"""
     if c.kind == r.kind:
         if c.kind == "arm":
             return _arm_labels_match(c.label, r.label)
         if c.kind in ("if", "if_let"):
+            return _condition_labels_overlap(c.label, r.label)
+        if c.kind == "match":
+            return True  # Matches pair by position within parent
+        if c.kind == "loop":
             return True
         return True
 
-    # Cross-kind matches
+    # Cross-kind: C if = Rust if_let (handler dispatch pattern)
     if c.kind == "if" and r.kind == "if_let":
-        return True
+        return _condition_labels_overlap(c.label, r.label)
     if c.kind == "if_let" and r.kind == "if":
-        return True
-
+        return _condition_labels_overlap(c.label, r.label)
 
     return False
+
+
+def _condition_labels_overlap(c_label: str, r_label: str) -> bool:
+    """Do two condition labels share any meaningful identifiers?"""
+    if not c_label or not r_label:
+        return True  # Can't compare — assume match
+    c_ids = set(c_label.replace(",", " ").split())
+    r_ids = set(r_label.replace(",", " ").split())
+    # Strip m_ prefix from C identifiers
+    c_normalized = {i.lstrip("m_") if i.startswith("m_") else i for i in c_ids}
+    r_normalized = set(r_ids)
+    # Check overlap
+    if c_normalized & r_normalized:
+        return True
+    # Case-insensitive
+    c_lower = {i.lower().replace("_", "") for i in c_normalized}
+    r_lower = {i.lower().replace("_", "") for i in r_normalized}
+    return bool(c_lower & r_lower)
 
 
 def _arm_labels_match(c_label: str, r_label: str) -> bool:
     """Do two arm labels match?"""
     if c_label == r_label:
         return True
-    # Try short form
     c_short = c_label.split("::")[-1] if "::" in c_label else c_label
     r_short = r_label.split("::")[-1] if "::" in r_label else r_label
     if c_short == r_short:
         return True
-    # Case-insensitive comparison (C ALL_CAPS vs Rust PascalCase)
+    # Case-insensitive (C ALL_CAPS vs Rust PascalCase)
     if c_short.replace("_", "").lower() == r_short.replace("_", "").lower():
         return True
     # Prefix match: "Ok" matches "Ok(TokenResult ...)"
@@ -357,45 +209,142 @@ def _arm_labels_match(c_label: str, r_label: str) -> bool:
     return False
 
 
-def _match_arms(c_arms: list[ScopeNode], r_arms: list[ScopeNode],
-                path: str, mismatches: list[Mismatch]):
-    """Match switch/match arms by label."""
+def _pair_arms(c_arms: list, r_arms: list,
+               c_matched: dict, r_matched: dict):
+    """Pair match arms by label."""
     r_arm_map = {}
-    for arm in r_arms:
-        if arm.label:
-            for sub in arm.label.split("|"):
-                r_arm_map[sub.strip()] = arm
+    for ri, r_node in r_arms:
+        if r_node.label:
+            for sub in r_node.label.split("|"):
+                r_arm_map[sub.strip()] = (ri, r_node)
 
-    matched_r = set()
-    for c_arm in c_arms:
-        if not c_arm.label:
+    for ci, c_node in c_arms:
+        if not c_node.label:
             continue
-        # Find matching Rust arm using _arm_labels_match
-        r_arm = None
-        for r_label, r_a in r_arm_map.items():
-            if _arm_labels_match(c_arm.label, r_label):
-                r_arm = r_a
+        # Find matching Rust arm
+        for r_label, (ri, r_node) in r_arm_map.items():
+            if ri in r_matched:
+                continue
+            if _arm_labels_match(c_node.label, r_label):
+                c_matched[ci] = ri
+                r_matched[ri] = ci
                 break
 
-        if r_arm:
-            matched_r.add(id(r_arm))
-            _compare_scope(c_arm, r_arm,
-                           f"{path}/{c_arm.label[:30]}",
-                           mismatches)
+
+# ========= Equivalence rules =========
+
+def _equiv_rule_matches(c: ScopeNode, r: ScopeNode, rule: dict) -> bool:
+    """Does a scope equivalence rule match this C/R pair?"""
+    c_pat = rule.get("c_scope", {})
+    r_pat = rule.get("r_scope", {})
+    if not c_pat or not r_pat:
+        return False
+    return _scope_matches_pattern(c, c_pat) and _scope_matches_pattern(r, r_pat)
+
+
+def _scope_matches_pattern(scope: ScopeNode, pattern: dict) -> bool:
+    """Does a scope node match a pattern from a rule?"""
+    if "kind" in pattern:
+        if pattern["kind"] != scope.kind:
+            return False
+    if "label_contains" in pattern:
+        if pattern["label_contains"] not in scope.label:
+            return False
+    if "label_regex" in pattern:
+        if not re.search(pattern["label_regex"], scope.label):
+            return False
+    if "has_child_label" in pattern:
+        # Match if ANY child has a label containing the pattern
+        if not any(pattern["has_child_label"] in c.label for c in scope.children):
+            return False
+    return True
+
+
+# ========= Drop rules =========
+
+def _should_drop(scope: ScopeNode, drop_rules: list) -> bool:
+    """Should this unmatched scope be dropped (not reported)?"""
+    for rule in drop_rules:
+        if _scope_matches_pattern(scope, rule):
+            return True
+    return False
+
+
+# ========= Content comparison =========
+
+def _compare_content(c_content: ContentSet, r_content: ContentSet,
+                     path: str, c_scope: ScopeNode, r_scope: ScopeNode,
+                     mismatches: list[Mismatch]):
+    """Compare content sets within a matched scope pair."""
+    rules = _rules or {}
+    skip_c_calls = set(rules.get("skip_c_calls", []))
+    skip_c_idents = set(rules.get("skip_c_identifiers", []))
+    skip_r_calls = set(rules.get("skip_r_calls", []))
+    c_to_r_call_map = rules.get("call_name_map", {})
+    c_to_r_ident_map = rules.get("identifier_map", {})
+    skip_c_errors = set(rules.get("skip_c_errors", []))
+
+    # Normalize Rust calls through mapping
+    r_calls_normalized = {}
+    for r_call, r_args in r_content.calls.items():
+        normalized = c_to_r_call_map.get(r_call, r_call)
+        r_calls_normalized.setdefault(normalized, set()).update(r_args)
+
+    # Also collect all calls from child scopes (for cross-level matching)
+    r_all_calls = set(r_calls_normalized.keys())
+    for call in _collect_all_calls_normalized(r_scope, c_to_r_call_map):
+        r_all_calls.add(call)
+
+    # --- Compare calls ---
+    for c_call, c_args in c_content.calls.items():
+        if c_call in skip_c_calls:
+            continue
+        r_call = c_to_r_call_map.get(c_call, c_call)
+        if r_call in r_calls_normalized:
+            # Call found — compare args
+            r_args = r_calls_normalized[r_call]
+            mapped_c_args = set()
+            for arg in c_args:
+                if arg in skip_c_idents:
+                    continue
+                mapped = c_to_r_ident_map.get(arg, arg)
+                mapped_c_args.add(mapped)
+            missing_args = mapped_c_args - r_args - skip_c_idents
+            if missing_args:
+                mismatches.append(Mismatch(
+                    "missing_call_arg",
+                    f"Call {c_call}(): C args {sorted(missing_args)} not in Rust",
+                    c_scope.line, r_scope.line, path,
+                ))
+        elif r_call in r_all_calls:
+            pass  # Call exists at a different scope level
         else:
-            if c_arm.label == "_default":
-                continue  # Default arms often differ
-            # Check if the arm is empty (fallthrough)
-            if not c_arm.children and not c_arm.content.calls:
-                continue
             mismatches.append(Mismatch(
-                "missing_arm",
-                f"C arm {c_arm.label} has no Rust match",
-                c_line=c_arm.line, path=path,
+                "missing_call",
+                f"C calls {c_call}() but Rust doesn't",
+                c_scope.line, r_scope.line, path,
             ))
 
-    # Check for extra Rust arms
-    for r_arm in r_arms:
-        if id(r_arm) not in matched_r and r_arm.label and r_arm.label != "_default":
-            # Informational — Rust may handle extra cases
-            pass
+    # --- Compare error returns ---
+    for c_error in c_content.error_returns:
+        if c_error in skip_c_errors:
+            continue
+        if c_error not in r_content.error_returns:
+            # Try normalized
+            c_lower = c_error.lower()
+            if not any(r.lower() == c_lower for r in r_content.error_returns):
+                mismatches.append(Mismatch(
+                    "missing_error_return",
+                    f"C returns {c_error} but Rust doesn't",
+                    c_scope.line, r_scope.line, path,
+                ))
+
+
+def _collect_all_calls_normalized(scope: ScopeNode, call_map: dict) -> set[str]:
+    """Collect all call names from a scope and descendants, normalized."""
+    calls = set()
+    for call in scope.content.calls:
+        calls.add(call_map.get(call, call))
+    for child in scope.children:
+        calls.update(_collect_all_calls_normalized(child, call_map))
+    return calls

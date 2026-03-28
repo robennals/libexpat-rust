@@ -212,25 +212,100 @@ skip_c_errors:
   - xml_error_none        # C success sentinel — Rust uses different success pattern
   - xml_error_no_memory   # Rust panics on OOM
 
-# === C scoping labels to skip (scope-level patterns that Rust handles differently) ===
-skip_c_scope_labels:
-  - must_convert    # C MUST_CONVERT encoding check — Rust is UTF-8 only
-  - MUST_CONVERT
-  - accounting_diff_tolerated  # C per-token accounting — Rust at parse() entry
-  - accountingDiffTolerated
-  - m_encoding      # C encoding pointer selection — Rust single encoding
+# === Scope equivalence rules ===
+# These define C↔Rust scope pairs that should be matched even though
+# they have different kinds or labels. The matched pairs are then
+# compared recursively.
+scope_equivalences:
+  - name: handler_dispatch
+    c_scope: { kind: "if", label_regex: "m_.*_handler" }
+    r_scope: { kind: "if_let" }
+    why: >
+      C if(handler) { handler(arg) } = Rust if let Some(h) { h(data) }.
+      Same conditional handler dispatch, different syntax.
 
-# === C scoping kinds to skip ===
-skip_c_scope_kinds: []
+  - name: handler_dispatch_default
+    c_scope: { kind: "if", label_contains: "m_default_handler" }
+    r_scope: { kind: "if_let" }
+    why: C if(defaultHandler) = Rust if let Some(handler).
 
-# === Rust scoping labels to skip ===
-skip_r_scope_labels:
-  - iterations    # Rust MAX_ITERATIONS stall detection
-  - Err           # Rust Result::Err arms — C doesn't have Result type
-  - MAX_ITERATIONS  # Rust stall detection constant
-  # NOTE: Handler dispatches (if-let for Option<fn>) are NOT skipped.
-  # They should MATCH C's if(handler) scopes.
+# === C-only scopes (drop rules) ===
+# These C scopes have no Rust equivalent — they are dropped without
+# generating a mismatch. Each must have a principled justification.
+c_only_scopes:
+  - kind: "if"
+    label_contains: "must_convert"
+    why: C MUST_CONVERT encoding check — Rust is UTF-8 only
 
-# === Transparent Rust scopes ===
-flatten_r_scopes: []
+  - kind: "if"
+    label_contains: "MUST_CONVERT"
+    why: Same as above (uppercase variant)
+
+  - kind: "if"
+    label_contains: "accounting_diff_tolerated"
+    why: C per-token amplification accounting — Rust does at parse() entry
+
+  - kind: "if"
+    label_contains: "accountingDiffTolerated"
+    why: Same (camelCase variant)
+
+  - kind: "if"
+    label_contains: "m_encoding"
+    why: C encoding pointer selection — Rust is single-encoding (UTF-8)
+
+  - kind: "if"
+    label_contains: "m_parsing_status"
+    why: C suspend/resume status check — Rust handles differently
+
+  - kind: "if"
+    label_contains: "xml_finished"
+    why: C parsing finished check — Rust handles differently
+
+  - kind: "if"
+    label_contains: "xml_suspended"
+    why: C parsing suspended check — Rust handles differently
+
+  - kind: "match"
+    label_contains: "parsing"
+    why: C parsing status switch — Rust handles differently
+
+  - kind: "match"
+    has_child_label: "XML_SUSPENDED"
+    why: C parsing status switch (by arm content) — Rust handles differently
+
+  - kind: "match"
+    has_child_label: "XML_FINISHED"
+    why: Same as above (alternative arm)
+
+  - kind: "if"
+    label_regex: "^0$"
+    why: C disabled code (if(0)) — dead code, not in Rust
+
+  - kind: "if"
+    label_contains: "handle_default"
+    why: C handleDefault flag check — Rust handles default reporting differently
+
+  # C else-if(m_default_handler) fallback — Rust checks inside report_default()
+  - kind: "if"
+    label_contains: "m_default_handler"
+    why: Rust's report_default() checks handler existence internally
+
+  - kind: "if"
+    label_contains: "final_buffer"
+    why: C final buffer check — Rust uses have_more parameter
+
+# === Rust-only scopes (drop rules) ===
+# These Rust scopes have no C equivalent.
+r_only_scopes:
+  - kind: "if"
+    label_contains: "iterations"
+    why: Rust MAX_ITERATIONS stall detection — C has no equivalent
+
+  - kind: "if"
+    label_contains: "MAX_ITERATIONS"
+    why: Same as above
+
+  - kind: "arm"
+    label_contains: "Err"
+    why: Rust Result::Err arm — C doesn't use Result type
 
