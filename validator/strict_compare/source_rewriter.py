@@ -23,7 +23,7 @@ def load_rules(filepath: str) -> list[dict]:
     return rules
 
 
-def rewrite(source: str, rules: list[dict], max_iterations: int = 20) -> str:
+def rewrite(source: str, rules: list[dict], max_iterations: int = 50) -> str:
     """Apply rewrite rules to source text until fixpoint.
 
     Each iteration scans the token stream for pattern matches and applies
@@ -78,7 +78,7 @@ def _apply_rule_once(tokens: list[str], rule: dict) -> list[str] | None:
 
 
 def rewrite_function_body(source: str, rules: list[dict],
-                          max_iterations: int = 20) -> str:
+                          max_iterations: int = 50) -> str:
     """Rewrite a function body using rules.
 
     Same as rewrite() but returns just the rewritten text.
