@@ -57,7 +57,44 @@ c_rewrite_rules:
     before: "* $pp = $val ;"
     drop: true
 
+  # --- Variable declarations (C declares at top, Rust at point of use) ---
+  - name: drop_var_decl
+    before: "enum XML_Error $name ;"
+    drop: true
+
+  - name: drop_var_decl_2
+    before: "enum XML_Error $name = $val ;"
+    after: "$name = $val ;"
+
+  - name: drop_type_decl
+    before: "const char * $name ;"
+    drop: true
+
+  - name: drop_type_decl_2
+    before: "const char * * $name ;"
+    drop: true
+
+  - name: drop_ichar_decl
+    before: "ICHAR * $name ;"
+    drop: true
+
+  - name: drop_xml_char_decl
+    before: "XML_Char * $name ;"
+    drop: true
+
+  - name: drop_int_decl
+    before: "int $name ;"
+    drop: true
+
+  - name: drop_int_decl_init
+    before: "int $name = $val ;"
+    after: "$name = $val ;"
+
   # --- Encoding ---
+  - name: enc_pointer_selection
+    before: "if ( enc == self . m_encoding ) { $then } else { $else }"
+    after: "$then"
+
   - name: must_convert_keep_else_braced
     before: "if ( MUST_CONVERT ( $args ) ) { $then } else { $else }"
     after: "$else"
