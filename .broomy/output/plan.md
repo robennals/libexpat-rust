@@ -1,47 +1,32 @@
-# Plan: AST Rewrite-to-Canonical-Form Comparison (v4)
+# Plan: Source-Level Rewrite-to-Canonical-Form Comparison (v4)
 
 ## Core Idea
 
-Before comparing C and Rust, rewrite both into a **canonical form** using
-language-specific rewrite rules. The canonical form doesn't need to be valid
-in either language — it just needs to be the SAME for equivalent code.
+Rewrite both C and Rust **source text** using pattern rules to a canonical
+form. Then parse both canonical sources into ASTs and compare. The rewrite
+rules operate on raw token strings, not ASTs.
 
-Then comparison is trivial: if the canonical forms are identical (modulo
-identifier normalization), the code is equivalent.
-
-## Architecture
+## Pipeline
 
 ```
-C source → tree-sitter → common AST → C rewrite rules → canonical AST ─┐
-                                                                         ├→ compare
-Rust source → tree-sitter → common AST → Rust rewrite rules → canonical AST ─┘
+C source text
+  → identifier normalization (camelCase→snake_case, XML_TOK→XmlTok, etc.)
+  → C string rewrite rules (applied to source text)
+  → canonical C text
+  → parse to AST (tree-sitter)
+  → compare ──────────────────────┐
+                                   ├→ mismatches
+Rust source text                   │
+  → identifier normalization       │
+  → Rust string rewrite rules      │
+  → canonical Rust text            │
+  → parse to AST (tree-sitter) ───┘
 ```
-
-### Step 1: Parse to common AST (existing v2/v3 code)
-Use tree-sitter to parse both languages into common AST nodes.
-This is already implemented.
-
-### Step 2: Normalize identifiers (hardcoded)
-Apply deterministic identifier normalization to both sides:
-- C `parser->m_fooBar` → `self.foo_bar` (strip parser->, strip m_, camelCase→snake_case)
-- C `XML_TOK_TRAILING_CR` → `XmlTok::TrailingCr`
-- C `XML_ERROR_NO_MEMORY` → `XmlError::NoMemory`
-- C `XML_ROLE_INSTANCE_START` → `Role::InstanceStart`
-- Rust `self.foo_bar` → `self.foo_bar` (already canonical)
-- Rust `xmltok_impl::content_tok` → `content_tok` (strip module prefix)
-
-This is a fixed set of transforms, not configurable.
-
-### Step 3: Apply language-specific rewrite rules
-Rules are YAML patterns with `$variable` holes. A `$variable` matches any
-subtree that doesn't contain unbalanced delimiters. Rules are applied
-repeatedly (bottom-up, to fixpoint) until no more rules match.
-
-### Step 4: Compare canonical ASTs
-After rewriting, both sides should have the same AST structure. Compare
-node-by-node. Any difference is a real mismatch.
 
 ## Rewrite Rule Format
+
+Rules match and replace substrings in the source text. `$variable` captures
+any balanced substring (no unbalanced delimiters).
 
 ```yaml
 rust_rewrite_rules:
@@ -49,368 +34,193 @@ rust_rewrite_rules:
     description: "Guarded method call — borrow checker requires if-let"
     before: "if let Some($handler) = &mut self.$field { $handler($args); }"
     after: "self.$field($args);"
-    principled: true
-    why: "Rust borrow checker requires if-let to call Option<fn> handlers"
 
   - name: result_unwrap
     description: "Result match unwrap"
-    before: "match $expr { Ok($val) => $body, Err($err) => { return $ret; } }"
+    before: "match $expr { Ok($val) => { $body }, Err($err) => { return $ret; } }"
     after: "let $val = $expr; $body"
-    principled: true
-    why: "Rust uses Result where C uses return codes"
 
   - name: drop_iteration_guard
-    description: "Drop stall detection guard"
+    description: "Drop stall detection"
     before: "if $iter > $max { return $err; }"
     drop: true
-    principled: true
-    why: "Rust adds iteration limits for safety; C relies on finite input"
 
 c_rewrite_rules:
-  - name: drop_pool_clear
-    description: "Drop pool lifecycle"
-    before: "poolClear($args);"
-    drop: true
-    principled: true
-    why: "C pool lifecycle. Rust uses RAII."
-
   - name: drop_free
     description: "Drop free() calls"
     before: "free($args);"
     drop: true
-    principled: true
-    why: "C explicit deallocation. Rust uses RAII."
 
-  - name: handler_dispatch_inline
-    description: "Inline handler null check + call"
+  - name: handler_dispatch
+    description: "Inline handler null check"
     before: "if ($handler) { $handler($handlerArg, $args); }"
     after: "$handler($args);"
-    principled: true
-    why: "C checks handler then calls. Canonical form: just call."
 
-  - name: handler_dispatch_with_default
-    description: "Handler dispatch with default fallback"
-    before: "if ($handler) { $handler($handlerArg, $args); } else if ($default) { reportDefault($dargs); }"
-    after: "$handler($args); reportDefault($dargs);"
-    principled: true
-    why: "Canonical form: both calls, without conditional wrapping"
-
-  - name: drop_break_in_switch
-    description: "Drop break statements in switch cases"
+  - name: drop_break
+    description: "Drop break in switch"
     before: "break;"
     drop: true
-    principled: true
-    why: "C switch requires explicit break. Canonical form omits it."
-
-  - name: must_convert_to_else
-    description: "MUST_CONVERT encoding branch — keep else only"
-    before: "if (MUST_CONVERT($args)) { $then } else { $else }"
-    after: "$else"
-    principled: true
-    why: "Rust is UTF-8 only. Only the else branch (no conversion) applies."
-
-  - name: drop_position_tracking
-    description: "Drop event pointer writes"
-    before: "*$eventPP = $pos;"
-    drop: true
-    principled: true
-    why: "C writes position via output pointers. Rust returns in tuples."
 ```
 
 ## Pattern Matching Algorithm
 
-### Pattern syntax
+### Tokenization
 
-A pattern is a string that looks like code but with `$variable` holes:
+Split the source text (or the relevant function body) into tokens:
+- Identifiers: `[a-zA-Z_][a-zA-Z0-9_]*`
+- Operators: `==`, `!=`, `<=`, `>=`, `&&`, `||`, `->`, `::`, `..`, etc.
+- Single chars: `(`, `)`, `{`, `}`, `[`, `]`, `;`, `,`, `.`, `!`, `*`, `&`, `=`, etc.
+- Literals: numbers, strings, char literals
+- `$variable`: pattern variables (only in patterns, not in source)
 
-```
-"if let Some($handler) = &mut self.$field { $handler($args); }"
-```
+Whitespace and comments are stripped.
 
-Tokens:
-- **Literal tokens**: `if`, `let`, `Some`, `(`, `)`, `{`, `}`, `.`, `&`, `mut`, `;`, `=`, etc.
-- **Variables**: `$name` — matches one or more tokens up to the next literal that follows in the pattern
-- **Delimited variables**: A `$var` followed by a closing delimiter `)`, `}`, `]`, `;` matches everything up to that delimiter (respecting nesting)
+### Matching
 
-### Matching algorithm
-
-Given a pattern and an AST node (serialized to tokens):
-
-1. Serialize the AST node to a token stream (the same serialization used for patterns)
-2. Walk both streams in parallel:
-   - Literal token: must match exactly
-   - `$variable`: consume tokens from the AST until the next literal in the pattern is found
-     (respecting balanced delimiters)
-3. If all pattern tokens are consumed and all AST tokens are consumed, it's a match
-4. Captured variables are available for the `after` template
-
-### Applying rewrites
-
-For each AST node (bottom-up):
-1. Serialize the node to tokens
-2. Try each rule's `before` pattern
-3. If a rule matches:
-   - If `drop: true`, delete the node
-   - Otherwise, substitute captures into the `after` template
-   - Parse the result back into an AST node
-   - Replace the original node with the result
-4. Repeat until no rules fire (fixpoint)
-
-### Implementation detail: token serialization
-
-Serialize common AST nodes to a flat token stream:
+Given pattern tokens and source tokens starting at position `pos`:
 
 ```
-Node("if", children=[
-    Node("call", children=[Node("ident", value="is_none")]),
-    Node("block", children=[...])
-])
+match(pattern, source, pos):
+    for each pattern token:
+        if token is literal:
+            if source[pos] != token: return None
+            pos += 1
+        if token is $variable:
+            next_literal = next literal token in pattern (or end)
+            capture = consume source tokens until next_literal found
+                      (respecting balanced delimiters)
+            captures[$variable] = capture
+    return captures
 ```
-→ tokens: `if is_none ( ) { ... }`
 
-The serialization preserves structure via delimiter tokens `(){}[]` but
-flattens the tree. This makes pattern matching simpler — it's string
-matching with balanced-delimiter-aware variable capture.
+**Balanced delimiter rule**: When a `$variable` is followed by `)`, `}`, or `]`,
+capture everything up to the MATCHING closing delimiter (not just the first one).
+When followed by `;`, capture up to the next `;` at the same nesting level.
+When followed by another identifier/keyword, capture a single token or a single
+balanced group.
 
-### Corner cases
+### Substitution
 
-**1. Nested rewrites**: A rewrite may produce an AST that matches another rule.
-Bottom-up application + fixpoint handles this: inner rewrites fire first,
-then outer ones, repeated until stable.
+Given captures and an `after` template:
+```
+substitute(template, captures):
+    for each token in template:
+        if token is $variable:
+            emit captures[$variable]
+        else:
+            emit token
+    return joined tokens
+```
 
-**2. Multiple matches**: If a rule can match at multiple positions in the same
-parent (e.g., multiple pool_clear calls), apply to all of them.
+### Application
 
-**3. Statement vs expression context**: A `drop` rule in statement context removes
-the statement. In expression context (e.g., inside an if condition), it's
-an error — we shouldn't drop parts of expressions.
+For a function body:
+1. Extract the function body text
+2. Normalize identifiers
+3. For each rule, scan the text for matches (left to right, non-overlapping)
+4. Apply all matches (replace or drop)
+5. Repeat until no rules fire (fixpoint, max 10 iterations)
 
-**4. $args matching across delimiters**: `$args` in `foo($args)` matches everything
-between `(` and `)`, including nested `()`. The pattern parser knows that
-`$args` before `)` should capture up to the matching `)`.
+## Identifier Normalization (hardcoded, applied first)
 
-**5. Multi-statement patterns**: A pattern like `$handler($args); reportDefault($dargs);`
-matches two consecutive statements. This requires matching against a SEQUENCE
-of sibling AST nodes, not just a single node.
+```
+# C normalization:
+parser->m_fooBar     → self.foo_bar
+enc->minBytesPerChar → enc.min_bytes_per_char
+handlerArg           → [removed — Rust closures capture]
+camelCase            → snake_case
+XML_TOK_TRAILING_CR  → XmlTok::TrailingCr
+XML_ERROR_NO_MEMORY  → XmlError::NoMemory
+XML_ROLE_XML_DECL    → Role::XmlDecl
+NULL                 → None
+XML_T('\0')          → b'\0'
 
-**6. Whitespace/formatting**: Token comparison ignores whitespace. The serialization
-strips all whitespace; matching is on token sequences.
+# Rust normalization:
+self.foo_bar              → self.foo_bar (already canonical)
+xmltok_impl::content_tok  → content_tok
+xmltok::Utf8Encoding      → [encoding constant — normalize]
+Self::normalize_lines     → normalize_lines
+```
 
 ## Expected Rules
 
-### Rust rewrite rules (~15)
+### Rust (~15 rules)
 
-```yaml
-# Borrow checker patterns
-- before: "if let Some($h) = &mut self.$f { $h($a); }"
-  after: "self.$f($a);"
+| Pattern | Replacement | Why |
+|---------|-------------|-----|
+| `if let Some($h) = &mut self.$f { $h($a); }` | `self.$f($a);` | Borrow checker wrapper |
+| `if let Some($h) = &mut self.$f { $h($a); } else { $e }` | `self.$f($a); $e` | Wrapper with fallback |
+| `match $e { Ok($v) => { $b }, Err($err) => { return $r; } }` | `let $v = $e; $b` | Result unwrap |
+| `match $e { Ok($v) => $v, Err($err) => { return $r; } }` | `let $v = $e;` | Result unwrap (value) |
+| `if $i > $max { return $e; }` | [drop] | Iteration guard |
+| `let mut $i = 0;` | [drop] | Iteration counter (paired with guard) |
+| `std::mem::take(&mut self.$f)` | `self.$f` | Ownership transfer |
+| `$v.to_vec()` | `$v` | Clone (Rust-specific) |
+| `String::from_utf8($v).unwrap_or_default()` | `$v` | UTF-8 conversion |
+| `Vec::with_capacity($n)` | [drop in let context] | Allocation hint |
+| `.len()` | [keep — might need for loop bounds] | |
 
-- before: "if let Some($h) = &mut self.$f { $h($a); } else { $else }"
-  after: "self.$f($a); $else"
+### C (~20 rules)
 
-# Result unwrapping
-- before: "match $e { Ok($v) => { $body }, Err($err) => { return $ret; } }"
-  after: "let $v = $e; $body"
+| Pattern | Replacement | Why |
+|---------|-------------|-----|
+| `poolClear($a);` | [drop] | Pool lifecycle (RAII) |
+| `poolDiscard($a);` | [drop] | Pool lifecycle |
+| `poolStoreString($p, $enc, $start, $end)` | `&data[$start..$end]` | Pool → slice |
+| `free($a);` | [drop] | Explicit dealloc |
+| `REALLOC($a);` | [drop] | Explicit realloc |
+| `if ($h) { $h($ha, $a); }` | `$h($a);` | Handler null check |
+| `if ($h) { $h($ha, $a); } else if ($d) { reportDefault($da); }` | `$h($a); reportDefault($da);` | Handler + default |
+| `break;` | [drop] | Switch break |
+| `goto $l;` | [drop] | Goto |
+| `*$pp = $v;` | [drop] | Position tracking |
+| `if (MUST_CONVERT($a)) { $t } else { $e }` | `$e` | Encoding (else only) |
+| `if (enc == self.m_encoding) { $t } else { $e }` | `$t` | Encoding selection |
+| `if (!accountingDiffTolerated($a)) { $b }` | [drop] | Per-token accounting |
+| `switch (self.parsing_status.parsing) { $a }` | [drop] | Suspend/resume |
+| `if ((0) && $c) { $b }` | [drop] | Disabled code |
+| `return XmlError::None;` | `return;` | Success sentinel |
+| `if (!$p) { return XmlError::NoMemory; }` | [drop] | OOM check |
+| `if (!$p) return 0;` | [drop] | OOM check (variant) |
 
-# Iteration safety
-- before: "if $i > $max { return $err; }"
-  drop: true
+## After Rewriting: What Remains
 
-- before: "let mut $i = 0;"  # only when paired with iteration guard
-  drop: true
+Both sides should have:
+- The same function calls (same names, similar args)
+- The same control flow (if/loop/match with same conditions/arms)
+- The same error returns
+- The same variable assignments
 
-# Memory management
-- before: "std::mem::take(&mut self.$f)"
-  after: "self.$f"
+What's been removed:
+- C: pool ops, handler null checks, break, goto, position tracking, encoding
+- Rust: if-let wrappers, Result matching, iteration guards, ownership ops
 
-- before: "Vec::new()"
-  drop: true  # in let context
+## Corner Cases
 
-- before: "Vec::with_capacity($n)"
-  drop: true
+1. **Nested matches**: `match result { Ok(val) => match val.token { ... } }` —
+   the outer match is rewritten to a let, leaving `let val = result; match val.token { ... }`.
+   The inner match is NOT rewritten (it's a real dispatch, not Result unwrapping).
 
-# String conversion
-- before: "String::from_utf8($v).unwrap_or_default()"
-  after: "$v"
+2. **Multiple handler args**: C's `handler(handlerArg, data, len)` — the
+   `handlerArg` removal happens in identifier normalization (handlerArg → removed),
+   so the rewrite just sees `handler(data, len)`.
 
-# Slice creation (matches C pool operations)
-- before: "&$data[$start..$end]"
-  after: "poolStoreString($data, $start, $end)"  # rewrite TO C-like form
-```
+3. **Fixpoint convergence**: A rewrite might produce text that matches another rule.
+   E.g., Result unwrap produces a let binding, which might match a let-inlining rule.
+   Limit to 10 iterations; warn if not converged.
 
-### C rewrite rules (~20)
+4. **Multi-statement patterns**: `$h($a); reportDefault($da);` matches two
+   consecutive statements. The pattern scanner must handle sequences, not just
+   single statements.
 
-```yaml
-# Memory management
-- before: "poolClear($a);"
-  drop: true
-- before: "poolDiscard($a);"
-  drop: true
-- before: "poolStoreString($pool, $enc, $start, $end)"
-  after: "poolStoreString($start, $end)"  # normalize args
-- before: "free($a);"
-  drop: true
-- before: "REALLOC($a);"
-  drop: true
+5. **Greedy vs non-greedy $vars**: `$handler($handlerArg, $args)` — `$handlerArg`
+   matches one argument, `$args` matches the rest. The delimiter is `,` between
+   them. Need to handle this: `$var` before `,` captures one comma-separated item.
 
-# Handler dispatch
-- before: "if ($h) { $h($harg, $a); }"
-  after: "$h($a);"
-- before: "if ($h) { $h($harg, $a); } else if ($d) { reportDefault($da); }"
-  after: "$h($a); reportDefault($da);"
+## Implementation
 
-# Control flow
-- before: "break;"
-  drop: true
-- before: "goto $label;"
-  drop: true
-
-# Position tracking
-- before: "*$pp = $v;"
-  drop: true
-
-# Encoding
-- before: "if (MUST_CONVERT($a)) { $then } else { $else }"
-  after: "$else"
-- before: "if (enc == parser->m_encoding) { $then } else { $else }"
-  after: "$then"  # keep the "same encoding" path
-
-# Accounting
-- before: "if (!accountingDiffTolerated($a)) { $body }"
-  drop: true
-
-# Parsing status
-- before: "switch (parser->m_parsingStatus.parsing) { $arms }"
-  drop: true
-
-# Disabled code
-- before: "if ((0) && $cond) { $body }"
-  drop: true
-
-# Success returns
-- before: "return XML_ERROR_NONE;"
-  after: "return;"
-
-# OOM checks
-- before: "if (!$ptr) { return XML_ERROR_NO_MEMORY; }"
-  drop: true
-- before: "if (!$ptr) return 0;"
-  drop: true
-```
-
-## Identifier Normalization (hardcoded)
-
-Applied to both sides before rewrite rules:
-
-```python
-# C → canonical
-"parser->m_fooBar"     → "self.foo_bar"
-"enc->minBytesPerChar" → "enc.min_bytes_per_char"
-"handlerArg"           → removed (Rust closures capture)
-"XML_TOK_X"            → "XmlTok::X" (PascalCase)
-"XML_ERROR_X"          → "XmlError::X" (PascalCase)
-"XML_ROLE_X"           → "Role::X" (PascalCase)
-"XML_T('\\0')"         → "b'\\0'"
-"NULL"                 → "None"
-camelCase identifiers  → snake_case
-
-# Rust → canonical
-"self.foo_bar"         → "self.foo_bar" (already canonical)
-"xmltok_impl::foo"     → "foo" (strip module prefix)
-"xmltok::foo"          → "foo"
-"Self::foo"            → "foo"
-"XmlTok::X"            → "XmlTok::X" (already canonical)
-```
-
-## What This Approach Solves
-
-| Problem | How solved |
-|---------|-----------|
-| Handler dispatch pattern | C rewrite: inline handler check. Rust rewrite: unwrap if-let. Both become direct call. |
-| Result unwrapping | Rust rewrite: match Ok/Err → let binding. C already has direct assignment. |
-| Pool operations | C rewrite: drop pool lifecycle. Rust: no pools. |
-| Position tracking | C rewrite: drop *eventPP writes. Rust: returns in tuples. |
-| Encoding branches | C rewrite: keep else branch of MUST_CONVERT. Rust: no encoding branch. |
-| OOM checks | C rewrite: drop null checks. Rust: panics on OOM. |
-| Borrow checker wrappers | Rust rewrite: unwrap if-let. Both become direct call. |
-| Iteration guards | Rust rewrite: drop. C: no guards. |
-| Expression decomposition | C/Rust: single-use let inlining (existing). |
-| Different identifier names | Hardcoded normalization. Both become snake_case with canonical prefixes. |
-
-## Implementation Plan
-
-### File structure
-```
-validator/strict_compare/tokenizer.py    — AST ↔ token stream serialization
-validator/strict_compare/pattern.py      — Pattern matching (tokens with $vars)
-validator/strict_compare/rewriter.py     — Apply rules to AST (bottom-up, fixpoint)
-validator/canonical-compare.py           — Main driver
-validator/c-rewrites.yaml                — C rewrite rules
-validator/rust-rewrites.yaml             — Rust rewrite rules
-```
-
-### Step-by-step implementation
-
-1. **Tokenizer** (~100 lines): Serialize common AST to token stream and back.
-   Each token is a string. Delimiters `(){}[]` are single tokens. Identifiers,
-   operators, literals are single tokens. Variables `$name` are special tokens.
-
-2. **Pattern matcher** (~150 lines): Given a pattern (token stream with $vars)
-   and a target (token stream), try to match. Returns captures dict or None.
-   Key: balanced-delimiter-aware variable capture.
-
-3. **Rule applier** (~100 lines): Load YAML rules, apply bottom-up to AST.
-   For each node, serialize → try patterns → if match, substitute → parse back.
-   Repeat to fixpoint.
-
-4. **Driver** (~50 lines): Parse both files, normalize identifiers, apply
-   language-specific rewrites, compare canonical ASTs.
-
-5. **Rules** (~30 C rules, ~15 Rust rules): Written in YAML as described above.
-
-### Testing approach
-
-For each rule, create a minimal test case:
-```python
-def test_handler_dispatch():
-    c_ast = parse("if (handler) { handler(arg, data); }")
-    r_ast = parse("if let Some(h) = &mut self.handler { h(data); }")
-    c_canonical = apply_rules(c_ast, c_rules)
-    r_canonical = apply_rules(r_ast, r_rules)
-    assert c_canonical == r_canonical  # both become: handler(data);
-```
-
-### Estimated complexity
-
-- Tokenizer: straightforward (serialize/deserialize common AST)
-- Pattern matcher: moderate (balanced delimiter tracking)
-- Rule applier: straightforward (iterate rules, apply matches)
-- Rules: the bulk of the work — each needs careful testing
-
-Total: ~400 lines of new code + ~50 YAML rules.
-
-## Risk Assessment
-
-**Low risk**: The token-based pattern matching is well-understood (similar to
-macro expansion). The rules are individually testable.
-
-**Medium risk**: Fixpoint convergence — rules might interact in unexpected ways.
-Mitigation: limit iterations, detect infinite loops.
-
-**High risk**: Getting the rules right. Each rule is an assertion that "these
-two patterns are semantically equivalent." A wrong rule hides a real bug.
-Mitigation: mark each rule principled/temporary, require justification.
-
-## How This Differs from v3
-
-v3 compares scoping trees + content sets. It's good at finding which functions
-call which other functions, but struggles with HOW the calls are made (handler
-dispatch patterns, Result wrapping, etc.).
-
-v4 rewrites both sides to a canonical form BEFORE comparing. The comparison
-itself is trivial — just check AST equality. All the intelligence is in the
-rewrite rules, which are individually testable and auditable.
-
-The key insight: instead of trying to match two different ASTs, transform both
-to the SAME AST. Each transformation is a principled assertion about what's
-equivalent.
+~400 lines total:
+- `tokenizer.py` (~50 lines): tokenize source text
+- `pattern.py` (~150 lines): match patterns against token streams
+- `rewriter.py` (~100 lines): load YAML rules, apply to source text
+- `canonical-compare.py` (~100 lines): main driver
