@@ -197,6 +197,8 @@ call_name_map:
   "xmltok_impl::skip_s": skip_s
   "xmltok_impl::predefined_entity_name": predefined_entity_name
   "xmltok::parse_xml_decl": parse_xml_decl
+  "Self::normalize_lines": normalize_lines
+  "Self::is_partial_utf8_sequence": is_partial_utf8_sequence
 
 # === Identifier mapping (C name → Rust name) ===
 identifier_map:
