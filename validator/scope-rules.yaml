@@ -229,6 +229,25 @@ scope_equivalences:
     r_scope: { kind: "if_let" }
     why: C if(defaultHandler) = Rust if let Some(handler).
 
+  - name: final_buffer_is_have_more
+    c_scope: { kind: "if", label_contains: "final_buffer" }
+    r_scope: { kind: "if", label_contains: "have_more" }
+    why: >
+      C if(!parsing_status.finalBuffer) = Rust if(have_more).
+      Both check whether more data may arrive.
+
+  - name: parsing_status_is_have_more
+    c_scope: { kind: "if", label_contains: "m_parsing_status" }
+    r_scope: { kind: "if", label_contains: "have_more" }
+    why: Same as above (different C label extraction).
+
+  - name: char_data_handler_abbrev
+    c_scope: { kind: "if", label_contains: "char_data_handler" }
+    r_scope: { kind: "if", label_contains: "character_data_handler" }
+    why: >
+      C uses local variable charDataHandler (abbreviated from
+      m_characterDataHandler). Same handler check.
+
 # === C-only scopes (drop rules) ===
 # These C scopes have no Rust equivalent — they are dropped without
 # generating a mismatch. Each must have a principled justification.

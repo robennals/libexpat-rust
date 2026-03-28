@@ -88,33 +88,26 @@ def _compare_scope_children(c_children: list[ScopeNode], r_children: list[ScopeN
     if c_arms and r_arms:
         _pair_arms(c_arms, r_arms, c_matched, r_matched)
 
-    # Phase 2: Match non-arm scopes by identity
-    for ci, c_node in enumerate(c_children):
-        if ci in c_matched or c_node.kind == "arm":
-            continue
-        # Try direct match
-        for ri, r_node in enumerate(r_children):
-            if ri in r_matched or r_node.kind == "arm":
-                continue
-            if _scopes_match(c_node, r_node):
-                c_matched[ci] = ri
-                r_matched[ri] = ci
-                break
+    # Phase 2: Match non-arm scopes using maximum bipartite matching
+    # Build compatibility matrix: which C scopes can match which R scopes
+    c_remaining = [(i, c) for i, c in enumerate(c_children)
+                   if i not in c_matched and c.kind != "arm"]
+    r_remaining = [(i, r) for i, r in enumerate(r_children)
+                   if i not in r_matched and r.kind != "arm"]
 
-    # Phase 2b: Try scope equivalence rules for still-unmatched
-    for ci, c_node in enumerate(c_children):
-        if ci in c_matched:
-            continue
-        for ri, r_node in enumerate(r_children):
-            if ri in r_matched:
-                continue
-            for rule in scope_equivs:
-                if _equiv_rule_matches(c_node, r_node, rule):
-                    c_matched[ci] = ri
-                    r_matched[ri] = ci
-                    break
-            if ci in c_matched:
-                break
+    def can_match(c_node, r_node):
+        if _scopes_match(c_node, r_node):
+            return True
+        for rule in scope_equivs:
+            if _equiv_rule_matches(c_node, r_node, rule):
+                return True
+        return False
+
+    # Find maximum matching (augmenting paths algorithm)
+    best_pairs = _find_max_matching(c_remaining, r_remaining, can_match)
+    for ci, ri in best_pairs:
+        c_matched[ci] = ri
+        r_matched[ri] = ci
 
     # Phase 3: Recursively compare matched pairs
     for ci in sorted(c_matched.keys()):
@@ -148,6 +141,43 @@ def _compare_scope_children(c_children: list[ScopeNode], r_children: list[ScopeN
             f"Rust has {r_node.kind}({r_node.label[:40]}) with no C equivalent",
             r_line=r_node.line, path=path,
         ))
+
+
+# ========= Maximum bipartite matching =========
+
+def _find_max_matching(c_items: list, r_items: list, can_match) -> list:
+    """Find maximum matching between C and R scope lists.
+
+    Uses augmenting paths (Hopcroft-Karp simplified for small sets).
+    Returns list of (c_idx, r_idx) pairs.
+    """
+    # Build adjacency: for each c_item, which r_items can it match?
+    adj = {}
+    for ci, c_node in c_items:
+        adj[ci] = []
+        for ri, r_node in r_items:
+            if can_match(c_node, r_node):
+                adj[ci].append(ri)
+
+    # Hungarian algorithm (simplified): try to find augmenting path for each C node
+    r_to_c = {}  # r_idx → c_idx (current matching)
+
+    def augment(ci, visited):
+        for ri in adj.get(ci, []):
+            if ri in visited:
+                continue
+            visited.add(ri)
+            # If r is unmatched, or we can find an augmenting path
+            if ri not in r_to_c or augment(r_to_c[ri], visited):
+                r_to_c[ri] = ci
+                return True
+        return False
+
+    for ci, _ in c_items:
+        augment(ci, set())
+
+    # Convert to (c_idx, r_idx) pairs
+    return [(c_idx, r_idx) for r_idx, c_idx in r_to_c.items()]
 
 
 # ========= Scope matching =========
@@ -195,6 +225,11 @@ def _condition_labels_overlap(c_label: str, r_label: str) -> bool:
 def _arm_labels_match(c_label: str, r_label: str) -> bool:
     """Do two arm labels match?"""
     if c_label == r_label:
+        return True
+    # Default/wildcard arms
+    if c_label in ("_default", "default") and r_label in ("_", "_default", "default"):
+        return True
+    if r_label in ("_default", "default") and c_label in ("_", "_default", "default"):
         return True
     c_short = c_label.split("::")[-1] if "::" in c_label else c_label
     r_short = r_label.split("::")[-1] if "::" in r_label else r_label
