@@ -4280,21 +4280,30 @@ impl Parser {
     /// Normalize line endings in text: \r\n -> \n, bare \r -> \n
     /// Corresponds to C normalizeLines()
     fn normalize_lines(input: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(input.len());
-        let mut i = 0;
+        // Phase 1: find first CR. If no CR, return input unchanged.
+        let cr_pos = match input.iter().position(|&b| b == b'\r') {
+            Some(pos) => pos,
+            None => return input.to_vec(),
+        };
+
+        // Phase 2: copy prefix, then normalize CR/CRLF from cr_pos onward
+        let mut result = Vec::with_capacity(input.len());
+        result.extend_from_slice(&input[..cr_pos]);
+
+        let mut i = cr_pos;
         while i < input.len() {
             if input[i] == b'\r' {
-                out.push(b'\n');
+                result.push(b'\n');
                 // Skip \n after \r (CRLF -> single LF)
                 if i + 1 < input.len() && input[i + 1] == b'\n' {
                     i += 1;
                 }
             } else {
-                out.push(input[i]);
+                result.push(input[i]);
             }
             i += 1;
         }
-        out
+        result
     }
 
     /// Report a comment — corresponds to C reportComment()
