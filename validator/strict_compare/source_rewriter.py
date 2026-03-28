@@ -10,7 +10,13 @@ from .source_pattern import tokenize, match_pattern, substitute, tokens_to_str
 
 
 def load_rules(filepath: str) -> list[dict]:
-    """Load rewrite rules from a YAML file."""
+    """Load rewrite rules from a YAML file.
+
+    Rules are sorted by pattern length (longest first). This ensures
+    more specific patterns match before shorter, more general ones.
+    E.g., "( const XML_Char * ) $expr" (5 tokens) matches before
+    "const $rest" (2 tokens).
+    """
     with open(filepath) as f:
         config = yaml.safe_load(f)
     rules = []
@@ -20,6 +26,15 @@ def load_rules(filepath: str) -> list[dict]:
             if "after" in rule and rule["after"] is not None:
                 rule["_after_tokens"] = tokenize(rule["after"])
             rules.append(rule)
+
+    # Sort by specificity: more literal tokens first (they're more specific),
+    # then by total length (longer first).
+    # This ensures "( m_handlerArg , $args )" matches before "( $enc , $start , $end )"
+    def rule_specificity(r):
+        tokens = r["_before_tokens"]
+        n_literals = sum(1 for t in tokens if not t.startswith("$"))
+        return (n_literals, len(tokens))
+    rules.sort(key=rule_specificity, reverse=True)
     return rules
 
 

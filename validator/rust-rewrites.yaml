@@ -120,6 +120,13 @@ rust_rewrite_rules:
     before: "let mut $rest"
     after: "let $rest"
 
+  # --- Let binding → assignment ---
+  # Rust "let name = val;" → "name = val;" to match C's declaration-less form
+  # (C declarations are dropped by c-rewrite rules)
+  - name: let_to_assign
+    before: "let $name = $val ;"
+    after: "$name = $val ;"
+
   # --- Clone/borrow ---
   - name: drop_clone
     before: "$expr . clone ( )"

@@ -134,8 +134,12 @@ c_rewrite_rules:
     before: "int $name ;"
     drop: true
 
-  - name: drop_int_decl_init
+  - name: int_decl_init_to_assign
     before: "int $name = $val ;"
+    after: "$name = $val ;"
+
+  - name: xml_error_decl_init_to_assign
+    before: "XML_Error $name = $val ;"
     after: "$name = $val ;"
 
   # --- Encoding ---
@@ -248,8 +252,8 @@ c_rewrite_rules:
     before: "( $start , ( $end - $start ) )"
     after: "( data [ $start .. $end ] )"
 
-  - name: ptr_len_to_slice_2
-    before: "( $enc , $start , $end )"
+  - name: ptr_len_to_slice_enc
+    before: "( enc , $start , $end )"
     after: "( data [ $start .. $end ] )"
 
   # --- Pointer dereference → index ---
