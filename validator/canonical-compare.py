@@ -128,7 +128,12 @@ def compare_pair(c_func: str, r_func: str, dump: bool = False):
         if len(r_canonical) > 500:
             print(f"... ({len(r_canonical)} chars total)")
 
-    return c_canonical, r_canonical
+    # Compare: tokenize both and find differences
+    from strict_compare.source_pattern import tokenize
+    c_tokens = tokenize(c_canonical)
+    r_tokens = tokenize(r_canonical)
+
+    return c_tokens, r_tokens
 
 
 def main():
