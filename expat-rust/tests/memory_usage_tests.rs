@@ -5,13 +5,19 @@
 //! via a custom global allocator; the C side is tracked via XML_ParserCreate_MM
 //! with custom malloc/realloc/free functions.
 //!
-//! Run with: RUST_TEST_THREADS=1 cargo test -p expat-rust --test memory_usage_tests -- --nocapture
+//! These tests use a global allocator for tracking, so they must not run in
+//! parallel. A mutex ensures serialization even without RUST_TEST_THREADS=1.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::ffi::{c_char, c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+/// Mutex to serialize memory tests — the global allocator tracking requires
+/// that only one test allocates at a time.
+static MEMORY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 // ---------------------------------------------------------------------------
 // Tracking global allocator — measures Rust-side allocations
@@ -368,6 +374,7 @@ fn print_table(title: &str, results: &[MemoryResult]) {
 /// plus streaming tests for larger documents.
 #[test]
 fn memory_usage_comparison() {
+    let _lock = MEMORY_TEST_LOCK.lock().unwrap();
     let scenarios: Vec<(&str, Vec<u8>)> = vec![
         (
             "44 B  flat",
@@ -414,6 +421,7 @@ fn memory_usage_comparison() {
 /// can parse arbitrarily large inputs with bounded memory.
 #[test]
 fn streaming_memory_bounded() {
+    let _lock = MEMORY_TEST_LOCK.lock().unwrap();
     // Generate documents of increasing size and stream them through
     // with a fixed 8 KB chunk size.
     let chunk_size = 8192;
@@ -494,6 +502,7 @@ fn streaming_memory_bounded() {
 /// This catches leaks and unbounded buffer growth.
 #[test]
 fn no_memory_leak_on_repeated_parsing() {
+    let _lock = MEMORY_TEST_LOCK.lock().unwrap();
     let xml = generate_document(1_000);
 
     // Warm up
@@ -522,6 +531,7 @@ fn no_memory_leak_on_repeated_parsing() {
 /// XML_Parse's c_int length parameter.
 #[test]
 fn memory_scales_linearly() {
+    let _lock = MEMORY_TEST_LOCK.lock().unwrap();
     let element_counts = [100, 1_000, 10_000, 100_000, 1_000_000];
     let chunk_size = 8192;
     let mut measurements = Vec::new();
