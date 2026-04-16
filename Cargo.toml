@@ -1,5 +1,5 @@
 [workspace]
-members = ["expat-rust", "expat-sys", "expat-ffi", "c-tests-runner"]
+members = ["expat-rust", "expat-sys", "expat-ffi", "c-tests-runner", "xmlwf"]
 resolver = "2"
 
 [profile.release]

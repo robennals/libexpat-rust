@@ -4166,6 +4166,9 @@ impl Parser {
                 if value == "\x00UNDEFINED" {
                     return Err(XmlError::UndefinedEntity);
                 }
+                if value == "\x00BADCHARREF" {
+                    return Err(XmlError::BadCharRef);
+                }
                 return Err(XmlError::RecursiveEntityRef);
             }
             if !seen.insert(name.clone()) {
@@ -4242,6 +4245,13 @@ impl Parser {
                             // Hex character reference
                             if let Ok(s) = std::str::from_utf8(&ref_content[2..]) {
                                 if let Ok(n) = u32::from_str_radix(s, 16) {
+                                    // Validate XML-legality of codepoint (matches C's
+                                    // checkCharRefNumber via XmlCharRefNumber).
+                                    if n > 0x10FFFF
+                                        || xmltok_impl::check_char_ref_number(n as i32) < 0
+                                    {
+                                        return String::from("\x00BADCHARREF");
+                                    }
                                     if let Some(c) = char::from_u32(n) {
                                         let mut buf = [0u8; 4];
                                         result
@@ -4253,6 +4263,11 @@ impl Parser {
                             // Decimal character reference
                             if let Ok(s) = std::str::from_utf8(&ref_content[1..]) {
                                 if let Ok(n) = s.parse::<u32>() {
+                                    if n > 0x10FFFF
+                                        || xmltok_impl::check_char_ref_number(n as i32) < 0
+                                    {
+                                        return String::from("\x00BADCHARREF");
+                                    }
                                     if let Some(c) = char::from_u32(n) {
                                         let mut buf = [0u8; 4];
                                         result
@@ -5550,46 +5565,51 @@ impl Parser {
         self.transcode_utf16(to_transcode, big_endian)
     }
 
-    /// Transcode UTF-16 data to UTF-8
+    /// Transcode UTF-16 data to UTF-8.
+    ///
+    /// For surrogate pair leads (high bytes 0xD8–0xDB) this replicates C
+    /// libexpat's `DEFINE_UTF16_TO_UTF8` in `xmltok.c`: the second word is
+    /// consumed and combined via bit manipulation without validating that it
+    /// is actually a low surrogate. This matches C byte-for-byte, including
+    /// the case where two adjacent high-surrogate-shaped units decode to a
+    /// supplementary-plane codepoint.
+    ///
+    /// Lone low surrogates (0xDC00–0xDFFF as first word) are rejected with
+    /// InvalidToken, matching C's BT_TRAIL byte-type classification which
+    /// produces an invalid-token error when a trail appears without a
+    /// preceding lead.
     fn transcode_utf16(&self, data: &[u8], big_endian: bool) -> Result<Vec<u8>, XmlError> {
         let mut result = Vec::with_capacity(data.len());
         let mut i = 0;
         while i + 1 < data.len() {
-            let code_unit = if big_endian {
-                ((data[i] as u16) << 8) | (data[i + 1] as u16)
-            } else {
-                (data[i] as u16) | ((data[i + 1] as u16) << 8)
-            };
+            let hi = if big_endian { data[i] } else { data[i + 1] };
+            let lo = if big_endian { data[i + 1] } else { data[i] };
+            let code_unit = ((hi as u16) << 8) | (lo as u16);
             i += 2;
 
-            let ch = if (0xD800..=0xDBFF).contains(&code_unit) {
-                // High surrogate — need low surrogate
+            if (0xD800..=0xDBFF).contains(&code_unit) {
+                // High surrogate — replicate C's toUtf8 bit manipulation
+                // without validating the second word.
                 if i + 1 >= data.len() {
                     return Err(XmlError::PartialChar);
                 }
-                let low = if big_endian {
-                    ((data[i] as u16) << 8) | (data[i + 1] as u16)
-                } else {
-                    (data[i] as u16) | ((data[i + 1] as u16) << 8)
-                };
+                let next_hi = if big_endian { data[i] } else { data[i + 1] };
+                let next_lo = if big_endian { data[i + 1] } else { data[i] };
                 i += 2;
-                if !(0xDC00..=0xDFFF).contains(&low) {
-                    return Err(XmlError::InvalidToken);
-                }
-                let cp = 0x10000 + ((code_unit as u32 - 0xD800) << 10) + (low as u32 - 0xDC00);
-                match char::from_u32(cp) {
-                    Some(c) => c,
-                    None => return Err(XmlError::InvalidToken),
-                }
-            } else if (0xDC00..=0xDFFF).contains(&code_unit) {
-                return Err(XmlError::InvalidToken);
-            } else {
-                match char::from_u32(code_unit as u32) {
-                    Some(c) => c,
-                    None => return Err(XmlError::InvalidToken),
-                }
-            };
+                let plane = (((hi & 0x3) << 2) | ((lo >> 6) & 0x3)) + 1;
+                let b1 = (plane >> 2) | 0xF0;
+                let b2 = ((lo >> 2) & 0xF) | ((plane & 0x3) << 4) | 0x80;
+                let b3 = ((lo & 0x3) << 4) | ((next_hi & 0x3) << 2) | (next_lo >> 6) | 0x80;
+                let b4 = (next_lo & 0x3f) | 0x80;
+                result.extend_from_slice(&[b1, b2, b3, b4]);
+                continue;
+            }
 
+            if (0xDC00..=0xDFFF).contains(&code_unit) {
+                return Err(XmlError::InvalidToken);
+            }
+
+            let ch = char::from_u32(code_unit as u32).unwrap_or('\u{FFFD}');
             let mut buf = [0u8; 4];
             let encoded = ch.encode_utf8(&mut buf);
             result.extend_from_slice(encoded.as_bytes());
