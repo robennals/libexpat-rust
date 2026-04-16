@@ -2589,7 +2589,7 @@ pub fn char_ref_number<E: Encoding>(enc: &E, data: &[u8], mut pos: usize) -> i32
 }
 
 /// Validate character reference number
-fn check_char_ref_number(num: i32) -> i32 {
+pub fn check_char_ref_number(num: i32) -> i32 {
     if !((0..=0x10FFFF).contains(&num)) {
         return -1;
     }
