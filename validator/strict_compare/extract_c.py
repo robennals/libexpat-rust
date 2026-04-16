@@ -182,7 +182,10 @@ def _extract_case(node, sf: str) -> SkeletonNode:
     label = ""
     if value_node:
         raw_label = _node_text(value_node).strip()
-        label = _normalize_case_label(raw_label)
+        if raw_label == ":":
+            label = "_default"  # Misidentified default case
+        else:
+            label = _normalize_case_label(raw_label)
 
     # Extract body statements (everything after the colon)
     body_children = []
@@ -238,6 +241,7 @@ def _extract_if(node, sf: str) -> SkeletonNode:
     """Extract if/else -> branch skeleton."""
     condition = node.child_by_field_name("condition")
     cond_text = _normalize_condition(_node_text(condition)) if condition else ""
+    cond_expr = normalize.extract_expr_info(condition, "c") if condition else None
 
     consequence = node.child_by_field_name("consequence")
     alternative = node.child_by_field_name("alternative")
@@ -271,7 +275,7 @@ def _extract_if(node, sf: str) -> SkeletonNode:
             children.append(SkeletonNode("sequence", source_file=sf))
 
     return SkeletonNode(
-        "branch", label=cond_text, children=children,
+        "branch", label=cond_text, expr=cond_expr, children=children,
         source_file=sf, source_start=_start_line(node), source_end=_end_line(node),
     )
 
@@ -371,11 +375,13 @@ def _extract_call(node, sf: str) -> SkeletonNode:
     name = _normalize_call_name(raw_name)
 
     args = []
+    arg_exprs = []
     if args_node:
         for child in args_node.children:
             if child.type in ("(", ")", ","):
                 continue
             args.append(_normalize_expr(_node_text(child)))
+            arg_exprs.append(normalize.extract_expr_info(child, "c"))
 
     # Check if this is a handler dispatch: parser->m_*Handler(...)
     if re.match(r'parser->m_\w+Handler', raw_name):
@@ -384,11 +390,12 @@ def _extract_call(node, sf: str) -> SkeletonNode:
         )
         return SkeletonNode(
             "handler_dispatch", label=handler_name, args=args[1:],  # skip handlerArg
+            arg_exprs=arg_exprs[1:],
             source_file=sf, source_start=_start_line(node), source_end=_end_line(node),
         )
 
     return SkeletonNode(
-        "call", label=name, args=args,
+        "call", label=name, args=args, arg_exprs=arg_exprs,
         source_file=sf, source_start=_start_line(node), source_end=_end_line(node),
     )
 
@@ -423,6 +430,7 @@ def _extract_ternary(node, sf: str) -> SkeletonNode:
     alternative = node.child_by_field_name("alternative")
 
     cond_text = _normalize_condition(_node_text(condition)) if condition else ""
+    cond_expr = normalize.extract_expr_info(condition, "c") if condition else None
     children = []
     if consequence:
         c = _extract_expression(consequence, sf)
@@ -432,7 +440,7 @@ def _extract_ternary(node, sf: str) -> SkeletonNode:
         children.append(a if a else SkeletonNode("sequence", source_file=sf))
 
     return SkeletonNode(
-        "branch", label=cond_text, children=children,
+        "branch", label=cond_text, expr=cond_expr, children=children,
         source_file=sf, source_start=_start_line(node), source_end=_end_line(node),
     )
 

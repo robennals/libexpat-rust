@@ -36,20 +36,37 @@ For each tracked function pair, the skeleton comparison verifies:
 4. **Loop structure** — C `for(;;)` loops match Rust `loop {}` at the same nesting
 5. **Return values** — error returns match (`XmlError::InvalidToken` in both)
 
+6. **Expression identity** — expressions are compared at the identifier level
+   across all node types, with JSON-configurable expression rewrite rules:
+   - **Call arguments**: ordered subsequence matching (C args after rewriting
+     `parser->m_field` → `field`, removing `handler_arg`, `sizeof()`, `NULL`,
+     `&next`, etc., must appear in order in Rust args)
+   - **Branch conditions**: identifiers extracted from both conditions must
+     overlap (catches mismatched variables being checked)
+   - **Return values**: non-error return expressions compared by identifier
+   - **Assignment targets**: assign labels compared by identifier
+7. **Deep expression comparison** — branch conditions with comparison operators
+   are parsed into structured expression trees using tree-sitter. This compares:
+   - **Operators**: `==` vs `!=` vs `<` vs `>` vs `<=` vs `>=` must match
+   - **Literals**: numeric values (`0`, `1`, etc.) must match
+   - **Negation**: `!expr` vs `expr` is detected
+   - **Logical structure**: compound conditions (`a && b`) are compared pairwise
+
 ### What it does NOT check
 
-The verifier ensures structural correspondence, not semantic equivalence:
+The verifier ensures structural correspondence and deep expression comparison,
+not full semantic equivalence:
 
-- **Argument values** are not compared (a call to `handler(data)` matches any
-  call to `handler(...)`)
-- **Expression details** within conditions are normalized but not fully parsed
-  (e.g., `tag_level == 0` matches any branch checking `tag_level`)
+- **Arithmetic within subscripts** — `data[pos..next]` and `data[pos+1..next]`
+  both match because they reference the same identifiers. Offset arithmetic
+  inside array indexing is not parsed.
+- **Handler dispatch sequence internals** — C arms containing handler dispatch
+  patterns are matched permissively against Rust's if-let pattern.
 - **Side effects** are not tracked (the order of calls is checked, but not what
   data flows between them)
 
-This is intentional. The rewrite rules allow enough flexibility for C-to-Rust
-language differences while constraining the code tightly enough that, combined
-with behavioral testing, semantic divergences become unlikely.
+These are deliberate trade-offs. The combination of structural constraint + deep
+expression comparison + behavioral testing (~750 tests) makes divergence unlikely.
 
 ## Rewrite rules
 
@@ -163,6 +180,21 @@ calls and errors that must never be suppressed:
 If anyone adds one of these to a suppression category, both tools exit with
 a `FATAL` error.
 
+## Algorithm divergences (needs fix)
+
+Four functions use a **different algorithm** from C and are not structurally
+compared. These are tracked in `algorithm-divergences.json` and are the
+highest-risk area for behavioral divergence:
+
+| C function | Rust function | Issue |
+|-----------|---------------|-------|
+| `storeAtts` (466L) | `process_namespaces` (115L) | Hash tables → HashMap, pools → Vec, different control flow |
+| `appendAttributeValue` (192L) | `normalize_attribute_value` (98L) | Tokenizer-based → byte-by-byte processing |
+| `storeAttributeValue` (75L) | `normalize_attribute_value` (98L) | Pool + entity list → combined with above |
+| `is_rfc3986_uri_char` (109L) | `is_rfc3986_uri_char` (9L) | Switch on char ranges → `.contains()` |
+
+These should be fixed by rewriting the Rust functions to follow C's algorithm.
+
 ## Files
 
 | File | Purpose |
@@ -170,6 +202,7 @@ a `FATAL` error.
 | `strict-ast-compare.py` | Strict skeleton-based structural comparison |
 | `ast-compare.py` | Legacy name-set comparison |
 | `strict_compare/` | Python package: skeleton extraction, rewrite engine, matcher |
+| `algorithm-divergences.json` | **Functions using different algorithms — needs fix** |
 | `structural-rewrites.json` | Verified rewrite rules (input/output patterns) |
 | `temporary-rewrites.json` | Temporary rewrite rules (believed but unverified) |
 | `deliberate-divergences.json` | Per-function suppressions and legacy config |

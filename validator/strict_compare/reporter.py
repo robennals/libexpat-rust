@@ -66,6 +66,7 @@ def _mismatch_to_dict(m: Mismatch) -> dict:
         d["c_location"] = {
             "kind": m.c_node.kind,
             "label": m.c_node.label,
+            "args": m.c_node.args,
             "line_start": m.c_node.source_start,
             "line_end": m.c_node.source_end,
         }
@@ -73,6 +74,7 @@ def _mismatch_to_dict(m: Mismatch) -> dict:
         d["r_location"] = {
             "kind": m.r_node.kind,
             "label": m.r_node.label,
+            "args": m.r_node.args,
             "line_start": m.r_node.source_start,
             "line_end": m.r_node.source_end,
         }

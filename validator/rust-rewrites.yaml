@@ -1,0 +1,141 @@
+# Rust source rewrite rules
+# Applied to Rust function body text to produce canonical form.
+
+rust_rewrite_rules:
+  # --- Borrow checker handler wrappers ---
+  - name: if_let_handler_with_args
+    before: "if let Some ( $handler ) = & mut self . $field { $handler ( $args ) ; }"
+    after: "self . $field ( $args ) ;"
+
+  - name: if_let_handler_no_args
+    before: "if let Some ( $handler ) = & mut self . $field { $handler ( ) ; }"
+    after: "self . $field ( ) ;"
+
+  - name: if_let_handler_with_else
+    before: "if let Some ( $handler ) = & mut self . $field { $handler ( $args ) ; } else { $else }"
+    after: "self . $field ( $args ) ; $else"
+
+  # --- Result unwrapping ---
+  - name: result_match_unwrap
+    before: "match $expr { Ok ( $val ) => { $body } , Err ( $err ) => { return $ret ; } }"
+    after: "let $val = $expr ; $body"
+
+  - name: result_match_unwrap_2
+    before: "match $expr { Ok ( $val ) => $val , Err ( $err ) => { return $ret ; } }"
+    after: "let $val = $expr ;"
+
+  # --- Iteration safety guards ---
+  - name: drop_iteration_guard
+    before: "if $iter > $max { return $err ; }"
+    drop: true
+
+  - name: drop_iteration_counter_init
+    before: "let mut iterations = 0 ;"
+    drop: true
+
+  - name: drop_iteration_counter_inc
+    before: "iterations += 1 ;"
+    drop: true
+
+  - name: drop_iteration_const
+    before: "const MAX_ITERATIONS : $type = $val ;"
+    drop: true
+
+  # --- Ownership / memory ---
+  - name: mem_take
+    before: "std :: mem :: take ( & mut self . $field )"
+    after: "self . $field"
+
+  - name: drop_to_vec
+    before: ". to_vec ( )"
+    after: ""
+
+  - name: drop_string_from_utf8
+    before: "String :: from_utf8 ( $val ) . unwrap_or_default ( )"
+    after: "$val"
+
+  # --- Handler null check + early return ---
+  - name: handler_is_none_early_return
+    before: "if self . $field . is_none ( ) { $body return ; }"
+    drop: true
+
+  - name: handler_is_none_early_return_with_default
+    before: "if self . $field . is_none ( ) { $body return $ret ; }"
+    drop: true
+
+  # --- Reference/borrow removal ---
+  - name: strip_ref
+    before: "& $expr"
+    after: "$expr"
+
+  - name: strip_mut_ref
+    before: "& mut $expr"
+    after: "$expr"
+
+  # --- Method/field access normalization ---
+  - name: self_method_call
+    before: "self . $method ( $args )"
+    after: "$method ( $args )"
+
+  - name: Self_method_call
+    before: "Self :: $method ( $args )"
+    after: "$method ( $args )"
+
+  - name: self_field_access
+    before: "self . $field"
+    after: "$field"
+
+  # --- Module path stripping ---
+  - name: strip_module_xmltok
+    before: "xmltok_impl :: $name"
+    after: "$name"
+
+  - name: strip_module_xmltok2
+    before: "xmltok :: $name"
+    after: "$name"
+
+  - name: strip_module_xmlrole
+    before: "xmlrole :: $name"
+    after: "$name"
+
+  - name: strip_crate
+    before: "crate :: $name"
+    after: "$name"
+
+  # --- Option handling → NULL equivalent ---
+  - name: some_unwrap
+    before: "Some ( $val )"
+    after: "$val"
+
+  - name: is_some_check
+    before: "$expr . is_some ( )"
+    after: "$expr"
+
+  - name: is_none_check
+    before: "$expr . is_none ( )"
+    after: "! $expr"
+
+  # --- Mutability ---
+  - name: drop_mut
+    before: "let mut $rest"
+    after: "let $rest"
+
+  # --- Let binding → assignment ---
+  # Rust "let name = val;" → "name = val;" to match C's declaration-less form
+  # (C declarations are dropped by c-rewrite rules)
+  - name: let_to_assign
+    before: "let $name = $val ;"
+    after: "$name = $val ;"
+
+  # --- Clone/borrow ---
+  - name: drop_clone
+    before: "$expr . clone ( )"
+    after: "$expr"
+
+  - name: drop_to_string
+    before: "$expr . to_string ( )"
+    after: "$expr"
+
+  - name: drop_as_str
+    before: "$expr . as_str ( )"
+    after: "$expr"

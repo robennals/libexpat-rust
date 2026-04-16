@@ -1,0 +1,112 @@
+{
+  "description": "Bidirectional match rules for cross-language comparison. Each rule defines a C pattern and a Rust pattern that should be considered equivalent. When the comparator encounters these patterns on opposite sides, it matches their captured variables recursively.",
+
+  "match_rules": [
+    {
+      "name": "c_null_check_is_rust_is_none",
+      "c_pattern": {
+        "kind": "unary",
+        "value": "!",
+        "children": [{ "kind": "field", "capture": "handler" }]
+      },
+      "r_pattern": {
+        "kind": "call",
+        "children": [
+          { "kind": "field", "children": [
+            { "capture": "handler" },
+            { "kind": "ident", "value": "is_none" }
+          ]},
+          {}
+        ]
+      },
+      "justification": "C !handler → Rust handler.is_none(). Same null/None check."
+    },
+    {
+      "name": "c_handler_exists_is_rust_is_some",
+      "c_pattern": {
+        "kind": "field",
+        "capture": "handler"
+      },
+      "r_pattern": {
+        "kind": "call",
+        "children": [
+          { "kind": "field", "children": [
+            { "capture": "handler" },
+            { "kind": "ident", "value": "is_some" }
+          ]}
+        ]
+      },
+      "justification": "C handler (truthy check) → Rust handler.is_some(). Same existence check."
+    },
+    {
+      "name": "c_return_1_is_rust_return_void",
+      "c_pattern": {
+        "kind": "return",
+        "children": [{ "kind": "literal", "value": "1" }]
+      },
+      "r_pattern": {
+        "kind": "return",
+        "children": []
+      },
+      "justification": "C returns 1 for success. Rust returns void (implicit Ok)."
+    },
+    {
+      "name": "c_return_0_is_rust_return_error",
+      "c_pattern": {
+        "kind": "return",
+        "children": [{ "kind": "literal", "value": "0" }]
+      },
+      "r_pattern": {
+        "kind": "return",
+        "children": []
+      },
+      "justification": "C returns 0 for failure (OOM). Rust panics on OOM — no error return."
+    },
+    {
+      "name": "skip_c_let_type_decl",
+      "skip": "c",
+      "c_pattern": { "kind": "let" },
+      "justification": "C local variable declarations (type + name) have no direct Rust equivalent — Rust uses let bindings at the point of initialization, not at the top of the block.",
+      "status": "principled"
+    },
+    {
+      "name": "skip_c_must_convert_branch",
+      "skip": "c",
+      "c_pattern": { "kind": "if", "children": [{"kind": "call", "children": [{"kind": "ident", "value_regex": "must_convert|MUST_CONVERT"}]}] },
+      "justification": "C MUST_CONVERT(enc, s) checks if encoding conversion is needed. Rust works in UTF-8 natively, so no conversion is ever needed. The entire if-branch has no Rust equivalent.",
+      "status": "temporary",
+      "risk": "If multi-encoding support is added to Rust, the conversion logic would need to be ported."
+    },
+    {
+      "name": "skip_c_comment",
+      "skip": "c",
+      "c_pattern": { "kind": "comment" },
+      "justification": "C comments are not semantic."
+    },
+    {
+      "name": "skip_r_comment",
+      "skip": "r",
+      "r_pattern": { "kind": "//" },
+      "justification": "Rust comments are not semantic."
+    },
+    {
+      "name": "c_handler_dispatch_is_rust_if_let",
+      "c_pattern": {
+        "kind": "if",
+        "children": [
+          { "kind": "field", "capture": "handler" },
+          { "capture": "body" }
+        ]
+      },
+      "r_pattern": {
+        "kind": "if_let",
+        "children": [
+          { "capture": "pattern" },
+          { "kind": "field", "capture": "handler" },
+          { "capture": "body" }
+        ]
+      },
+      "justification": "C: if (handler) { handler(args) }. Rust: if let Some(h) = &mut handler { h(args) }. Handler check + dispatch pattern."
+    }
+  ]
+}

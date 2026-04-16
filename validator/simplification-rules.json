@@ -1,0 +1,98 @@
+{
+  "description": "Simplification rules applied to both C and Rust common ASTs. These normalize syntax differences without losing semantic information. Applied bottom-up, leaves first.",
+
+  "simplification_rules": [
+    {
+      "name": "c_camel_to_snake",
+      "lang": "c",
+      "match": { "kind": "ident" },
+      "action": "rename_value",
+      "transform": "camel_to_snake",
+      "justification": "C uses camelCase, Rust uses snake_case. Same identifiers."
+    },
+    {
+      "name": "c_field_camel_to_snake",
+      "lang": "c",
+      "match": { "kind": "field", "has_child_kind": "ident" },
+      "action": "rename_value",
+      "transform": "camel_to_snake",
+      "justification": "Field names: C camelCase → Rust snake_case."
+    },
+    {
+      "name": "c_break_in_arm",
+      "lang": "c",
+      "match": { "kind": "break" },
+      "action": "delete",
+      "justification": "C switch cases need explicit break. Rust match arms end implicitly."
+    },
+    {
+      "name": "c_strip_parser_prefix",
+      "lang": "c",
+      "match": { "kind": "field", "child_value": "parser", "child_index": 0 },
+      "action": "replace_tree",
+      "replacement": { "kind": "field", "children": ["$self", "$child_1"] },
+      "justification": "C accesses fields via parser->m_field. Rust uses self.field."
+    },
+    {
+      "name": "c_strip_m_prefix",
+      "lang": "c",
+      "match": { "kind": "ident", "value_regex": "^m_" },
+      "action": "rename_value",
+      "rename_regex": "^m_",
+      "rename_replace": "",
+      "justification": "C uses m_ prefix for struct members. Rust doesn't."
+    },
+    {
+      "name": "c_normalize_xml_tok",
+      "lang": "c",
+      "match": { "kind": "ident", "value_regex": "^XML_TOK_" },
+      "action": "rename_value",
+      "rename_regex": "^XML_TOK_(\\w+)",
+      "rename_replace": "XmlTok::\\1",
+      "justification": "C XML_TOK_X → Rust XmlTok::X"
+    },
+    {
+      "name": "c_normalize_xml_error",
+      "lang": "c",
+      "match": { "kind": "ident", "value_regex": "^XML_ERROR_" },
+      "action": "rename_value",
+      "rename_regex": "^XML_ERROR_(\\w+)",
+      "rename_replace": "XmlError::\\1",
+      "justification": "C XML_ERROR_X → Rust XmlError::X"
+    },
+    {
+      "name": "c_normalize_xml_role",
+      "lang": "c",
+      "match": { "kind": "ident", "value_regex": "^XML_ROLE_" },
+      "action": "rename_value",
+      "rename_regex": "^XML_ROLE_(\\w+)",
+      "rename_replace": "Role::\\1",
+      "justification": "C XML_ROLE_X → Rust Role::X"
+    },
+    {
+      "name": "c_normalize_arm_labels_tok",
+      "lang": "c",
+      "match": { "kind": "arm", "value_regex": "^XML_TOK_" },
+      "action": "rename_value",
+      "rename_regex": "^XML_TOK_(\\w+)",
+      "rename_replace": "XmlTok::\\1",
+      "justification": "C case XML_TOK_X → Rust arm XmlTok::X"
+    },
+    {
+      "name": "c_normalize_arm_labels_role",
+      "lang": "c",
+      "match": { "kind": "arm", "value_regex": "^XML_ROLE_" },
+      "action": "rename_value",
+      "rename_regex": "^XML_ROLE_(\\w+)",
+      "rename_replace": "Role::\\1",
+      "justification": "C case XML_ROLE_X → Rust arm Role::X"
+    },
+    {
+      "name": "rust_strip_self_prefix",
+      "lang": "rust",
+      "match": { "kind": "field", "child_value": "self", "child_index": 0 },
+      "action": "rename_value",
+      "justification": "Rust self.field — keep self as child but already normalized."
+    }
+  ]
+}

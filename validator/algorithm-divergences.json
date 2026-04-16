@@ -1,0 +1,48 @@
+{
+  "description": "Functions where the Rust port uses a DIFFERENT ALGORITHM from the C original. These are NOT accepted divergences — they are bugs that should be fixed by rewriting the Rust code to follow the C algorithm. Until fixed, they are verified only by behavioral tests, not by structural comparison.",
+  "version": 1,
+  "created": "2026-03-26",
+
+  "divergent_functions": [
+    {
+      "c_function": "storeAtts",
+      "rust_function": "process_namespaces",
+      "c_lines": 466,
+      "rust_lines": 115,
+      "structural_errors": 21,
+      "description": "C storeAtts uses hash table lookups (getAttributeId, getElementType), pool-based string allocation, a flat appAtts array with manual indexing, and inline namespace URI construction. Rust process_namespaces uses HashMap, Vec<(String,String)>, and String operations. Different data structures lead to different control flow.",
+      "risk": "Different data structure operations may have different edge case behavior for attribute limits, duplicate detection, namespace URI construction, and default attribute merging.",
+      "fix_approach": "Rewrite process_namespaces to follow C's storeAtts structure: iterate attributes with index, look up attribute IDs, check for duplicates, normalize non-CDATA values, handle namespace declarations in order, construct URIs with the same concatenation logic."
+    },
+    {
+      "c_function": "appendAttributeValue",
+      "rust_function": "normalize_attribute_value",
+      "c_lines": 192,
+      "rust_lines": 98,
+      "structural_errors": 1,
+      "description": "C appendAttributeValue tokenizes attribute values with XmlAttributeValueTok and switches on token types (XmlTok::DataChars, XmlTok::EntityRef, XmlTok::CharRef, etc.). Rust normalize_attribute_value processes bytes directly (matching on raw bytes b'&', b'\\r', b'\\n').",
+      "risk": "Byte-by-byte processing may handle edge cases differently from the tokenizer: partial character references spanning buffer boundaries, entity expansion depth limits, encoding conversion within attribute values, whitespace normalization for non-CDATA attributes.",
+      "fix_approach": "Rewrite normalize_attribute_value to use xmltok_impl::attribute_value_tok() and switch on token types, matching C's appendAttributeValue structure."
+    },
+    {
+      "c_function": "storeAttributeValue",
+      "rust_function": "normalize_attribute_value",
+      "c_lines": 75,
+      "rust_lines": 98,
+      "structural_errors": 3,
+      "description": "C storeAttributeValue wraps appendAttributeValue with entity list management (openAttributeEntities, freeAttributeEntities) and pool finalization. Rust normalize_attribute_value combines both roles.",
+      "risk": "Entity list management differences could affect recursive entity expansion tracking.",
+      "fix_approach": "Fix along with appendAttributeValue — separate the entity list management from value normalization."
+    },
+    {
+      "c_function": "is_rfc3986_uri_char",
+      "rust_function": "is_rfc3986_uri_char",
+      "c_lines": 109,
+      "rust_lines": 9,
+      "structural_errors": 1,
+      "description": "C uses a switch on character ranges covering the full RFC 3986 unreserved + reserved + pct-encoded character set. Rust uses .is_ascii_alphanumeric() + a hardcoded string of special characters with .contains().",
+      "risk": "If the character sets don't match exactly, namespace URI validation will accept/reject different URIs.",
+      "fix_approach": "Verify the Rust character set matches C exactly. Either expand to match C's switch cases, or add a test that compares both functions' output for all 256 byte values."
+    }
+  ]
+}
