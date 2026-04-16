@@ -33,6 +33,11 @@ expat/build/
 expat-ffi/examples/basic_parse
 expat-ffi/tests/test_ffi
 
+# W3C XML Test Suite (downloaded on demand, not checked in)
+tests/XML-Test-Suite/
+tests/xmlconf
+tests/out/
+
 # Debug test binaries
 /test_*
 CLAUDE.md

@@ -5,7 +5,10 @@ use expat_rust::xmlparse::{Parser, XmlError};
 use expat_sys::CParser;
 
 fn debug_one(file_path: &str, encoding: Option<&str>) {
-    let data = std::fs::read(file_path).unwrap();
+    let Ok(data) = std::fs::read(file_path) else {
+        eprintln!("  SKIP: {file_path} not present (corpus drift)");
+        return;
+    };
     let name = std::path::Path::new(file_path)
         .file_name()
         .unwrap()
