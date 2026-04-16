@@ -1365,7 +1365,7 @@ fn scan_attr_value<E: Encoding>(
             Ok(pos) // return to outer loop to handle GT/SOL/name
         }
         ByteType::SOL | ByteType::GT => Ok(pos), // end of tag — return to outer loop
-        _ => Err(pos), // no whitespace between attributes — invalid
+        _ => Err(pos),                           // no whitespace between attributes — invalid
     }
 }
 

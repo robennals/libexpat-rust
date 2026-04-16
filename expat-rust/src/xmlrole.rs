@@ -228,9 +228,7 @@ fn keyword_matches(text: &[u8], keyword: &str) -> bool {
     if text.len() != keyword.len() {
         return false;
     }
-    text.iter()
-        .zip(keyword.bytes())
-        .all(|(a, b)| *a == b)
+    text.iter().zip(keyword.bytes()).all(|(a, b)| *a == b)
 }
 
 fn set_top_level(state: &mut XmlRoleState) {
